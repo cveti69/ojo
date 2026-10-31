@@ -1,16 +1,19 @@
 """Replaceable speech input and output; the HTTP layer only depends on these interfaces."""
 from __future__ import annotations
 
+import http.client
 import io
 import json
-import urllib.request
 import wave
 from typing import Iterator, Optional, Protocol
 
 from . import config, meta
+from .pool import Pool
 
 SPEECH_TIMEOUT = 10
 SPEECH_CHUNK = 4800
+
+connections = Pool()
 
 
 class SpeechRecognizer(Protocol):
@@ -48,17 +51,24 @@ class ElevenLabsSynthesizer:
 
     def stream(self, text: str) -> Iterator[bytes]:
         """Connects before it returns, so a refused request can still become an HTTP error."""
-        request = urllib.request.Request(
-            f"{config.ELEVENLABS_API_BASE}/text-to-speech/{config.ELEVENLABS_VOICE}/stream?output_format=pcm_24000",
-            data=json.dumps({
+        connection, response = connections.send(
+            "POST", f"{config.ELEVENLABS_API_BASE}/text-to-speech/{config.ELEVENLABS_VOICE}/stream?output_format=pcm_24000",
+            json.dumps({
                 "text": text, "model_id": config.ELEVENLABS_MODEL,
                 "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
             }).encode(),
-            headers={"xi-api-key": config.ELEVENLABS_API_KEY, "Content-Type": "application/json"}, method="POST",
+            {"xi-api-key": config.ELEVENLABS_API_KEY, "Content-Type": "application/json"}, SPEECH_TIMEOUT,
         )
-        return self._chunks(urllib.request.urlopen(request, timeout=SPEECH_TIMEOUT))
+        if response.status >= 400:
+            connection.close()
+            raise OSError("Голос не ответил.")
+        return self._chunks(connection, response)
 
-    def _chunks(self, response) -> Iterator[bytes]:
-        with response:
+    def _chunks(self, connection: http.client.HTTPSConnection, response: http.client.HTTPResponse) -> Iterator[bytes]:
+        try:
             while chunk := response.read1(SPEECH_CHUNK):
                 yield chunk
+        except BaseException:  # The phone hung up halfway too: the rest of the line is still on this connection.
+            connection.close()
+            raise
+        connections.finished(connection)

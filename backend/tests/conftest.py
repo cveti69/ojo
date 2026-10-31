@@ -17,7 +17,7 @@ from starlette.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import config, grounding, meta
+from app import config, grounding, meta, pool, voice
 from app.server import create_app
 
 TOKEN = "test-shared-token"
@@ -196,6 +196,9 @@ def forbid_network(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("Real Meta requests are forbidden in tests")
     monkeypatch.setattr(urllib.request, "urlopen", forbidden)
+    monkeypatch.setattr(pool, "connect", forbidden)
+    meta.connections.kept.clear()
+    voice.connections.kept.clear()
 
 
 @pytest.fixture

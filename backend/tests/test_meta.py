@@ -1,44 +1,88 @@
 from __future__ import annotations
 
-import io
 import json
 import logging
-import urllib.error
-import urllib.request
+import ssl
 from email import policy
 from email.parser import BytesParser
 
 import pytest
 
-from app import config, meta
+from app import config, meta, pool, voice
 from app.server import _TokenFilter
 from conftest import wav
 
 
-def test_asr_multipart_and_authorization(monkeypatch):
+class FakeResponse:
+    def __init__(self, status, body):
+        self.status = status
+        self.body = body
+
+    def read(self):
+        return self.body
+
+    def read1(self, size):
+        chunk, self.body = self.body[:size], self.body[size:]
+        return chunk
+
+
+class FakeConnection:
+    """Each reply is a status with a body, or an error to raise."""
+
+    def __init__(self, replies, close_after=False):
+        self.replies = replies
+        self.close_after = close_after
+        self.sock = self
+        self.requests = []
+
+    def settimeout(self, timeout):
+        self.timeout = timeout
+
+    def request(self, method, path, data, headers):
+        self.requests.append({"method": method, "path": path, "data": data, "headers": headers})
+
+    def getresponse(self):
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        if self.close_after:
+            self.close()
+        return FakeResponse(*reply)
+
+    def close(self):
+        self.sock = None
+
+
+def use_connections(monkeypatch, *connections):
+    left = list(connections)
     monkeypatch.setattr(config, "META_API_KEY", "dummy-api-key")
     monkeypatch.setattr(config, "META_API_BASE", "https://meta.invalid/v1")
+    monkeypatch.setattr(pool, "connect", lambda host, timeout: left.pop(0))
+    return left
+
+
+def ok(value):
+    return 200, json.dumps(value, ensure_ascii=False).encode()
+
+
+def test_asr_multipart_and_authorization(monkeypatch):
     monkeypatch.setattr(config, "META_TRANSCRIBE_MODEL", "test-voice-model")
     audio = wav()
-    requests = []
-
-    def urlopen(request, timeout):
-        requests.append(request)
-        return io.BytesIO(json.dumps({
-            "transcript": "  Напиши водителю  ", "audioDurationMs": 1234,
-            "turns": [{"transcript": "Напиши водителю", "startMs": 0, "endMs": 1234}]
-        }, ensure_ascii=False).encode())
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    connection = FakeConnection([ok({
+        "transcript": "  Напиши водителю  ", "audioDurationMs": 1234,
+        "turns": [{"transcript": "Напиши водителю", "startMs": 0, "endMs": 1234}]
+    })])
+    use_connections(monkeypatch, connection)
     result = meta.transcribe(audio, language_bias="ru", keywords=["водитель"])
     assert result["text"] == "Напиши водителю" and result["audio_duration_ms"] == 1234
     assert len(result["turns"]) == 1
-    request = requests[0]
-    assert request.full_url == "https://meta.invalid/v1/asr/transcribe"
-    assert request.get_method() == "POST"
-    assert request.get_header("Authorization") == "Bearer dummy-api-key"
-    content_type = request.get_header("Content-type")
+    request = connection.requests[0]
+    assert request["path"] == "/v1/asr/transcribe"
+    assert request["method"] == "POST"
+    assert request["headers"]["Authorization"] == "Bearer dummy-api-key"
+    content_type = request["headers"]["Content-Type"]
     message = BytesParser(policy=policy.default).parsebytes(
-        ("Content-Type: " + content_type + "\r\nMIME-Version: 1.0\r\n\r\n").encode() + request.data
+        ("Content-Type: " + content_type + "\r\nMIME-Version: 1.0\r\n\r\n").encode() + request["data"]
     )
     parts = list(message.iter_parts())
     assert len(parts) == 2
@@ -70,12 +114,72 @@ def test_invalid_asr_response(reply):
         meta.parse_transcription(reply)
 
 
-def test_meta_errors_do_not_include_upstream_body(monkeypatch):
-    monkeypatch.setattr(config, "META_API_KEY", "dummy")
+def test_a_connection_is_used_again(monkeypatch):
+    connection = FakeConnection([ok({"first": 1}), ok({"second": 2})])
+    use_connections(monkeypatch, connection)
+    assert meta._request("GET", "/models") == {"first": 1}
+    assert meta._request("GET", "/models") == {"second": 2}
+    assert len(connection.requests) == 2 and connection.timeout == 60
 
-    def urlopen(request, timeout):
-        raise urllib.error.HTTPError(request.full_url, 403, "failure", {}, io.BytesIO(b"secret-upstream-body"))
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+@pytest.mark.parametrize("closed", [ConnectionResetError(), ssl.SSLEOFError()])
+def test_a_connection_closed_by_meta_gives_way_to_a_new_one(monkeypatch, closed):
+    stale = FakeConnection([ok({}), closed])
+    fresh = FakeConnection([ok({"answer": 1})])
+    use_connections(monkeypatch, stale, fresh)
+    meta._request("POST", "/chat/completions", {})
+    assert meta._request("POST", "/chat/completions", {}) == {"answer": 1}
+    assert stale.sock is None and len(fresh.requests) == 1
+
+
+def test_a_new_connection_that_fails_reports_it(monkeypatch):
+    use_connections(monkeypatch, FakeConnection([ConnectionResetError()]))
+    with pytest.raises(meta.MetaError) as error:
+        meta._request("GET", "/models")
+    assert error.value.status == 502
+
+
+def test_a_timeout_is_not_tried_again(monkeypatch):
+    slow = FakeConnection([ok({}), TimeoutError()])
+    left = use_connections(monkeypatch, slow, FakeConnection([ok({"late": 1})]))
+    meta._request("GET", "/models")
+    with pytest.raises(meta.MetaError):
+        meta._request("GET", "/models")
+    assert len(left) == 1 and slow.sock is None
+
+
+def test_a_closing_answer_keeps_no_connection(monkeypatch):
+    use_connections(monkeypatch, FakeConnection([ok({})], close_after=True))
+    meta._request("GET", "/models")
+    assert meta.connections.kept == []
+
+
+def test_a_spoken_line_read_to_its_end_keeps_the_connection(monkeypatch):
+    connection = FakeConnection([(200, b"sound"), (200, b"more")])
+    use_connections(monkeypatch, connection)
+    synthesizer = voice.ElevenLabsSynthesizer()
+    assert b"".join(synthesizer.stream("Да")) == b"sound"
+    assert b"".join(synthesizer.stream("Нет")) == b"more"
+    assert "output_format=pcm_24000" in connection.requests[0]["path"] and len(connection.requests) == 2
+
+
+def test_a_line_the_phone_left_halfway_closes_the_connection(monkeypatch):
+    connection = FakeConnection([(200, bytes(voice.SPEECH_CHUNK * 2))])
+    use_connections(monkeypatch, connection)
+    chunks = voice.ElevenLabsSynthesizer().stream("Да")
+    next(chunks)
+    chunks.close()
+    assert connection.sock is None and voice.connections.kept == []
+
+
+def test_a_refused_line_is_an_error_before_any_sound(monkeypatch):
+    use_connections(monkeypatch, FakeConnection([(401, b"secret")]))
+    with pytest.raises(OSError):
+        voice.ElevenLabsSynthesizer().stream("Да")
+
+
+def test_meta_errors_do_not_include_upstream_body(monkeypatch):
+    use_connections(monkeypatch, FakeConnection([(403, b"secret-upstream-body")]))
     with pytest.raises(meta.MetaError) as error:
         meta.transcribe(wav())
     assert error.value.status == 403

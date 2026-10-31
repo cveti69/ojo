@@ -2,19 +2,21 @@
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import re
 import time
-import urllib.error
-import urllib.request
 import uuid
 
 from . import config
+from .pool import Pool
 
 
 # Guards against a runaway answer; one step needs a few hundred tokens.
 MAX_COMPLETION_TOKENS = 1500
 THINKING_TOKENS = 16000  # Deeper levels think inside this limit, and an answer that runs out of it comes back empty.
+
+connections = Pool()
 
 
 class MetaError(RuntimeError):
@@ -31,23 +33,21 @@ def _request(method: str, path: str, payload: dict | None = None, timeout: float
 def _send(method: str, path: str, data: bytes | None, content_type: str, timeout: float) -> dict:
     if not config.META_API_KEY:
         raise MetaError(503, "Не задан ключ Meta.")
-    request = urllib.request.Request(
-        f"{config.META_API_BASE}{path}",
-        data=data,
-        method=method,
-        headers={
-            "Authorization": f"Bearer {config.META_API_KEY}",
-            "Content-Type": content_type,
-        },
-    )
+    headers = {"Authorization": f"Bearer {config.META_API_KEY}", "Content-Type": content_type}
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            reply = json.load(response)
-    except urllib.error.HTTPError as error:
-        error.close()
-        raise MetaError(error.code, "Запрос отклонён.") from None
-    except (urllib.error.URLError, TimeoutError, OSError):
+        connection, response = connections.send(method, f"{config.META_API_BASE}{path}", data, headers, timeout)
+        try:
+            body = response.read()
+        except BaseException:
+            connection.close()
+            raise
+        connections.finished(connection)
+    except (http.client.HTTPException, OSError):
         raise MetaError(502, "Сервис недоступен.") from None
+    if response.status >= 400:
+        raise MetaError(response.status, "Запрос отклонён.")
+    try:
+        reply = json.loads(body)
     except (ValueError, UnicodeError):
         raise MetaError(502, "Некорректный ответ.") from None
     if not isinstance(reply, dict):
