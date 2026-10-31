@@ -182,7 +182,7 @@ def test_clipboard_and_keyboard(backend, mode, action, expected):
     idle(backend, session_id)
     event = backend.client.get("/sessions/" + session_id + "/hint", headers=AUTH).json()
     assert event["paste_text"] == ("sampo anti ketombe" if expected else None)
-    assert ("над клавиатурой" in event["instruction_ru"]) is expected
+    assert ("Вставить" in event["instruction_ru"]) is expected
     assert ("sampo anti ketombe" in event["instruction_ru"]) is expected
     assert backend.client.get("/sessions/" + session_id + "/suggestions", headers=AUTH).json()["texts"] == [
         "sampo anti ketombe", "sampo"

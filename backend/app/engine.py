@@ -20,7 +20,7 @@ from .sessions import Frame, Session
 GRAY_SIZE = (64, 96)
 FRAME_DIFF_THRESHOLD = 3.0
 PAYMENT_INSTRUCTION = "Проверь сумму и подтверди сам."
-PASTE_INSTRUCTION = "Нажми поле, потом текст над клавиатурой или набери: {text}"
+PASTE_INSTRUCTION = "Зажми поле, выбери «Вставить» или набери: {text}"
 DONE_TEXT = "Готово, цель достигнута"
 ICON_WAIT_SECONDS = 1.5
 HISTORY_STEPS = 12
