@@ -4,7 +4,7 @@ from __future__ import annotations
 import difflib
 import io
 import math
-import re
+import unicodedata
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -13,6 +13,7 @@ from . import meta
 
 MIN_TEXT_MATCH = 0.78
 TEXT_DISTANCE_WEIGHT = 3  # A spelling 0.1 worse still wins when it is 3% of the frame closer to the guess.
+MAX_UNSPACED_WORDS = 6
 FONT = Path(__file__).parent.parent / "assets" / "Inter-Bold.otf"
 MARK_FONT_SIZE = 13
 MARK_COLOR = (214, 0, 50)
@@ -24,7 +25,9 @@ SHAPE_WORDS = ("icon", "checkbox", "toggle", "switch", "radio")  # Text next to 
 
 
 def _normal(text: str) -> str:
-    return re.sub(r"[^0-9a-zа-яё]+", " ", text.lower()).strip()
+    """Keeps letters, marks and digits of any script, so Chinese or Thai labels survive."""
+    text = unicodedata.normalize("NFKC", text.lower())
+    return " ".join("".join(char if unicodedata.category(char)[0] in "LMN" else " " for char in text).split())
 
 
 def center(box: list[float]) -> tuple[float, float]:
@@ -50,15 +53,20 @@ def snap_to_text(label: str, near: list[float] | None, lines: list[dict]) -> lis
     size = len(wanted.split())
     if not wanted or size == 0:
         return None
+    # Chinese and Thai have no spaces, so one label can span several recognised words.
+    spaced = wanted.isascii()
+    counts = {size - 1, size, size + 1} if spaced else range(1, MAX_UNSPACED_WORDS + 1)
+    joiner = " " if spaced else ""
+    wanted = joiner.join(wanted.split())
     best: tuple[float, list[float]] | None = None
     for line in lines:
         words = line["words"]
         for start in range(len(words)):
-            for count in {size - 1, size, size + 1}:
+            for count in counts:
                 window = words[start:start + count]
                 if not window or len(window) != count:
                     continue
-                text = _normal(" ".join(word["text"] for word in window))
+                text = joiner.join(_normal(" ".join(word["text"] for word in window)).split())
                 score = difflib.SequenceMatcher(None, wanted, text).ratio()
                 if score < MIN_TEXT_MATCH:
                     continue

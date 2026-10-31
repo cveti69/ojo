@@ -287,3 +287,25 @@ def test_debug_escapes_model_text(backend):
     idle(backend, session_id)
     page = backend.client.get("/debug/" + session_id, headers=AUTH)
     assert "<script>" not in page.text and "&lt;script&gt;" in page.text
+
+
+def text_line(*words):
+    return {"text": " ".join(words), "words": [
+        {"text": word, "box": [0.1 + index * 0.1, 0.8, 0.2 + index * 0.1, 0.85]} for index, word in enumerate(words)
+    ]}
+
+
+@pytest.mark.parametrize("label,words,left", [
+    ("Beli Langsung", ("Beli", "Langsung"), 0.1),
+    ("立即购买", ("立即", "购买"), 0.1),
+    ("加入购物车", ("其他", "加入", "购", "物", "车"), 0.2),
+    ("ซื้อเลย", ("ซื้อ", "เลย"), 0.1),
+    ("Đặt xe", ("Đặt", "xe"), 0.1),
+])
+def test_text_match_works_in_any_script(label, words, left):
+    box = grounding.snap_to_text(label, [0.1, 0.8, 0.4, 0.85], [text_line(*words)])
+    assert box and box[0] == pytest.approx(left)
+
+
+def test_text_match_keeps_different_chinese_labels_apart():
+    assert grounding.snap_to_text("取消订单", [0.1, 0.8, 0.3, 0.85], [text_line("立即", "购买")]) is None
