@@ -126,14 +126,15 @@ def _target(show: dict) -> Optional[dict]:
 
 
 def _read(answer: dict) -> dict:
+    private = bool(answer.get("private"))  # The log goes by this, also when the words were not for the agent.
     if not answer["addressed"]:
         return {"reply": "", "new_goal": None, "mode": None, "needs_screen": False, "wait": None, "show": None,
-                "look_again": False, "private": False}
+                "look_again": False, "private": private}
     return {"reply": answer["reply"].strip()[:MAX_REPLY], "new_goal": (answer["new_goal"] or "").strip() or None,
             "mode": answer["mode"] if answer["mode"] != "keep" else None, "needs_screen": bool(answer.get("needs_screen")),
             "wait": answer.get("wait"),
             "show": _target(answer["show"]) if "show" in answer else None, "look_again": bool(answer.get("look_again")),
-            "private": bool(answer.get("private"))}
+            "private": private}
 
 
 def ask(pictures: Sequence[bytes], prompt: str, effort: Optional[str] = None) -> dict:

@@ -15,12 +15,17 @@ from .sessions import Frame, Session
 log = logging.getLogger(__name__)
 
 FAILED_LINE = {"reply": "Не получилось ответить, повтори, пожалуйста.", "new_goal": None, "mode": None, "show": None,
-               "look_again": False, "private": True}
+               "look_again": False, "private": True, "failed": True}
 SETTLES_IN = 2  # Seconds from the start of a move to the frame the phone keeps: it waits 1.5 for a still screen.
 
 
 def _ms(started: float) -> int:
     return round((time.perf_counter() - started) * 1000)
+
+
+def _written_down(answer: dict) -> dict:
+    """What a payment or password screen made the head say stays out of the log, as the screen itself does."""
+    return {**answer, "reply": None, "show": None} if answer["private"] else answer
 
 
 class Talker:
@@ -111,7 +116,8 @@ class Talker:
         now = time.time() * 1000
         session.note("head", turn=turn, ms=timings["screen_ms"], effort=session.effort or config.META_TALK_REASONING,
                      frame=session.keep_picture(newest, answer["private"]), frames=[frame.timestamp_ms for frame in frames],
-                     ages_ms=[round(now - frame.timestamp_ms) for frame in frames], used=session.looking == turn, **answer)
+                     ages_ms=[round(now - frame.timestamp_ms) for frame in frames], used=session.looking == turn,
+                     **_written_down(answer))
         if session.looking != turn or session.ended or not answer["reply"]:
             return
         self._change(session, answer, newest)

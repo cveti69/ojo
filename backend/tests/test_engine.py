@@ -553,7 +553,8 @@ def test_a_private_screen_is_not_written_down(backend, monkeypatch, tmp_path, ch
     idle(backend, session_id)
     folder = next((tmp_path / "calls").iterdir())
     step = next(line for line in lines_of(folder) if line["kind"] == "step")
-    assert step["private"] is True and step["frame"] is None and step["screen"] is None
+    assert step["private"] is True and step["frame"] is None and not {"screen", "instruction", "target"} & set(step)
+    assert step["said"] is None
     assert not list((folder / "frames").iterdir())
 
 

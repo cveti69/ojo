@@ -1096,7 +1096,28 @@ def test_the_log_shows_what_the_head_saw_and_said(backend, monkeypatch, tmp_path
 def test_the_log_leaves_out_a_private_screen_the_head_saw(backend, monkeypatch, tmp_path):
     monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
     session_id = new_session(backend.client)
-    backend.meta.talk.append(talk_line("Проверь сумму сам.", private=True))
+    backend.meta.talk.append(talk_line("Сумма 34 900, проверь сам.", private=True, show=SHOW))
     ask_the_screen(backend, session_id)
     folder = next((tmp_path / "calls").iterdir())
     assert not list((folder / "frames").iterdir())
+    written = (folder / "call.log").read_text(encoding="utf-8")
+    assert "34 900" not in written and SHOW["label"] not in written and agent_words(backend, session_id)[-1].startswith("Сумма")
+
+
+def test_a_private_screen_stays_out_of_the_log_when_the_words_were_for_someone_else(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    session_id = new_session(backend.client)
+    backend.meta.talk.append(talk_line("", addressed=False, private=True))
+    ask_the_screen(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    assert not list((folder / "frames").iterdir())
+
+
+def test_the_log_says_when_the_head_failed(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    session_id = new_session(backend.client)
+    backend.meta.talk.append(OSError("down"))
+    ask_the_screen(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    lines = [json.loads(line) for line in (folder / "call.log").read_text(encoding="utf-8").splitlines()]
+    assert next(line for line in lines if line["kind"] == "head")["failed"] is True

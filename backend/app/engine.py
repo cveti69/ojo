@@ -260,20 +260,21 @@ class Engine:
         plan, and this screen now counts as seen."""
         session.revision += 1
         started = time.perf_counter()
+        written = None if private else target
         location = await run_in_threadpool(grounding.locate, frame.jpeg, frame.width, frame.height,
                                            {"action": "tap", "target": target}, _text_on(session, frame), [])
         box_ms = round((time.perf_counter() - started) * 1000)
         if session.ended or not location["box"]:
-            session.note("show", outcome="not found", target=target, box_ms=box_ms)
+            session.note("show", outcome="not found", target=written, box_ms=box_ms)
             return
         image = await run_in_threadpool(hint.render, frame.jpeg, location["box"], text, session.eyes)
         if session.ended or session.looking != turn or session.moved_at > frame.received_at:
-            session.note("show", outcome="late", target=target, box_ms=box_ms)  # They went on while the button was found.
+            session.note("show", outcome="late", target=written, box_ms=box_ms)  # They went on while the button was found.
             return
         timings = {"queue_ms": 0, "model_ms": model_ms, "box_ms": box_ms, "box_source": location["source"],
                    "window": frame.window is not None}
         step_id = self._put_up(session, frame, image, location, "tap", text, speak=False, calm=private, timings=timings)
-        session.note("show", outcome="shown", step=step_id, target=target, box=location["box"], box_source=location["source"],
+        session.note("show", outcome="shown", step=step_id, target=written, box=location["box"], box_source=location["source"],
                      box_ms=box_ms)
 
     def _put_up(self, session: Session, frame: Frame, image: bytes, location: dict, action: str, instruction: str,
@@ -325,9 +326,8 @@ class Engine:
             session.app_lang = language
         needs_confirm = answer["needs_user_confirm"] is True
         private = needs_confirm or bool(_PRIVATE_SCREEN.search(answer["screen"] + " " + answer["instruction"]))
-        seen.update(frame=session.keep_picture(frame, private), private=private, screen=None if private else answer["screen"],
-                    instruction=answer["instruction"], action=answer["action"], target=answer["target"],
-                    confirm=needs_confirm, done=answer["done"])
+        seen.update(frame=session.keep_picture(frame, private), private=private, action=answer["action"], confirm=needs_confirm,
+                    done=answer["done"], **({} if private else {key: answer[key] for key in ("screen", "instruction", "target")}))
         if answer["done"] is True and not needs_confirm:
             session.last_frame_hash = frame.digest
             session.last_analyzed_gray = frame.gray
@@ -376,6 +376,6 @@ class Engine:
                                confirm=needs_confirm, calm=private,
                                timings={"queue_ms": timings["queue_ms"], "model_ms": timings["model_ms"], "box_ms": timings["box_ms"],
                                         "box_source": location["source"], "window": frame.window is not None})
-        seen.update(outcome="hint", step=step_id, said=instruction)
+        seen.update(outcome="hint", step=step_id, said=None if private else instruction)
         timings["send_ms"] = round((time.perf_counter() - stage) * 1000)
         timings["total_ms"] = round((time.perf_counter() - frame.received_at) * 1000)
