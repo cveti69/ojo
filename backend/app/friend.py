@@ -9,7 +9,7 @@ import json
 import logging
 import re
 import time
-from typing import Coroutine, List, Optional, Set
+from typing import Callable, Coroutine, List, Optional, Set
 
 from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
@@ -55,6 +55,7 @@ MAX_RESTARTS = 2  # A screen that keeps changing still gets an answer.
 MAX_REPLY = 500
 MAX_LABEL = 200
 # Broad on purpose: a screen wrongly taken for a payment costs one picture in the log, the other way round costs a card number.
+_SAY_FIRST = re.compile(r'\s*\{\s*"say"\s*:\s*"((?:[^"\\]|\\.)*)"', re.S)
 _PRIVATE_SCREEN = re.compile(
     r"парол|\bкарт[аыуе]\b|\bкартой\b|пин-код|оплат|заплат|плат[её]ж|код подтверждения|код из смс"
     r"|password|\bpin\b|cvv|cvc|(credit|debit|bank) card|card (number|details)|payment|billing|\bpay\b|verification code|\botp\b"
@@ -179,6 +180,18 @@ def _text_on(session: Session, frame: Frame) -> Optional[list]:
     return window.outside(lines, frame.window) if lines and frame.window else lines
 
 
+def first_line(text: str) -> str:
+    """The spoken line of an answer still being written, once it is whole. The model writes it first, and an answer
+    that does not simply waits for its end."""
+    found = _SAY_FIRST.match(text)
+    if not found:
+        return ""
+    try:
+        return _line(json.loads('"' + found.group(1) + '"', strict=False))
+    except ValueError:
+        return ""
+
+
 def _private(session: Session, frame: Optional[Frame], answer: dict) -> bool:
     """The model says so, and the words on the screen can say so without it: this rule does not hang on a single answer."""
     if answer.get("private") is True:
@@ -266,6 +279,7 @@ class Friend:
         """The call itself cannot be stopped and ends unused. Its turn stays in the chat, so the next answer covers it."""
         if self._busy(session):
             session.answer.cancel()
+            session.answer = None
 
     def _start(self, session: Session, text: str, frame: Optional[Frame]) -> None:
         session.chat.append({"role": "user", "text": text, "frame": frame})
@@ -274,23 +288,46 @@ class Friend:
         self._stop(session)
         session.answer = self._run(self._answer(session, session.turn, frame))
 
-    async def _ask(self, session: Session) -> Optional[tuple]:
-        """No answer in time, or a broken one: one try on the spare model. The person cannot wait for more."""
+    def _on_text(self, session: Session, turn: int, started: float, early: dict) -> Callable[[str], None]:
+        """The line goes to the voice once it is whole, ahead of the rest of the answer. It reaches the chat at the same
+        moment, because the rest may never come. The call runs on in its thread after a new turn, which then has the say."""
+        loop, task = asyncio.get_running_loop(), asyncio.current_task()
+        found: List[str] = []
+
+        def deliver(line: str) -> None:
+            if session.answer is not task or early:
+                return
+            early.update(line=line, ms=_ms(started), turn={"role": "assistant", "text": json.dumps({"say": line}, ensure_ascii=False)})
+            session.chat.append(early["turn"])
+            session.publish({"type": "say", "turn": turn, "text_ru": line, "paste_text": None, "timings": {"model_ms": early["ms"]}})
+
+        def on_text(text: str) -> None:
+            if not found and first_line(text):
+                found.append(first_line(text))
+                loop.call_soon_threadsafe(deliver, found[0])
+        return on_text
+
+    async def _ask(self, session: Session, on_text: Callable[[str], None], early: dict) -> Optional[tuple]:
+        """No answer in time, or a broken one: one try on the spare model. The person cannot wait for more.
+        A line that has already gone out stands, and only the rest of the answer is lost."""
         messages = messages_of(session)
         effort = session.effort or config.META_TALK_REASONING
         for model in (config.META_TALK_MODEL, config.META_SPARE_MODEL):
             try:
                 reply = await asyncio.wait_for(
-                    run_in_threadpool(meta.chat_json, model, messages, effort, ANSWER_SECONDS + 1), ANSWER_SECONDS)
+                    run_in_threadpool(meta.chat_json, model, messages, effort, ANSWER_SECONDS + 1, on_text), ANSWER_SECONDS)
                 return model, reply, read(reply["text"])
             except Exception as error:
                 log.warning("Answer from %s: %s", model, type(error).__name__)
                 session.note("no answer", model=model, error=type(error).__name__)
+                if early:
+                    return model, {"usage": {}}, {"say": early["line"]}
         return None
 
     async def _answer(self, session: Session, turn: int, frame: Optional[Frame]) -> None:
         started = time.perf_counter()
-        got = await self._ask(session)
+        early: dict = {}
+        got = await self._ask(session, self._on_text(session, turn, started, early), early)
         session.restarts = 0
         if got is None:
             if session.open_words:
@@ -299,7 +336,11 @@ class Friend:
         model, reply, answer = got
         ms = _ms(started)
         private = _private(session, frame, answer)
-        session.chat.append({"role": "assistant", "text": json.dumps(answer, ensure_ascii=False)})
+        if early:
+            answer["say"] = early["line"]
+            early["turn"]["text"] = json.dumps(answer, ensure_ascii=False)
+        else:
+            session.chat.append({"role": "assistant", "text": json.dumps(answer, ensure_ascii=False)})
         session.last_answer = answer
         session.timings = {"model_ms": ms}
         lang = _text(answer.get("lang")).lower()
@@ -309,16 +350,16 @@ class Friend:
             for kept in session.chat:
                 if kept.get("frame") is frame:
                     kept["frame"] = None
-        session.note("answer", turn=turn, model=model, ms=ms, tokens=reply["usage"].get("completion_tokens"), private=private,
+        session.note("answer", turn=turn, model=model, ms=ms, first_ms=early.get("ms"), tokens=reply["usage"].get("completion_tokens"), private=private,
                      frame=session.keep_picture(frame, private) if frame else None, **({} if private else {"answer": answer}))
         said, paste = _line(answer.get("say")), _text(answer.get("paste"))
         self._hand_over(session, paste)
         paste_text = paste if session.text_entry == "clipboard" else None
         if not said:  # No sound, so no word from the phone that it has played.
             session.open_words = ""
-        if said or paste_text:
-            session.publish({"type": "say", "turn": turn, "text_ru": said, "paste_text": paste_text or None, "timings": {"model_ms": ms}})
-        else:
+        if paste_text or (said and not early):
+            session.publish({"type": "say", "turn": turn, "text_ru": "" if early else said, "paste_text": paste_text or None, "timings": {"model_ms": ms}})
+        elif not said:
             session.publish({"type": "quiet", "turn": turn})
         target = _target(answer.get("show"))
         if target and frame:

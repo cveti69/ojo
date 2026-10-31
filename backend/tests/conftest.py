@@ -129,12 +129,13 @@ class FakeMeta:
         self.replies = []
         self.calls = []
         self.hook = None
+        self.after_text = None
         self.text_calls = []
         self.asr_calls = []
         self.asr_reply = {"transcript": "Купить шампунь", "audioDurationMs": 100, "turns": []}
         self.lock = threading.Lock()
 
-    def chat_json(self, model, messages, effort, timeout=60):
+    def chat_json(self, model, messages, effort, timeout=60, on_text=None):
         with self.lock:
             self.calls.append(SimpleNamespace(model=model, messages=copy.deepcopy(messages), effort=effort))
             index = len(self.calls)
@@ -143,8 +144,12 @@ class FakeMeta:
             self.hook(index)
         if isinstance(response, Exception):
             raise response
-        return {"text": response if isinstance(response, str) else json.dumps(response, ensure_ascii=False),
-                "usage": {"completion_tokens": 9}, "ms": 1}
+        text = response if isinstance(response, str) else json.dumps(response, ensure_ascii=False)
+        if on_text:
+            on_text(text)
+        if self.after_text:
+            self.after_text(index)
+        return {"text": text, "usage": {"completion_tokens": 9}, "ms": 1}
 
     def chat(self, model, messages, effort=None, schema=None, timeout=60):
         assert model == "test-text"

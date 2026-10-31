@@ -205,7 +205,7 @@ def test_a_ready_text_goes_to_the_clipboard_or_the_keyboard(backend, entry, past
     backend.meta.replies = [line("Вставь в поиск.", paste="sampo")]
     words(client, session_id)
     idle(backend, session_id)
-    assert seen[-1]["type"] == "say" and seen[-1]["text_ru"] == "Вставь в поиск." and seen[-1]["paste_text"] == pasted
+    assert spoken(seen)[0] == "Вставь в поиск." and [event["paste_text"] for event in seen if event["type"] == "say"][-1] == pasted
     assert client.get("/sessions/" + session_id + "/suggestions", headers=AUTH).json() == {
         "step_id": "s1", "texts": ["sampo"], "hint_ru": ""
     }
@@ -683,6 +683,67 @@ def test_a_private_screen_is_not_written_down_and_not_sent_again(backend, monkey
     assert look(client, session_id, [SCREENS[0]]).status_code == 200
     idle(backend, session_id)
     assert sum(len(pictures(message)) for message in backend.meta.calls[1].messages if message["role"] == "user") == 1
+
+
+@pytest.mark.parametrize("text,expected", [
+    ('{"say": "Да.", "no', "Да."),
+    ('  {\n "say" : "Да.", "notes": "x"}', "Да."),
+    ('{"say": "Сказал \\"да\\" и\\nвсё", "', 'Сказал "да" и\nвсё'),
+    ('{"say": "Ещё пиш', ""),
+    ('{"say": "Кончается косой \\', ""),
+    ('{"say": "", "show"', ""),
+    ('{"notes": "x", "say": "Да."}', ""),
+])
+def test_the_line_of_an_answer_still_being_written(text, expected):
+    assert friend.first_line(text) == expected
+
+
+def test_the_voice_does_not_wait_for_the_rest_of_the_answer(backend):
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    rest = threading.Event()
+    backend.meta.after_text = lambda index: rest.wait(5)
+    words(backend.client, session_id)
+    assert wait_until(lambda: "say" in kinds(seen))
+    assert backend.store.sessions[session_id].last_answer is None
+    rest.set()
+    idle(backend, session_id)
+    assert spoken(seen) == ["Это кнопка поиска."]
+    answer = json.loads(backend.store.sessions[session_id].chat[-1]["text"])
+    assert answer["notes"] == "заметка" and backend.store.sessions[session_id].last_answer == answer
+
+
+def test_a_ready_text_follows_the_line_that_has_gone_out(backend):
+    session_id = new_session(backend.client, text_entry="clipboard")
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Вставь это.", paste="Halo")]
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    assert [(event["text_ru"], event["paste_text"]) for event in seen if event["type"] == "say"] == [("Вставь это.", None), ("", "Halo")]
+
+
+def test_a_line_that_has_gone_out_stands_when_the_answer_breaks(backend):
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = ['{"say": "Уже сказал.", "notes": "обрыв']
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    assert spoken(seen) == ["Уже сказал."] and len(backend.meta.calls) == 1
+    assert json.loads(backend.store.sessions[session_id].chat[-1]["text"]) == {"say": "Уже сказал."}
+
+
+def test_a_line_from_an_answer_nobody_waits_for_stays_silent(backend):
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Старый ответ."), line("Новый ответ.")]
+    entered, release = blocked(backend, 1)
+    words(backend.client, session_id, "Первое")
+    assert entered.wait(2)
+    words(backend.client, session_id, "Второе")
+    assert wait_until(lambda: spoken(seen) == ["Новый ответ."])
+    release.set()
+    time.sleep(0.05)
+    assert spoken(seen) == ["Новый ответ."]
 
 
 PAYMENT_SCREEN = [{"text": text, "box": [0.1, 0.1, 0.3, 0.2], "words": []} for text in (

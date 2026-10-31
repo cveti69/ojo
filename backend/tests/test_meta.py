@@ -25,6 +25,10 @@ class FakeResponse:
         chunk, self.body = self.body[:size], self.body[size:]
         return chunk
 
+    def readline(self):
+        line, mark, self.body = self.body.partition(b"\n")
+        return line + mark
+
 
 class FakeConnection:
     """Each reply is a status with a body, or an error to raise."""
@@ -114,14 +118,43 @@ def test_invalid_asr_response(reply):
         meta.parse_transcription(reply)
 
 
+def stream(*pieces, usage=None):
+    """An answer as Meta sends it, a piece at a time."""
+    events = [{"choices": [{"delta": {"content": piece}}]} for piece in pieces]
+    events.append({"choices": [], "usage": usage or {}})
+    return 200, b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events) + b"data: [DONE]\n\n"
+
+
 def test_a_turn_of_the_call_asks_for_json_without_a_schema(monkeypatch):
-    connection = FakeConnection([ok({"choices": [{"message": {"content": "{}"}}], "usage": {"completion_tokens": 7}})])
+    connection = FakeConnection([stream("{", "}", usage={"completion_tokens": 7})])
     use_connections(monkeypatch, connection)
     reply = meta.chat_json("test-model", [{"role": "user", "content": "Привет"}], "medium", 16)
     assert reply["text"] == "{}" and reply["usage"] == {"completion_tokens": 7}
     sent = json.loads(connection.requests[0]["data"])
     assert sent["response_format"] == {"type": "json_object"} and sent["reasoning_effort"] == "medium"
-    assert sent["max_completion_tokens"] == meta.ANSWER_TOKENS
+    assert sent["max_completion_tokens"] == meta.ANSWER_TOKENS and sent["stream"] is True
+
+
+def test_the_answer_is_shown_as_it_comes_and_the_connection_stays(monkeypatch):
+    connection = FakeConnection([stream('{"say"', ': "Да"', "}")])
+    use_connections(monkeypatch, connection)
+    seen = []
+    assert meta.chat_json("test-model", [], "medium", 16, seen.append)["text"] == '{"say": "Да"}'
+    assert seen == ['{"say"', '{"say": "Да"', '{"say": "Да"}'] and meta.connections.kept == [connection]
+
+
+def test_a_broken_stream_is_an_error_and_keeps_no_connection(monkeypatch):
+    use_connections(monkeypatch, FakeConnection([(200, b"data: {not json\n\n")]))
+    with pytest.raises(meta.MetaError) as error:
+        meta.chat_json("test-model", [], "medium", 16)
+    assert error.value.status == 502 and meta.connections.kept == []
+
+
+def test_a_refused_answer_gives_its_status(monkeypatch):
+    use_connections(monkeypatch, FakeConnection([(429, b"slow down")]))
+    with pytest.raises(meta.MetaError) as error:
+        meta.chat_json("test-model", [], "medium", 16)
+    assert error.value.status == 429
 
 
 def test_a_connection_is_used_again(monkeypatch):
