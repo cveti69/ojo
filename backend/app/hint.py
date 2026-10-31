@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 from . import config
 
 SIZE = (720, 960)
+QUALITY = 60  # The text still reads well, and the picture weighs half as much on the phone's network.
 BACKGROUND = (27, 35, 48)
 PANEL = (13, 20, 32)
 OUTLINE = (255, 223, 0)
@@ -111,5 +112,5 @@ def render(frame_jpeg: bytes, box: Optional[List[float]], instruction_ru: str) -
     for index, line in enumerate(lines):
         draw.text((40, text_top + index * line_height), line, font=font, fill="white", anchor="lt")
     output = io.BytesIO()
-    canvas.save(output, format="JPEG", quality=90)
+    canvas.save(output, format="JPEG", quality=QUALITY)
     return output.getvalue()
