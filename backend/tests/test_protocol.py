@@ -422,6 +422,20 @@ def test_a_failed_model_says_so(backend, broken):
     assert agent_words(backend, session_id)[-1] == "Не получилось ответить, повтори, пожалуйста."
 
 
+def test_a_failed_check_stays_silent_beside_the_person(backend):
+    session_id = new_session(backend.client, mode="beside")
+    backend.meta.quick.append(OSError("down"))
+    assert say(backend.client, session_id).status_code == 200
+    assert backend.store.sessions[session_id].dialog == []
+
+
+def test_an_empty_check_is_asked_again(backend):
+    session_id = new_session(backend.client)
+    backend.meta.quick += ["", quick_line("Да.", needs_screen=False)]
+    say(backend.client, session_id)
+    assert agent_words(backend, session_id) == ["Да."] and len(backend.meta.quick_calls) == 2
+
+
 def test_words_after_an_unspoken_answer_join_it(backend):
     session_id = new_session(backend.client)
     talker = backend.app.state.talker

@@ -66,7 +66,7 @@ class Talker:
         except Exception as error:
             log.warning("Quick line: %s", type(error).__name__)
             _drop(seeing)
-            if turn == session.turn:
+            if turn == session.turn and session.mode == "lead":  # Beside, this may be talk in the room: better silence.
                 self._say(session, turn, said, {"reply": FAILED, "new_goal": None, "mode": None}, "quick", {})
             return
         timings = {"quick_ms": _ms(started)}

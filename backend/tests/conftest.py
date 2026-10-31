@@ -146,7 +146,7 @@ class FakeMeta:
                 self.quick_hook()
             if isinstance(response, Exception):
                 raise response
-            return {"text": json.dumps(response, ensure_ascii=False), "usage": {}, "ms": 1}
+            return {"text": response if response == "" else json.dumps(response, ensure_ascii=False), "usage": {}, "ms": 1}
         if model == "test-talk":
             with self.lock:
                 self.talk_calls.append(messages)

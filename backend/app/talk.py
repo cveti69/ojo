@@ -58,7 +58,7 @@ WHO = {
 }
 FOR_YOU = "- These words are for you: set addressed=true."
 QUICK_RULE = """
-Right now you do not see the screen. Set needs_screen=true if the words are for you and a good answer depends on what is on the screen now: what is shown, what to press, where to go next, which one is better. Then reply with one very short natural line that you will take a look, such as "Сейчас гляну", with new_goal null and mode keep. If you can answer without the screen, such as thanks, small talk, a new plan or a change of mode, set needs_screen=false and answer. Never state what is on the screen, a price or a button from memory."""
+Right now you do not see the screen. Set needs_screen=true if the words are for you and a good answer depends on what is on the screen now: what is shown, what to press, where to go next, which one is better. Then reply with one very short natural line that you will take a look, such as "Сейчас гляну", with new_goal null and mode keep. If you can answer without the screen, such as thanks, agreement, small talk or a new plan, set needs_screen=false and answer. A request to lead or only to watch is always a change of mode: set mode, set needs_screen=false and confirm it. Never state what is on the screen, a price or a button from memory, and never ask them what they see: you can look yourself."""
 DONE_STATE = " It is reached: stay on the call, talk it over and help with whatever comes next."
 
 
@@ -108,6 +108,8 @@ def ask(pictures: Sequence[bytes], prompt: str, effort: Optional[str] = None) ->
 
 def check(prompt: str) -> dict:
     """The quick line from the words alone. An empty reply with no need for the screen means they were not for the agent."""
-    reply = meta.chat(config.META_QUICK_MODEL, [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-                      QUICK_REASONING, QUICK_SCHEMA, QUICK_SECONDS)
+    messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+    reply = meta.chat(config.META_QUICK_MODEL, messages, QUICK_REASONING, QUICK_SCHEMA, QUICK_SECONDS)
+    if not reply["text"].strip():  # About one answer in eighty comes back with nothing in it.
+        reply = meta.chat(config.META_QUICK_MODEL, messages, QUICK_REASONING, QUICK_SCHEMA, QUICK_SECONDS)
     return _read(json.loads(reply["text"]))
