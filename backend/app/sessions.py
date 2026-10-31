@@ -33,8 +33,10 @@ class Session:
     user_lang: str
     target_lang: str
     text_entry: str
-    effort: str = config.META_REASONING
+    effort: Optional[str] = None
     character: str = ""
+    mode: str = "lead"
+    heard: str = ""
     app_lang: Optional[str] = None
     history: List[dict] = field(default_factory=list)
     dialog: List[dict] = field(default_factory=list)
@@ -132,6 +134,21 @@ class Session:
         })
         self.touch()
 
+    def set_mode(self, mode: str) -> None:
+        """Beside drops what the server holds: the screen stays on the phone until the person speaks to the agent."""
+        if mode == self.mode:
+            return
+        self.mode = mode
+        self.revision += 1
+        self.pending_frame = None
+        self.last_frame = None
+        self.last_frame_hash = None
+        self.last_analyzed_gray = None
+        self.last_step = None
+        self.frame_text.clear()
+        self.completed = False
+        self.touch()
+
     def finish(self, text_ru: str = "Сессия завершена") -> None:
         self.ended = True
         self.revision += 1
@@ -153,10 +170,10 @@ class SessionStore:
         self.sessions: Dict[str, Session] = {}
 
     def create(self, goal: str, user_lang: str, target_lang: str, text_entry: str, effort: Optional[str] = None,
-               character: str = "") -> Session:
+               character: str = "", mode: str = "lead") -> Session:
         session = Session(
             id="s_" + uuid.uuid4().hex[:16], goal=goal, user_lang=user_lang,
-            target_lang=target_lang, text_entry=text_entry, effort=effort or config.META_REASONING, character=character,
+            target_lang=target_lang, text_entry=text_entry, effort=effort, character=character, mode=mode,
             app_lang=None if target_lang == "auto" else target_lang,
         )
         self.sessions[session.id] = session

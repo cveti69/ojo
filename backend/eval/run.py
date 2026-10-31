@@ -51,9 +51,9 @@ def prepare_frames(long_side: int) -> dict:
     return frames
 
 
-def load_lines(name: str) -> list[dict]:
+def load_lines(name: str, folder: Path = OCR) -> list[dict]:
     """Groups Vision words back into lines; a line record starts with the \\u0001 marker."""
-    path = OCR / f"{name}.json"
+    path = folder / f"{name}.json"
     if not path.exists():
         return []
     lines, words = [], []

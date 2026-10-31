@@ -130,6 +130,8 @@ def _detected_language(answer: dict) -> Optional[str]:
 
 class Engine:
     def submit(self, session: Session, frame: Frame) -> tuple:
+        if session.mode == "beside":
+            return False, "beside"
         session.last_frame = frame
         session.touch()
         if session.busy:
@@ -142,10 +144,21 @@ class Engine:
         if session.completed:
             return False, "done"
         if same_frame(frame.gray, session.last_analyzed_gray):
+            if session.last_status["state"] == "analyzing":  # It moved and came back to the same screen.
+                session.publish({"type": "status", "state": "broadcasting", "text_ru": "Жду изменения экрана"})
             return False, "unchanged"
         session.busy = True
         session.task = asyncio.create_task(self._drain(session, frame))
         return True, None
+
+    def moved(self, session: Session) -> None:
+        """The screen started to change, and frames wait until it stops. A hint for the old one would only send them back."""
+        if session.mode != "lead" or session.completed or session.needs_user_confirm or not session.last_step:
+            return
+        if session.busy and session.restarts < MAX_RESTARTS:
+            session.pending_frame = None
+            session.stale.set()
+        session.publish({"type": "status", "state": "analyzing", "text_ru": "Агент думает", "new_screen": True})
 
     async def _drain(self, session: Session, frame: Frame) -> None:
         try:
@@ -249,7 +262,7 @@ class Engine:
             session.completed = True
             session.texts = []
             session.insert_hint_ru = ""
-            session.publish({"type": "done", "text_ru": DONE_TEXT})
+            session.publish({"type": "done", "text_ru": answer["instruction"].strip() or DONE_TEXT})
             timings["total_ms"] = round((time.perf_counter() - frame.received_at) * 1000)
             return
         texts = [value for value in answer["insert_texts"] if isinstance(value, str) and value.strip()]

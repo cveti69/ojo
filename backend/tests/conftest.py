@@ -98,6 +98,7 @@ class FakeMeta:
         self.asr_calls = []
         self.asr_reply = {"transcript": "Купить шампунь", "audioDurationMs": 100, "turns": []}
         self.ready_text = "sampo anti ketombe"
+        self.text_reply = "Хорошо, помогу. Включи демонстрацию экрана."
         self.hook = None
         self.active = 0
         self.max_active = 0
@@ -107,7 +108,7 @@ class FakeMeta:
         if model == "test-text":
             self.text_calls.append(messages)
             payload = json.loads(messages[-1]["content"])
-            text = "Хорошо, помогу. Включи демонстрацию экрана." if "goal" in payload else "Tolong tunggu di sini."
+            text = self.text_reply if "goal" in payload else "Tolong tunggu di sini."
             if "phone app in" in messages[0]["content"]:
                 if self.ready_text is None:
                     raise OSError("no ready text")
