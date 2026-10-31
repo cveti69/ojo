@@ -15,6 +15,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         static let movedShare = 0.3  // With our window left out. On public pages a banner or a video reaches 0.29, the keyboard 0.33, a new screen 0.63.
         static let memoryReserve = 8 * 1024 * 1024
         static let textMemoryReserve = 16 * 1024 * 1024
+        static let windowGoneAfter = 6  // Looks in a row without it: they closed it, and the place counts again.
     }
 
     private struct Run: Sendable {
@@ -73,6 +74,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private var windowPatch: ScreenPatch?
     private var windowLooks = 0
     private var windowFinds = 0
+    private var windowMisses = 0
     private var keptFrame: KeptFrame?
     private var owesFrame = false
     private var seenMode = CallMode.lead
@@ -328,6 +330,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             windowPatch = nil
             windowLooks = 0
             windowFinds = 0
+            windowMisses = 0
             keptFrame = nil
             owesFrame = false
             seenMode = .lead
@@ -482,7 +485,11 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             windowLooks += 1
             if let found {
                 windowFinds += 1
+                windowMisses = 0
                 windowPatch = found
+            } else {
+                windowMisses += 1
+                if windowMisses >= Capture.windowGoneAfter { windowPatch = nil }
             }
             return windowPatch
         }

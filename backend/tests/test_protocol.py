@@ -965,6 +965,50 @@ def test_no_hint_over_a_screen_they_left_while_the_head_thought(backend):
     assert session.step_sequence == 1 and agent_words(backend, session_id)[-1] == "Жми вот сюда."
 
 
+def test_no_hint_if_they_spoke_again_while_the_button_was_found(backend, monkeypatch):
+    client = backend.client
+    session_id = new_session(client)
+    seen_frame(backend, session_id)
+    backend.meta.talk.append(talk_line("Жми вот сюда.", show=SHOW))
+    found = grounding.locate
+
+    def then_they_spoke(*args, **kwargs):
+        backend.store.sessions[session_id].looking = 0
+        return found(*args, **kwargs)
+    monkeypatch.setattr(grounding, "locate", then_they_spoke)
+    ask_the_screen(backend, session_id)
+    session = backend.store.sessions[session_id]
+    assert session.step_sequence == 1 and "Жми вот сюда." not in agent_words(backend, session_id)
+
+
+def test_a_new_plan_replaces_the_answer_the_head_is_still_on(backend):
+    client = backend.client
+    session_id = new_session(client)
+    backend.meta.talk.append(talk_line("Дешевле всего Reguler."))
+
+    def changed_their_mind():
+        client.post("/sessions/" + session_id + "/played", headers=AUTH, json={"turn": 1})
+        backend.meta.quick.append(quick_line("Хорошо, ищем другое.", new_goal="Купить кондиционер", needs_screen=False))
+        say(client, session_id)
+    backend.meta.talk_hook = changed_their_mind
+    ask_the_screen(backend, session_id)
+    assert "Дешевле всего Reguler." not in agent_words(backend, session_id)
+    assert agent_words(backend, session_id)[-1] == "Хорошо, ищем другое."
+
+
+def test_a_second_look_the_phone_never_made_leaves_the_next_question_alone(backend, monkeypatch):
+    monkeypatch.setattr(talker, "SETTLES_IN", 0)
+    client = backend.client
+    session_id = new_session(client)
+    backend.meta.talk.append(talk_line("Жми на доставку.", look_again=True))
+    ask_the_screen(backend, session_id)
+    with client.websocket_connect("/sessions/" + session_id + "/events", headers=AUTH) as websocket:
+        client.post("/sessions/" + session_id + "/moved", headers=AUTH)
+        receive_type(websocket, "look")
+    ask_the_screen(backend, session_id)
+    assert "you speak first" not in backend.meta.talk_calls[-1][0]["content"][0]["text"]
+
+
 def test_the_pointer_keeps_quiet_while_the_head_thinks(backend):
     client = backend.client
     session_id = new_session(client)

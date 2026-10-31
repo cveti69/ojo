@@ -48,6 +48,7 @@ class Talker:
         session.turn += 1
         session.heard = ""
         session.looks_again = ""
+        session.second_look = False
         session.note("heard", turn=session.turn, said=said)
         session.publish({"type": "heard", "turn": session.turn})
         return session.turn, said
@@ -71,6 +72,8 @@ class Talker:
         if turn != session.turn or session.ended:
             return
         self._change(session, quick)
+        if quick["new_goal"] or quick["mode"]:  # A new plan replaces the question the head is still on.
+            session.looking = 0
         if quick["needs_screen"]:
             if quick["reply"]:
                 self._say(session, turn, said, quick, "quick", timings, looks=True)
@@ -85,7 +88,7 @@ class Talker:
 
     async def look(self, session: Session, frames: Sequence[Frame]) -> None:
         """The head answers from the screens the phone kept, in both modes. A turn that only chats leaves this answer standing:
-        only a newer question to the screen replaces it."""
+        only a newer question to the screen or a new plan replaces it."""
         said, session.heard = session.heard, ""
         again, session.second_look = session.second_look, False
         turn = session.turn
@@ -114,7 +117,7 @@ class Talker:
         self._change(session, answer, newest)
         left = session.moved_at > newest.received_at
         if answer["show"] and not left:  # Over a screen they have left it would only send them back.
-            await self.engine.show(session, newest, answer["reply"], answer["show"], answer["private"], timings["screen_ms"])
+            await self.engine.show(session, turn, newest, answer["reply"], answer["show"], answer["private"], timings["screen_ms"])
             if session.looking != turn or session.ended:
                 return
         self._say(session, turn, said, answer, "screen", timings)

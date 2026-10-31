@@ -254,7 +254,8 @@ class Engine:
             model.cancel()
         return model.result() if model.done() else None
 
-    async def show(self, session: Session, frame: Frame, text: str, target: dict, private: bool, model_ms: int) -> None:
+    async def show(self, session: Session, turn: int, frame: Frame, text: str, target: dict, private: bool,
+                   model_ms: int) -> None:
         """What the head chose goes up the way a step does, and it beats the plan: an analysis under way belongs to the old
         plan, and this screen now counts as seen."""
         session.revision += 1
@@ -266,6 +267,9 @@ class Engine:
             session.note("show", outcome="not found", target=target, box_ms=box_ms)
             return
         image = await run_in_threadpool(hint.render, frame.jpeg, location["box"], text, session.eyes)
+        if session.ended or session.looking != turn or session.moved_at > frame.received_at:
+            session.note("show", outcome="late", target=target, box_ms=box_ms)  # They went on while the button was found.
+            return
         timings = {"queue_ms": 0, "model_ms": model_ms, "box_ms": box_ms, "box_source": location["source"],
                    "window": frame.window is not None}
         step_id = self._put_up(session, frame, image, location, "tap", text, speak=False, calm=private, timings=timings)

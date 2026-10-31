@@ -33,8 +33,10 @@ struct CallScreen: View {
                 Text(title)
                     .font(.title2.weight(.semibold))
                     .minimumScaleFactor(0.7)
-                Text(model.status)
-                    .foregroundStyle(.secondary)
+                if model.status != title {  // The head says what it shows, so both lines can be the same.
+                    Text(model.status)
+                        .foregroundStyle(.secondary)
+                }
                 if model.needsUserConfirm {
                     Label("Проверьте действие и подтвердите его сами", systemImage: "hand.raised.fill")
                         .foregroundStyle(.orange)
