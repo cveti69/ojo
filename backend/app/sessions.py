@@ -54,7 +54,6 @@ class Session:
     broadcasting: bool = False
     ended: bool = False
     shown: bool = False  # The window outlines something on the screen they are on.
-    moved_at: float = 0
     last_activity: float = field(default_factory=time.monotonic)
     last_frame: Optional[Frame] = None
     last_answer: Optional[dict] = None

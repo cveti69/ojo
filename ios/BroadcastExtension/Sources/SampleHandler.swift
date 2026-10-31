@@ -69,7 +69,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private var newestSample: Sample?
     private var answeredAsk = 0
     private var stillness = ScreenStillness()
-    private var movedSent = false
+    private var screenMoved = false
     private var windowPatch: ScreenPatch?
     private var windowLooks = 0
     private var windowFinds = 0
@@ -185,7 +185,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             let cells = previous.map { ScreenStillness.changedCells(thumbnail, $0, outside: patch) } ?? 0
             let now = ProcessInfo.processInfo.systemUptime
             let (settled, isQuiet, afterMove, waited) = lock.withLock {
-                (stillness.see(thumbnail, at: now, outside: patch), stillness.isQuiet, movedSent, stillness.waited)
+                (stillness.see(thumbnail, at: now, outside: patch), stillness.isQuiet, screenMoved, stillness.waited)
             }
             let large = (change ?? 1) >= Capture.changeThreshold || afterMove
             guard large || cells >= ScreenStillness.smallChange else {
@@ -195,7 +195,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             guard large ? settled : isQuiet else {
                 hold(sample, runID: check.run.id)  // Frames stop with the screen, so the monitor looks at this one again.
                 if large, let previous, ScreenStillness.changedShare(thumbnail, previous, outside: patch) >= Capture.movedShare {
-                    signalMoved(check.run)
+                    lock.withLock { if runID == check.run.id { screenMoved = true } }
                 }
                 skipFrame(runID: check.run.id)
                 return
@@ -228,16 +228,6 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
 
     private func hold(_ sample: Sample, runID id: UUID) {
         lock.withLock { if runID == id, !finished, heldSample == nil { heldSample = sample } }
-    }
-
-    private func signalMoved(_ run: Run) {
-        let first = lock.withLock { () -> Bool in
-            guard runID == run.id, !finished, !movedSent else { return false }
-            movedSent = true
-            return true
-        }
-        guard first else { return }
-        Task { _ = try? await run.client.moved(sessionID: run.sessionID) }
     }
 
     private func keep(_ frame: KeptFrame, outside patch: ScreenPatch?, run: Run) {
@@ -316,7 +306,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             newestSample = nil
             answeredAsk = 0
             stillness = ScreenStillness()
-            movedSent = false
+            screenMoved = false
             windowPatch = nil
             windowLooks = 0
             windowFinds = 0
@@ -502,7 +492,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 sent += 1
                 previousThumbnail = thumbnail
                 previousSize = size
-                movedSent = false
+                screenMoved = false
             } else { skipped += 1 }
         }
     }

@@ -174,6 +174,16 @@ def test_no_outline_without_a_screen(backend):
     assert kinds(seen) == ["heard", "say"]
 
 
+def test_a_ready_text_with_no_voice_closes_the_line(backend):
+    session_id = new_session(backend.client)
+    backend.meta.replies = [line("", paste="sampo"), line()]
+    words(backend.client, session_id, "Один")
+    idle(backend, session_id)
+    words(backend.client, session_id, "Два")
+    idle(backend, session_id)
+    assert texts(backend.meta.calls[1].messages[-1]) == ["Два " + friend.UNSEEN]
+
+
 def test_silence_closes_the_line(backend):
     client = backend.client
     session_id = new_session(client)
@@ -455,25 +465,51 @@ def test_a_reply_over_the_limit_ends_with_a_whole_sentence(words_in, cut):
     assert friend._line(words_in) == cut
 
 
+@pytest.mark.parametrize("target_lang,app_lang", [("auto", "th"), ("id", "id")])
+def test_the_screen_gives_the_app_language_only_when_asked_for(backend, target_lang, app_lang):
+    client = backend.client
+    session_id = sharing(client, target_lang=target_lang)
+    backend.meta.replies = [line(lang="TH"), line(lang="не язык")]
+    payload = {"text": "Подождите здесь", "from": "ru", "to": "auto", "session_id": session_id}
+    assert client.post("/translate", headers=AUTH, json=payload).status_code == (409 if target_lang == "auto" else 200)
+    post_frame(client, session_id)
+    idle(backend, session_id)
+    assert client.post("/translate", headers=AUTH, json=payload).status_code == 200
+    assert json.loads(backend.meta.text_calls[-1][-1]["content"])["to"] == app_lang
+
+
 def test_what_is_outlined_goes_when_they_leave_the_screen(backend):
     client = backend.client
     session_id = sharing(client)
     backend.meta.replies = [line("Жми.", show=SHOW)]
-    post_frame(client, session_id)
+    post_frame(client, session_id, SCREENS[0])
     idle(backend, session_id)
     seen = events_of(backend, session_id)
-    for _ in range(2):
-        assert client.post("/sessions/" + session_id + "/moved", headers=AUTH).json() == {"ok": True}
-    assert kinds(seen) == ["left"]
+    post_frame(client, session_id, SCREENS[1])
+    idle(backend, session_id)
+    assert kinds(seen) == ["left", "say"]
+
+
+def test_a_video_on_the_page_leaves_the_outline_alone(backend):
+    client = backend.client
+    session_id = sharing(client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Жми вот сюда.", show=SHOW)]
+    backend.meta.hook = lambda index: post_frame(client, session_id, with_video())
+    post_frame(client, session_id)
+    idle(backend, session_id)
+    post_frame(client, session_id, with_video())
+    assert kinds(seen) == ["say", "hint"]
 
 
 def test_no_outline_over_a_screen_they_left_while_the_model_thought(backend):
     client = backend.client
     session_id = sharing(client)
     seen = events_of(backend, session_id)
+    backend.store.sessions[session_id].restarts = friend.MAX_RESTARTS
     backend.meta.replies = [line("Жми вот сюда.", show=SHOW)]
-    backend.meta.hook = lambda index: client.post("/sessions/" + session_id + "/moved", headers=AUTH)
-    post_frame(client, session_id)
+    backend.meta.hook = lambda index: post_frame(client, session_id, SCREENS[1])
+    post_frame(client, session_id, SCREENS[0])
     idle(backend, session_id)
     assert kinds(seen) == ["say"] and backend.store.sessions[session_id].last_hint is None
 
@@ -486,12 +522,12 @@ def test_no_outline_if_they_left_while_the_button_was_found(backend, monkeypatch
     found = grounding.locate
 
     def then_they_left(*args, **kwargs):
-        client.post("/sessions/" + session_id + "/moved", headers=AUTH)
+        post_frame(client, session_id, SCREENS[1])
         return found(*args, **kwargs)
     monkeypatch.setattr(grounding, "locate", then_they_left)
-    post_frame(client, session_id)
+    post_frame(client, session_id, SCREENS[0])
     idle(backend, session_id)
-    assert kinds(seen) == ["say"]
+    assert "hint" not in kinds(seen)
 
 
 def test_a_bad_box_goes_and_the_label_still_finds_the_button(backend, monkeypatch):

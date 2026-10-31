@@ -19,11 +19,14 @@ from .sessions import Frame, Session
 
 log = logging.getLogger(__name__)
 
-ROLE = """Ты друг на звонке. Видишь экран телефона человека, слышишь его слова и помогаешь сделать то, что человек хочет. Сам ничего не нажимаешь, нажимает человек.
-Говори коротко, как по телефону.
-Сказать нечего, молчи: say пустой.
-Экрана нет, не говори, что видишь.
-Спроси одно главное, от чего зависит результат."""
+ROLE = """Ты на телефонном звонке. Слышишь человека, а когда он показывает экран телефона, видишь снимки. Сам ничего не нажимаешь, нажимает человек.
+Ты любознательный исследователь рядом с человеком.
+Держи несколько возможных объяснений и путей к цели.
+Ищи сведения, которые помогут различить их и выбрать подходящий путь.
+Главное уточнение — один вопрос, чей ответ сильнее всего изменит понимание.
+Каждое зрительное наблюдение связывай с полученным изображением.
+Говори, когда появилось существенное открытие или созрел полезный вопрос.
+Остальное время спокойно наблюдай; открытия передавай коротко и по-человечески."""
 RULES = """Не проси пароли и данные карт. Оплату подтверждает только сам человек.
 
 Серый прямоугольник на экране это твоё окошко: в нём человек видит то, что ты обвёл.
@@ -33,6 +36,7 @@ say: что скажешь вслух, можно ничего.
 show: что обвести на последнем экране: label, текст этого места на экране, object, что это, коротко по-английски, и box, [x1, y1, x2, y2] от 0 до 1000 от левого верхнего угла. Обводить нечего, не пиши show.
 paste: готовый текст, если человеку надо его вставить. Иначе не пиши paste.
 private: true, если на последнем экране оплата, карта, пароль или код.
+lang: код языка приложения на последнем экране, две буквы. Экрана нет, не пиши lang.
 notes: записи для себя, любой текст. На следующем ходу они вернутся к тебе."""
 SILENT_TURN = "(молчит, экран обновился)"
 UNSEEN = "(экран не показан)"
@@ -83,6 +87,15 @@ def same_frame(gray: bytes, previous: Optional[bytes]) -> bool:
 
 def changed_share(gray: bytes, previous: bytes) -> float:
     return sum(abs(a - b) > PIXEL_CHANGED for a, b in zip(gray, previous)) / len(gray)
+
+
+def _new_screen(session: Session, frame: Frame) -> bool:
+    return session.seen_gray is None or changed_share(frame.gray, session.seen_gray) >= NEW_SCREEN_SHARE
+
+
+def _gone(session: Session, frame: Frame) -> bool:
+    """They are on another screen by now. A video on the page is not a reason to take an outline away."""
+    return bool(session.last_frame) and changed_share(session.last_frame.gray, frame.gray) >= NEW_SCREEN_SHARE
 
 
 def _pictures(chat: List[dict]) -> Set[int]:
@@ -208,6 +221,8 @@ class Friend:
 
     def look(self, session: Session, frame: Optional[Frame]) -> None:
         said, session.heard = session.heard, ""
+        if frame and _new_screen(session, frame):
+            self._left(session)
         self._start(session, said if frame else said + " " + UNSEEN, frame)
 
     def screen(self, session: Session, frame: Frame) -> tuple:
@@ -218,8 +233,9 @@ class Friend:
             return False, "looking"
         if frame.small:
             return False, "small"
-        if session.seen_gray is not None and changed_share(frame.gray, session.seen_gray) < NEW_SCREEN_SHARE:
+        if not _new_screen(session, frame):
             return False, "same"
+        self._left(session)
         if self._busy(session):
             if session.restarts >= MAX_RESTARTS:
                 return False, "busy"
@@ -227,9 +243,8 @@ class Friend:
         self._start(session, SILENT_TURN, frame)
         return True, None
 
-    def moved(self, session: Session) -> None:
-        """The screen started to change. What is outlined belongs to the old one, and an answer for it must not ring anything."""
-        session.moved_at = time.perf_counter()
+    def _left(self, session: Session) -> None:
+        """What is outlined belongs to the old screen."""
         if session.shown:
             session.shown = False
             session.publish({"type": "left"})
@@ -281,6 +296,9 @@ class Friend:
         session.chat.append({"role": "assistant", "text": json.dumps(answer, ensure_ascii=False)})
         session.last_answer = answer
         session.timings = {"model_ms": ms}
+        lang = _text(answer.get("lang")).lower()
+        if session.target_lang == "auto" and re.fullmatch("[a-z]{2}", lang):
+            session.app_lang = lang
         if frame and private:  # It is not sent again, and what the model noted is enough for the next turns.
             for kept in session.chat:
                 if kept.get("frame") is frame:
@@ -290,10 +308,11 @@ class Friend:
         said, paste = _line(answer.get("say")), _text(answer.get("paste"))
         self._hand_over(session, paste)
         paste_text = paste if session.text_entry == "clipboard" else None
+        if not said:  # No sound, so no word from the phone that it has played.
+            session.open_words = ""
         if said or paste_text:
             session.publish({"type": "say", "turn": turn, "text_ru": said, "paste_text": paste_text or None, "timings": {"model_ms": ms}})
         else:
-            session.open_words = ""
             session.publish({"type": "quiet", "turn": turn})
         target = _target(answer.get("show"))
         if target and frame:
@@ -309,7 +328,7 @@ class Friend:
     async def _show(self, session: Session, frame: Frame, text: str, target: dict, private: bool, model_ms: int) -> None:
         started = time.perf_counter()
         written = None if private else target
-        if session.moved_at > frame.received_at:  # Over a screen they have left it would only send them back.
+        if _gone(session, frame):  # Over a screen they have left it would only send them back.
             session.note("show", outcome="left", target=written)
             return
         location = await run_in_threadpool(grounding.locate, frame.jpeg, frame.width, frame.height,
@@ -320,9 +339,6 @@ class Friend:
             session.note("show", outcome="not found", target=written, box_ms=box_ms)
             return
         image = await run_in_threadpool(hint.render, frame.jpeg, location["box"], text, session.eyes)
-        if session.moved_at > frame.received_at:
-            session.note("show", outcome="late", target=written, box_ms=box_ms)
-            return
         session.step_sequence += 1
         session.step_id = "s" + str(session.step_sequence)
         event = {

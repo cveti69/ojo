@@ -332,14 +332,6 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
         friend.played(session_or_404(session_id), body.turn)
         return {"ok": True}
 
-    @router.post("/sessions/{session_id}/moved")
-    async def moved(session_id: str):
-        session = session_or_404(session_id)
-        require_active(session)
-        session.note("moved")
-        friend.moved(session)
-        return {"ok": True}
-
     @router.post("/speech")
     async def say(body: Speech):
         try:

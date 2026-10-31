@@ -99,10 +99,6 @@ public final class ServerClient: Sendable {
     }
 
     /// The screen started to change, so a hint for the old one is no use.
-    public func moved(sessionID: String) async throws -> OKResponse {
-        try await getJSON(request("POST", ["sessions", sessionID, "moved"]))
-    }
-
     /// The first sound of a reply: from here on, new words are a new line, not the end of the old one.
     public func played(turn: Int, sessionID: String) async throws -> OKResponse {
         try await json("POST", ["sessions", sessionID, "played"], body: PlayedRequest(turn: turn))

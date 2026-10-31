@@ -116,7 +116,6 @@ private enum ProtocolChecks {
         let looked = try await client.look([KeptScreen(jpeg: Data([1, 2]), timestampMS: 15), KeptScreen(jpeg: Data([3, 4]), timestampMS: 16)],
                                            sessionID: created.sessionID)
         try check(looked.ok, "look response")
-        _ = try await client.moved(sessionID: created.sessionID)
         _ = try await client.played(turn: 3, sessionID: created.sessionID)
         try await client.health()
         let frame = try await client.sendFrame(Data([0xff, 0xd8, 0xff, 0xd9]), sessionID: created.sessionID,
@@ -189,7 +188,6 @@ private enum ProtocolChecks {
         let playedRequest = requests.first { $0.url!.path.hasSuffix("/played") }!
         let playedBody = try JSONSerialization.jsonObject(with: body(of: playedRequest)) as! [String: Int]
         try check(playedBody == ["turn": 3], "played body")
-        try check(requests.contains { $0.url!.path.hasSuffix("/moved") && $0.httpMethod == "POST" }, "moved signal")
         let translate = requests.first { $0.url!.path.hasSuffix("/translate") }!
         let translateBody = try JSONSerialization.jsonObject(with: body(of: translate)) as! [String: String]
         try check(translateBody["from"] == "ru" && translateBody["to"] == "auto" && translateBody["session_id"] == created.sessionID,
