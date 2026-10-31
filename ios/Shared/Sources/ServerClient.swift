@@ -21,19 +21,6 @@ public final class ServerClient: Sendable {
         try await json("POST", ["sessions"], body: CreateSessionRequest(settings: settings))
     }
 
-    public func setGoal(_ goal: String, sessionID: String) async throws -> GoalResponse {
-        try await json("POST", ["sessions", sessionID, "goal"], body: GoalRequest(goal: goal))
-    }
-
-    public func transcribe(wavURL: URL) async throws -> TextResponse {
-        var request = try request("POST", ["transcribe"])
-        request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 45
-        let (data, response) = try await session.upload(for: request, fromFile: wavURL)
-        try validate(response)
-        return try JSONDecoder().decode(TextResponse.self, from: data)
-    }
-
     public func sendFrame(_ jpeg: Data, sessionID: String, width: Int, height: Int, timestampMS: Int64, small: Bool = false) async throws -> FrameResponse {
         var request = try request("POST", ["sessions", sessionID, "frames"])
         request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
@@ -89,7 +76,12 @@ public final class ServerClient: Sendable {
         return try JSONDecoder().decode(SpokenReply.self, from: data)
     }
 
-    /// The screens the phone kept, oldest first. Only a line that needs them may send them.
+    /// The same as a spoken line, typed.
+    public func words(_ text: String, sessionID: String) async throws -> OKResponse {
+        try await json("POST", ["sessions", sessionID, "words"], body: WordsRequest(text: text))
+    }
+
+    /// The screens the phone kept, oldest first, for the line that asked for them.
     public func look(_ frames: [KeptScreen], sessionID: String) async throws -> OKResponse {
         let boundary = "ojo-" + UUID().uuidString
         var body = Data()
@@ -104,10 +96,6 @@ public final class ServerClient: Sendable {
         let (data, response) = try await session.upload(for: request, from: body)
         try validate(response)
         return try JSONDecoder().decode(OKResponse.self, from: data)
-    }
-
-    public func setMode(_ mode: CallMode, sessionID: String) async throws -> OKResponse {
-        try await json("POST", ["sessions", sessionID, "mode"], body: ModeRequest(mode: mode))
     }
 
     /// The screen started to change, so a hint for the old one is no use.
@@ -127,14 +115,18 @@ public final class ServerClient: Sendable {
     }
 
     /// The agent's words as raw 24 kHz, 16-bit mono audio, while it is being made.
-    public func speech(_ text: String) async throws -> URLSession.AsyncBytes {
+    public func speech(_ text: String, voice: String? = nil) async throws -> URLSession.AsyncBytes {
         var request = try request("POST", ["speech"])
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(SpeechRequest(text: text))
+        request.httpBody = try JSONEncoder().encode(SpeechRequest(text: text, voice: voice))
         request.timeoutInterval = 2.5  // Later than this, the system voice is the better answer.
         let (audio, response) = try await session.bytes(for: request)
         try validate(response)
         return audio
+    }
+
+    public func voices() async throws -> VoicesResponse {
+        try await getJSON(request("GET", ["voices"]))
     }
 
     public func eventSocket(sessionID: String) throws -> URLSessionWebSocketTask {

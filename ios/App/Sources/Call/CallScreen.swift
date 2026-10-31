@@ -33,13 +33,9 @@ struct CallScreen: View {
                 Text(title)
                     .font(.title2.weight(.semibold))
                     .minimumScaleFactor(0.7)
-                if model.status != title {  // The head says what it shows, so both lines can be the same.
+                if model.status != title {  // The agent says what it shows, so both lines can be the same.
                     Text(model.status)
                         .foregroundStyle(.secondary)
-                }
-                if model.needsUserConfirm {
-                    Label("Проверьте действие и подтвердите его сами", systemImage: "hand.raised.fill")
-                        .foregroundStyle(.orange)
                 }
             }
             .multilineTextAlignment(.center)
@@ -48,8 +44,8 @@ struct CallScreen: View {
         }
         .padding(16)
         .sheet(isPresented: $showsMore) { MoreScreen(model: model) }
-        .task(id: model.hasGoal) {
-            guard model.hasGoal, !model.isSharing, scenePhase == .active else { return }
+        .task(id: model.isGreeted) {
+            guard model.isGreeted, !model.isSharing, scenePhase == .active else { return }
             showsMore = false
             do { try await Task.sleep(nanoseconds: 700_000_000) } catch { return }  // Our sheet has to close first.
             model.askForScreen()
@@ -62,15 +58,13 @@ struct CallScreen: View {
             case .background: name = "фон"
             @unknown default: name = "неизвестна"
             }
-            model.sceneChanged(name, isBackground: phase == .background, isActive: phase == .active)
+            model.sceneChanged(name, isActive: phase == .active)
         }
     }
 
     private var title: String {
         switch model.phase {
         case .idle, .busy: return model.displayName
-        case .listening: return "Слушаю"
-        case .needsGoal: return "Что нужно сделать?"
         case .needsScreen: return "Покажи экран"
         case .guiding: return model.lastInstruction
         }
@@ -78,19 +72,10 @@ struct CallScreen: View {
 
     @ViewBuilder private var actions: some View {
         VStack(spacing: 12) {
-            switch model.phase {
-            case .needsGoal:
-                HStack(spacing: 12) {
-                    Button("Сказать ещё раз") { model.listenAgain() }
-                    Button("Написать текстом") { showsMore = true }
-                }
-                .buttonStyle(.bordered)
-            case .needsScreen:
+            if model.phase == .needsScreen {
                 Label("Покажи экран", systemImage: "rectangle.on.rectangle")
                     .callButton(.accentColor)
                     .overlay { Hosted(view: model.screenShare) }
-            default:
-                EmptyView()
             }
             if model.windowFailed {
                 Button("Открыть окно") { model.openWindow() }
@@ -125,45 +110,20 @@ private struct MoreScreen: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Цель текстом") {
-                    TextField("Например: помоги заказать шампунь", text: $model.goal, axis: .vertical)
+                Section("Написать текстом") {
+                    TextField("Что сказать агенту", text: $model.typed, axis: .vertical)
                         .lineLimit(1...4)
-                    if !model.recognizedText.isEmpty {
-                        Text("Распознано: \(model.recognizedText)")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                    Button("Отправить цель") {
-                        model.submitGoal()
+                    Button("Отправить") {
+                        model.sendTyped()
                         dismiss()
                     }
                     .disabled(
                         !model.isCallActive || model.isTestingWindow
-                            || model.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    Button("Сказать цель ещё раз") {
-                        model.listenAgain()
-                        dismiss()
-                    }
-                    .disabled(!model.isCallActive || model.isTestingWindow || model.isWorking)
-                    if model.isRecording {
-                        Button("Закончить запись") { model.finishRecording() }
-                    }
-                }
-                Section {
-                    Picker("Режим", selection: Binding(get: { model.callMode }, set: { model.setCallMode($0) })) {
-                        Text("Ведёт").tag(CallMode.lead)
-                        Text("Рядом").tag(CallMode.beside)
-                    }
-                    .pickerStyle(.segmented)
-                } header: {
-                    Text("Режим агента")
-                } footer: {
-                    Text(model.callMode == .lead
-                         ? "Агент сам ведёт по шагам. Можно сказать ему: «просто смотри»."
-                         : "Агент молчит, пока ты к нему не обратишься. До этого экран не уходит с телефона. Можно сказать: «веди».")
+                            || model.typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 Section {
                     HStack {
-                        BroadcastPicker(isEnabled: model.isCallActive && model.hasGoal)
+                        BroadcastPicker(isEnabled: model.isGreeted)
                             .frame(width: 44, height: 44)
                         Text("Трансляция экрана")
                     }

@@ -12,17 +12,13 @@ public enum ScreenTextMode: String, Codable, CaseIterable, Sendable {
     case off
 }
 
-/// `auto` leaves the choice to the server: quick for the pointer, deeper for talk.
+/// `auto` leaves the choice to the server.
 public enum ThinkingLevel: String, Codable, CaseIterable, Sendable {
     case auto, minimal, low, medium, high, xhigh, max
 }
 
 public enum AgentCharacter: String, Codable, CaseIterable, Sendable {
     case warm, strict, brief, patient, own
-}
-
-public enum CallMode: String, Codable, CaseIterable, Sendable {
-    case lead, beside
 }
 
 public struct ServerSettings: Sendable, Equatable {
@@ -34,7 +30,6 @@ public struct ServerSettings: Sendable, Equatable {
     public var thinking: ThinkingLevel = .auto
     public var character: AgentCharacter = .warm
     public var ownCharacter = ""
-    public var mode: CallMode = .lead
     public var eyes = false
 }
 
@@ -51,7 +46,7 @@ public final class SharedStore: @unchecked Sendable {
         defaults.register(defaults: [
             "serverURL": configuration.defaultServerURL.absoluteString,
             "userLang": "ru", "targetLang": "id", "textInput": TextEntry.clipboard.rawValue,
-            "screenReading": ScreenTextMode.extension.rawValue, "hearsDuringCall": true
+            "screenReading": ScreenTextMode.extension.rawValue
         ])
     }
 
@@ -66,7 +61,6 @@ public final class SharedStore: @unchecked Sendable {
             thinking: ThinkingLevel(rawValue: defaults.string(forKey: "thinkingLevel") ?? "") ?? .auto,
             character: AgentCharacter(rawValue: defaults.string(forKey: "agentManner") ?? "") ?? .warm,
             ownCharacter: defaults.string(forKey: "ownCharacter") ?? "",
-            mode: callMode,
             eyes: defaults.bool(forKey: "eyes")
         )
     }
@@ -90,22 +84,14 @@ public final class SharedStore: @unchecked Sendable {
         }
     }
 
-    public var hearsDuringCall: Bool {
-        get { defaults.bool(forKey: "hearsDuringCall") }
-        set {
-            defaults.set(newValue, forKey: "hearsDuringCall")
-            defaults.synchronize()
-        }
-    }
-
-    /// The app writes it, and the broadcast reads it to know whether frames may leave the phone.
-    public var callMode: CallMode {
+    /// The next line sounds in it. Nothing chosen leaves it to the server.
+    public var voice: String? {
         get {
             refresh()
-            return CallMode(rawValue: defaults.string(forKey: "callMode") ?? "") ?? .lead
+            return defaults.string(forKey: "voice")
         }
         set {
-            defaults.set(newValue.rawValue, forKey: "callMode")
+            defaults.set(newValue, forKey: "voice")
             defaults.synchronize()
         }
     }

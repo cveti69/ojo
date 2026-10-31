@@ -81,14 +81,16 @@ struct SettingsScreen: View {
             } header: {
                 Text("Агент")
             } footer: {
-                Text("Авто: подсказки быстрые, разговор глубже. Чем глубже рассуждения, тем дольше ждать ответа. Запреты на пароли, карты и оплату характер не меняет. Новые настройки применяются со следующего звонка.")
+                Text("Авто: глубину выбирает сервер. Чем глубже рассуждения, тем дольше ждать ответа. Запреты на пароли, карты и оплату характер не меняет. Новые настройки применяются со следующего звонка.")
             }
-            Section {
-                Toggle("Слушать весь звонок", isOn: Binding(
-                    get: { model.hearsDuringCall }, set: { model.setHearsDuringCall($0) }
-                ))
-            } footer: {
-                Text("С агентом можно говорить из другого приложения: спросить по ходу или поменять цель. Микрофон включён до конца звонка.")
+            if !model.voices.isEmpty {
+                Section {
+                    Picker("Голос", selection: Binding(get: { model.voice }, set: { model.setVoice($0) })) {
+                        ForEach(model.voices) { Text($0.name).tag($0.id) }
+                    }
+                } footer: {
+                    Text("Новый голос работает со следующей реплики.")
+                }
             }
             Section {
                 Toggle("Глазки", isOn: Binding(get: { model.showsEyes }, set: { model.setShowsEyes($0) }))
@@ -107,6 +109,7 @@ struct SettingsScreen: View {
             }
         }
         .navigationTitle("Настройки")
+        .task { await model.loadVoices() }
         .onAppear {
             guard let settings = model.store?.settings else { return }
             form.serverAddress = settings.serverURL.absoluteString

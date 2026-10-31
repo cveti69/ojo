@@ -47,16 +47,16 @@ private final class StubState: @unchecked Sendable {
         let path = request.url!.path
         if path.hasSuffix("/hint"), noHint { noHint = false; return (204, "") }
         if path == "/api/sessions" { return (201, #"{"session_id":"session-test"}"#) }
-        if path.hasSuffix("/goal") { return (200, #"{"reply_ru":"Включите трансляцию","ready_text":"sampo","mode":"beside"}"#) }
+        if path.hasSuffix("/voices") { return (200, #"{"voices":[{"id":"voice-1","name":"George"}],"default":"voice-1"}"#) }
         if path.hasSuffix("/frames") { return (202, #"{"accepted":false,"reason":"busy"}"#) }
         if path.hasSuffix("/speech") { return (200, "abcd") }
         if path.hasSuffix("/say") {
             return (200, #"{"heard":true,"speech_ms":1200}"#)
         }
         if path.hasSuffix("/suggestions") { return (200, #"{"step_id":"s3","texts":["hello"],"hint_ru":"запрос"}"#) }
-        if path.hasSuffix("/transcribe") || path.hasSuffix("/translate") { return (200, #"{"text":"Результат"}"#) }
+        if path.hasSuffix("/translate") { return (200, #"{"text":"Результат"}"#) }
         if path.hasSuffix("/hint") {
-            return (200, #"{"type":"hint","step_id":"s3","instruction_ru":"Вставьте текст","speak":false,"image_jpeg_base64":"AA==","insert_texts":[],"insert_hint_ru":"","paste_text":"hello","needs_user_confirm":true,"frame_ts":123456789}"#)
+            return (200, #"{"type":"hint","step_id":"s3","instruction_ru":"Вставьте текст","image_jpeg_base64":"AA==","frame_ts":123456789,"timings":{"model_ms":2710,"box_ms":3,"box_source":"text","window":true}}"#)
         }
         return (200, #"{"ok":true}"#)
     }
@@ -103,24 +103,19 @@ private enum ProtocolChecks {
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
         let client = ServerClient(settings: settings, session: session)
-        let wavURL = FileManager.default.temporaryDirectory.appendingPathComponent("protocol-\(UUID().uuidString).wav")
-        try Data("RIFFtestWAVE".utf8).write(to: wavURL)
-        defer { try? FileManager.default.removeItem(at: wavURL) }
-        let transcript = try await client.transcribe(wavURL: wavURL)
-        try check(transcript.text == "Результат", "transcribe response")
         let created = try await client.createSession()
         try check(created.sessionID == "session-test", "session_id decoding")
-        let reply = try await client.setGoal("Цель", sessionID: created.sessionID)
-        try check(reply.replyRU == "Включите трансляцию" && reply.readyText == "sampo" && reply.mode == .beside, "goal response decoding")
+        _ = try await client.words("Что это?", sessionID: created.sessionID)
         var spoken = 0
-        for try await _ in try await client.speech("Привет") { spoken += 1 }
+        for try await _ in try await client.speech("Привет", voice: "voice-1") { spoken += 1 }
         try check(spoken == 4, "speech bytes")
+        let voices = try await client.voices()
+        try check(voices.voices == [Voice(id: "voice-1", name: "George")] && voices.defaultVoice == "voice-1", "the list of voices")
         let said = try await client.say(Data("RIFFtestWAVE".utf8), sessionID: created.sessionID)
         try check(said.heard && said.speechMS == 1200, "spoken line response decoding")
         let looked = try await client.look([KeptScreen(jpeg: Data([1, 2]), timestampMS: 15), KeptScreen(jpeg: Data([3, 4]), timestampMS: 16)],
                                            sessionID: created.sessionID)
         try check(looked.ok, "look response")
-        _ = try await client.setMode(.beside, sessionID: created.sessionID)
         _ = try await client.moved(sessionID: created.sessionID)
         _ = try await client.played(turn: 3, sessionID: created.sessionID)
         try await client.health()
@@ -141,7 +136,7 @@ private enum ProtocolChecks {
         _ = try await client.end(sessionID: created.sessionID)
         let hint = try await client.hint(sessionID: created.sessionID, after: "s 2+?")
         guard case .hint(let value) = hint else { throw CheckFailure(description: "hint decoding") }
-        try check(value.pasteText == "hello" && value.needsUserConfirm && !value.speak, "confirmation and clipboard flags")
+        try check(value.instructionRU == "Вставьте текст" && value.timings?.boxSource == "text", "hint fields")
         try check(value.frameTS == 123456789, "hint frame_ts decoding")
         ProtocolStub.state.next(noHint: true)
         let empty = try await client.hint(sessionID: created.sessionID, after: "s3")
@@ -168,29 +163,29 @@ private enum ProtocolChecks {
 
         let requests = ProtocolStub.state.captured()
         try check(requests.allSatisfy { $0.value(forHTTPHeaderField: "X-Token") == "test-token" }, "X-Token on every HTTP request")
-        let audio = requests.first { $0.url!.path.hasSuffix("/transcribe") }!
-        try check(audio.httpMethod == "POST" && audio.value(forHTTPHeaderField: "Content-Type") == "audio/wav", "audio upload format")
         let line = requests.first { $0.url!.path.hasSuffix("/say") }!
         try check(line.url!.path == "/api/sessions/session-test/say" && line.value(forHTTPHeaderField: "Content-Type") == "audio/wav",
                   "spoken line endpoint")
         let create = requests.first { $0.url!.path == "/api/sessions" }!
         let createBody = try JSONSerialization.jsonObject(with: body(of: create)) as! [String: String]
-        try check(createBody == ["goal": "", "user_lang": "ru", "target_lang": "auto", "text_entry": "clipboard",
-                                 "character": "warm", "own_character": "", "mode": "lead"], "create-session body leaves the level to the server")
+        try check(createBody == ["user_lang": "ru", "target_lang": "auto", "text_entry": "clipboard",
+                                 "character": "warm", "own_character": ""], "create-session body leaves the level to the server")
         var chosen = settings
         chosen.thinking = .high
-        chosen.mode = .beside
         let chosenBody = try JSONSerialization.jsonObject(with: JSONEncoder().encode(CreateSessionRequest(settings: chosen))) as! [String: String]
-        try check(chosenBody["effort"] == "high" && chosenBody["mode"] == "beside", "a chosen level and mode reach the server")
+        try check(chosenBody["effort"] == "high", "a chosen level reaches the server")
+        let typedLine = requests.first { $0.url!.path.hasSuffix("/words") }!
+        let typedBody = try JSONSerialization.jsonObject(with: body(of: typedLine)) as! [String: String]
+        try check(typedBody == ["text": "Что это?"], "typed line body")
+        let speech = requests.first { $0.url!.path.hasSuffix("/speech") }!
+        let speechBody = try JSONSerialization.jsonObject(with: body(of: speech)) as! [String: String]
+        try check(speechBody == ["text": "Привет", "voice": "voice-1"], "the chosen voice goes with the line")
         let lookRequest = requests.first { $0.url!.path.hasSuffix("/look") }!
         let lookType = lookRequest.value(forHTTPHeaderField: "Content-Type") ?? ""
         try check(lookType.hasPrefix("multipart/form-data; boundary="), "look format")
         let lookBody = String(decoding: try body(of: lookRequest), as: UTF8.self)
         try check(lookBody.components(separatedBy: #"name="frame""#).count == 3 && lookBody.hasSuffix("--\r\n"), "look sends every frame")
         try check(lookBody.contains(#"filename="15.jpg""#) && lookBody.contains(#"filename="16.jpg""#), "each frame says when it was taken")
-        let modeRequest = requests.first { $0.url!.path.hasSuffix("/mode") }!
-        let modeBody = try JSONSerialization.jsonObject(with: body(of: modeRequest)) as! [String: String]
-        try check(modeBody == ["mode": "beside"], "mode body")
         let playedRequest = requests.first { $0.url!.path.hasSuffix("/played") }!
         let playedBody = try JSONSerialization.jsonObject(with: body(of: playedRequest)) as! [String: Int]
         try check(playedBody == ["turn": 3], "played body")
@@ -218,15 +213,14 @@ private enum ProtocolChecks {
             try JSONSerialization.jsonObject(with: body(of: $0)) as! [String: String]
         }
         try check(states == [["state": "started"], ["state": "finished"]], "broadcast lifecycle bodies")
-        let status = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"status","state":"analyzing","text_ru":"Агент думает"}"#.utf8))
+        let status = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"status","state":"broadcasting","text_ru":"Демонстрация экрана включена"}"#.utf8))
         guard case .status(let message) = status else { throw CheckFailure(description: "status event") }
-        try check(message.state == "analyzing", "status state")
+        try check(message.state == "broadcasting", "status state")
         let done = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"done","text_ru":"Готово"}"#.utf8))
         guard case .done = done else { throw CheckFailure(description: "done event") }
-        let sayEvent = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"say","turn":3,"layer":"quick","text_ru":"Сейчас гляну.","goal":null,"mode":"beside","looks":true,"timings":{"quick_ms":900}}"#.utf8))
+        let sayEvent = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"say","turn":3,"text_ru":"Жми зелёную.","paste_text":"sampo","timings":{"model_ms":900}}"#.utf8))
         guard case .say(let say) = sayEvent else { throw CheckFailure(description: "say event") }
-        try check(say.turn == 3 && say.layer == "quick" && say.mode == .beside && say.looks && say.goal == nil
-                  && say.timings.quickMS == 900 && say.timings.screenMS == nil, "say event fields")
+        try check(say.turn == 3 && say.textRU == "Жми зелёную." && say.pasteText == "sampo" && say.timings.modelMS == 900, "say event fields")
         guard case .heard(let heard) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"heard","turn":4}"#.utf8)), heard.turn == 4 else {
             throw CheckFailure(description: "heard event")
         }
@@ -642,18 +636,15 @@ private enum ProtocolChecks {
         var words = PauseWords()
         let start = Date()
         var said: [String] = []
-        for step in 0..<48 {
-            let now = start.addingTimeInterval(Double(step) * 16)
-            guard let word = words.next(PauseWords.Kind.allCases[step % PauseWords.Kind.allCases.count], now: now) else {
+        for step in 0..<18 {
+            guard let word = words.next(now: start.addingTimeInterval(Double(step) * (PauseWords.gap + 1))) else {
                 throw CheckFailure(description: "a word after a long pause")
             }
             try check(word != said.last, "the same pause word twice in a row: \(word)")
             said.append(word)
         }
         try check(Set(said).count == PauseWords.all.count, "every pause word gets its turn")
-        try check(words.next(.thinking, now: start.addingTimeInterval(47 * 16 + 5)) == nil, "pause words stay rare")
-        try check(words.any(PauseWords.waiting(for: "compare").second, now: start.addingTimeInterval(47 * 16 + 6)).hasSuffix("."), "the second word comes however soon")
-        try check(PauseWords.waiting(for: nil).first == .promise && PauseWords.waiting(for: "read").first == .reading, "the words follow the task")
+        try check(words.next(now: start.addingTimeInterval(17 * (PauseWords.gap + 1) + 5)) == nil, "pause words stay rare")
     }
 
     private static func checkScreenTextGeometry() throws {
@@ -690,10 +681,9 @@ private enum ProtocolChecks {
         let defaults = MemoryDefaults()
         let store = try SharedStore(configuration: configuration, defaults: defaults)
         try check(store.screenTextMode == .extension, "default screenTextMode")
-        try check(store.callMode == .lead && store.settings.mode == .lead, "the agent leads by default")
-        store.callMode = .beside
-        try check(defaults.string(forKey: "callMode") == "beside" && store.settings.mode == .beside, "mode reaches the settings and the broadcast")
-        store.callMode = .lead
+        try check(store.voice == nil, "the server's voice by default")
+        store.voice = "voice-1"
+        try check(defaults.string(forKey: "voice") == "voice-1", "a chosen voice stays")
         try check(store.settings.thinking == .auto && store.settings.character == .warm, "default level and manner")
         try store.save(serverAddress: "https://example.invalid", token: "", userLang: "ru", targetLang: "id", textEntry: .clipboard,
                        thinking: .medium, character: .brief, ownCharacter: "")

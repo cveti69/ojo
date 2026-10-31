@@ -46,6 +46,7 @@ final class ServerSpeaker: Speaker {
     private var playback: Task<Void, Never>?
     private var kept: [String: Data] = [:]
     var hearsOverVoice = false
+    var voice: String?  // Read for each line, so a new choice works from the next one.
     private var filtersVoice = false
 
     init(fallback: any Speaker) {
@@ -91,14 +92,17 @@ final class ServerSpeaker: Speaker {
     /// Short phrases are fetched ahead, so they sound the moment they are needed.
     func keep(_ texts: [String]) {
         guard let client else { return }
+        let voice = voice
         Task { [weak self] in
-            for text in texts where self?.kept[text] == nil {
+            for text in texts where self?.kept[Self.key(text, voice)] == nil {
                 var sound = Data()
-                do { for try await byte in try await client.speech(text) { sound.append(byte) } } catch { return }
-                self?.kept[text] = sound
+                do { for try await byte in try await client.speech(text, voice: voice) { sound.append(byte) } } catch { return }
+                self?.kept[Self.key(text, voice)] = sound
             }
         }
     }
+
+    private static func key(_ text: String, _ voice: String?) -> String { (voice ?? "") + ":" + text }
 
     func stop() {
         playback?.cancel()
@@ -125,14 +129,14 @@ final class ServerSpeaker: Speaker {
         var frames = 0
         do {
             if !engine.isRunning { try engine.start() }
-            if let sound = kept[text] {
+            if let sound = kept[Self.key(text, voice)] {
                 await waitForThePerson()
                 try Task.checkCancellation()
                 sounds(true)
                 frames = schedule(sound)
             } else {
                 var pending = Data(capacity: Self.bufferBytes)
-                for try await byte in try await client.speech(text) {
+                for try await byte in try await client.speech(text, voice: voice) {
                     pending.append(byte)
                     guard pending.count == Self.bufferBytes else { continue }
                     if frames == 0 {

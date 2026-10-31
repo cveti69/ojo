@@ -4,30 +4,27 @@ import Shared
 import UIKit
 
 enum CallPhase {
-    case idle, busy, listening, needsGoal, needsScreen, guiding
+    case idle, busy, needsScreen, guiding
 }
 
 @MainActor
 final class CallViewModel: ObservableObject {
-    @Published var goal = ""
-    @Published private(set) var recognizedText = ""
+    @Published var typed = ""
     @Published private(set) var isCallActive = false
     @Published private(set) var isWorking = false
-    @Published private(set) var isRecording = false
     @Published private(set) var isTestingWindow = false
-    @Published private(set) var hasGoal = false
+    @Published private(set) var isGreeted = false
     @Published private(set) var isSharing = false
-    @Published private(set) var needsUserConfirm = false
     @Published private(set) var audioIsActive = false
     @Published private(set) var isClipboardTestPending = false
     @Published private(set) var isTextTestPending = false
     @Published private(set) var screenTextMode: ScreenTextMode = .extension
     @Published private(set) var useVideoCallFallback = false
-    @Published private(set) var hearsDuringCall = true
     @Published private(set) var measuresAppleSpeech = false
     @Published private(set) var hearsOverVoice = false
     @Published private(set) var showsEyes = false
-    @Published private(set) var callMode: CallMode = .lead
+    @Published private(set) var voices: [Voice] = []
+    @Published private(set) var voice = ""
     @Published private(set) var status = "Позвоните и скажите, что нужно. Нажимаете всегда вы."
     @Published private(set) var lastInstruction = "Подсказок пока нет"
     @Published private(set) var windowState: HintWindowState = .inactive
@@ -45,20 +42,17 @@ final class CallViewModel: ObservableObject {
         let text: String
         var kind = Kind.reply
         var turn: Int?
-        var layer = ""
     }
 
-    private static let besideWords = "Я рядом"
-    private static let doneWords = "Я на связи"
+    private static let restWords = "Я рядом"
     private static let sayingFailed = "Не получилось ответить, повтори, пожалуйста."
     private static let streamWait: UInt64 = 2_500_000_000  // Past this the server has not heard the phrase, so it goes as a file.
     private static let warmthGap: UInt64 = 20_000_000_000
     private static let screenWait = 1.0
-    private static let secondWordAfter = 3.5
+    private static let firstWordAfter = 1.5
     private static let mostWords = 2  // On one turn, however long the wait.
 
     private let audioSession = CallAudioSession()
-    private let recorder = GoalAudioRecorder()
     private let speaker: any Speaker
     private var client: ServerClient?
     private var sessionID: String?
@@ -75,9 +69,7 @@ final class CallViewModel: ObservableObject {
     private var lastJPEG: Data?
     private var lastSpokenHint = ""
     private var seenSteps = Set<String>()
-    private var doneDelivered = false
     private var unwrittenPaste: String?
-    private var isLooking = false
     private var microphone: CallMicrophone?
     private var conversation: Task<Void, Never>?
     private var speechStream: SpeechStream?
@@ -89,12 +81,11 @@ final class CallViewModel: ObservableObject {
     private var lines: [Line] = []
     private var waitingHint: Line?
     private var currentLine: Line?
-    private var voice: Task<Void, Never>?
+    private var speaking: Task<Void, Never>?
     private var isSounding = false
     private var heardTurn = 0
     private var lastHeard = Date.distantPast
     private var voiceEnded = Date.distantPast
-    private var owesFrameNote = false
     private var droppedSounds = 0
     private var pauseWords = PauseWords()
     private var pause: Task<Void, Never>?
@@ -121,7 +112,7 @@ final class CallViewModel: ObservableObject {
         self.store = store
         self.journal = journal
         screenTextMode = store?.screenTextMode ?? .extension
-        callMode = store?.callMode ?? .lead
+        voice = store?.voice ?? ""
         measuresAppleSpeech = store?.measuresAppleSpeech ?? false
         hearsOverVoice = store?.hearsOverVoice ?? false
         showsEyes = store?.eyes ?? false
@@ -134,7 +125,6 @@ final class CallViewModel: ObservableObject {
             catch { journal.append("Текст в приложении недоступен: \(error.localizedDescription)") }
         }
         useVideoCallFallback = store?.useVideoCallFallback ?? false
-        hearsDuringCall = store?.hearsDuringCall ?? true
         window.setVideoCallFallback(useVideoCallFallback)
         window.onStateChange = { [weak self] state in
             guard let self else { return }
@@ -146,7 +136,6 @@ final class CallViewModel: ObservableObject {
             }
         }
         window.onDiagnostic = { [weak self] in self?.journal?.append($0) }
-        recorder.onDiagnostic = { [weak self] in self?.journal?.append($0) }
         self.speaker.onSounding = { [weak self] in self?.soundChanged($0) }
         self.speaker.mayStart = { [weak self] in self?.microphone?.isSpeaking != true }
         window.onRepeatHint = { [weak self] in self?.repeatHint() }
@@ -167,10 +156,8 @@ final class CallViewModel: ObservableObject {
 
     var phase: CallPhase {
         guard isCallActive else { return isWorking ? .busy : .idle }
-        if isRecording { return .listening }
-        if isTestingWindow || (hasGoal && isSharing) { return .guiding }
-        if hasGoal { return .needsScreen }
-        return isWorking ? .busy : .needsGoal
+        if isTestingWindow || isSharing { return .guiding }
+        return isGreeted ? .needsScreen : .busy
     }
 
     var windowFailed: Bool {
@@ -183,9 +170,11 @@ final class CallViewModel: ObservableObject {
         let settings = store.settings
         store.sessionID = nil
         shelf?.clear()
-        (speaker as? ServerSpeaker)?.hearsOverVoice = hearsOverVoice
+        if let speaker = speaker as? ServerSpeaker {
+            speaker.hearsOverVoice = hearsOverVoice
+            speaker.voice = store.voice
+        }
         textCoordinator?.prepareForCall(targetLang: settings.targetLang)
-        recognizedText = ""
         isWorking = true
         status = "Соединяемся…"
         let id = newWorkflow()
@@ -205,68 +194,36 @@ final class CallViewModel: ObservableObject {
                 try self.beginLocalCall(withEyes: settings.eyes)
                 self.speaker.prepare(client: client, journal: self.journal)
                 let own = settings.character == .own ? ", \(settings.ownCharacter.count) знаков" : ""
-                self.journal?.append("Сессия создана; рассуждения: \(settings.thinking.rawValue); характер: \(settings.character.rawValue)\(own); режим: \(settings.mode.rawValue)")
+                self.journal?.append("Сессия создана; рассуждения: \(settings.thinking.rawValue); характер: \(settings.character.rawValue)\(own)")
                 self.connect(client: client, sessionID: response.sessionID)
-                if settings.mode == .beside { self.showBesideCard() }
                 self.status = "Агент здоровается"
-                await self.speaker.speakAndWait(settings.mode == .beside ? "Привет, я рядом. Что смотрим?" : "Привет, чем помочь?")
+                await self.speaker.speakAndWait("Привет, чем помочь?")
                 try Task.checkCancellation()
-                try await self.captureAndSendGoal(client: client, sessionID: response.sessionID)
+                _ = await AVAudioApplication.requestRecordPermission()
+                try Task.checkCancellation()
+                self.isGreeted = true
+                self.status = "Говорите, как по телефону"
+                self.hearPerson()
+                if self.speaksRussian { self.speaker.keep(PauseWords.all) }
             } catch {
                 guard !Task.isCancelled, self.workflowID == id else { return }
-                self.isRecording = false
                 if !self.isCallActive { self.endCall() }
                 self.status = error.localizedDescription
-                self.journal?.append("Ошибка звонка или цели: \(error.localizedDescription)")
+                self.journal?.append("Ошибка звонка: \(error.localizedDescription)")
             }
         }
     }
 
-    func submitGoal() {
-        let text = goal.trimmingCharacters(in: .whitespacesAndNewlines)
+    func sendTyped() {
+        let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, isCallActive, !isTestingWindow, let client, let sessionID else { return }
-        let id = newWorkflow()
-        isWorking = true
-        isRecording = false
-        recorder.cancel()
-        silence()
-        workflow = Task { [weak self] in
-            guard let self else { return }
-            defer { if self.workflowID == id { self.isWorking = false } }
-            do { try await self.sendGoal(text, client: client, sessionID: sessionID) }
-            catch {
-                guard !Task.isCancelled, self.workflowID == id else { return }
-                self.status = error.localizedDescription
-                self.journal?.append("Ошибка отправки цели: \(error.localizedDescription)")
-            }
+        typed = ""
+        let journal = journal
+        Task {
+            do { _ = try await client.words(text, sessionID: sessionID) }
+            catch { journal?.append("Ошибка реплики текстом: \(error.localizedDescription)") }
         }
     }
-
-    func listenAgain() {
-        guard isCallActive, !isTestingWindow, let client, let sessionID else { return }
-        let id = newWorkflow()
-        isWorking = true
-        recorder.cancel()
-        silence()
-        workflow = Task { [weak self] in
-            guard let self else { return }
-            defer {
-                if self.workflowID == id {
-                    self.isWorking = false
-                    self.hearPerson()
-                }
-            }
-            do { try await self.captureAndSendGoal(client: client, sessionID: sessionID) }
-            catch {
-                guard !Task.isCancelled, self.workflowID == id else { return }
-                self.isRecording = false
-                self.status = error.localizedDescription
-                self.journal?.append("Ошибка голосовой цели: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    func finishRecording() { recorder.finishNow() }
 
     func askForScreen() {
         // iOS may want a real tap here, so the big button stays under the system sheet either way.
@@ -277,13 +234,11 @@ final class CallViewModel: ObservableObject {
         let endingClient = client
         let endingID = sessionID
         _ = newWorkflow()
-        recorder.cancel()
-        noteFrames()
         noteDroppedSounds()
         stopHearing()
         pause?.cancel()
-        voice?.cancel()
-        voice = nil
+        speaking?.cancel()
+        speaking = nil
         lines.removeAll()
         waitingHint = nil
         currentLine = nil
@@ -306,14 +261,10 @@ final class CallViewModel: ObservableObject {
         isTestingWindow = false
         isCallActive = false
         isWorking = false
-        isRecording = false
-        hasGoal = false
+        isGreeted = false
         isSharing = false
-        needsUserConfirm = false
         seenSteps.removeAll()
-        doneDelivered = false
         unwrittenPaste = nil
-        isLooking = false
         lastJPEG = nil
         lastSpokenHint = ""
         eyes?.stop()
@@ -406,12 +357,6 @@ final class CallViewModel: ObservableObject {
         else { try window.display(image: TestFrameFactory.make()) }
     }
 
-    func setHearsDuringCall(_ value: Bool) {
-        hearsDuringCall = value
-        store?.hearsDuringCall = value
-        if value { hearPerson() } else if callMode == .lead { stopHearing() }
-    }
-
     func setMeasuresAppleSpeech(_ value: Bool) {
         measuresAppleSpeech = value
         store?.measuresAppleSpeech = value
@@ -427,47 +372,26 @@ final class CallViewModel: ObservableObject {
         store?.eyes = value
     }
 
-    /// Going beside, frames stop first. Going to lead, the server has to be ready for them first.
-    func setCallMode(_ mode: CallMode) {
-        guard mode != callMode else { return }
-        guard isCallActive, let client, let sessionID else {
-            callMode = mode
-            store?.callMode = mode
-            return
-        }
-        if mode == .beside { applyMode(mode) }
-        Task { [weak self] in
-            do {
-                _ = try await client.setMode(mode, sessionID: sessionID)
-                if mode == .lead { self?.applyMode(mode) }
-            } catch { self?.journal?.append("Ошибка смены режима: \(error.localizedDescription)") }
-        }
+    /// The next line sounds in it, in the middle of a call too.
+    func setVoice(_ id: String) {
+        voice = id
+        store?.voice = id
+        (speaker as? ServerSpeaker)?.voice = id
+        if isGreeted, speaksRussian { speaker.keep(PauseWords.all) }
     }
 
-    private func applyMode(_ mode: CallMode) {
-        guard mode != callMode else { return }
-        noteFrames()
-        callMode = mode
-        store?.callMode = mode
-        doneDelivered = false
-        isLooking = false
-        journal?.append("Режим: \(mode.rawValue)")
-        if mode == .beside {
-            showBesideCard()
-            lastInstruction = Self.besideWords
-            hearPerson()
-        } else {
-            lastJPEG = nil
-            eyes?.pause(words: nil)
-            lastInstruction = "Смотрю экран"
-            try? restoreWindowImage()
-            if !hearsDuringCall { stopHearing() }
-        }
+    func loadVoices() async {
+        guard let settings = store?.settings else { return }
+        do {
+            let list = try await ServerClient(settings: settings).voices()
+            voices = list.voices
+            if !list.voices.contains(where: { $0.id == voice }) { voice = list.defaultVoice }
+        } catch { journal?.append("Список голосов: \(error.localizedDescription)") }
     }
 
-    private func showBesideCard() {
-        if let eyes { return eyes.pause(words: Self.besideWords) }
-        guard let card = TestFrameFactory.make(title: Self.besideWords).jpegData(compressionQuality: 0.9) else { return }
+    private func showRestCard() {
+        if let eyes { return eyes.pause(words: Self.restWords) }
+        guard let card = TestFrameFactory.make(title: Self.restWords).jpegData(compressionQuality: 0.9) else { return }
         lastJPEG = card
         try? window.display(jpegData: card)
     }
@@ -534,18 +458,11 @@ final class CallViewModel: ObservableObject {
         }
     }
 
-    func sceneChanged(_ name: String, isBackground: Bool, isActive: Bool) {
+    func sceneChanged(_ name: String, isActive: Bool) {
         journal?.append("Сцена: \(name); аудиосессия активна: \(audioIsActive ? "да" : "нет")")
         if isActive, let text = unwrittenPaste { placeOnClipboard(text, reason: "Буфер при возврате") }
         if isActive { hearPerson() }
         probe?.sceneChanged(isActive: isActive)
-        if isBackground, isRecording {
-            _ = newWorkflow()
-            recorder.cancel()
-            isRecording = false
-            isWorking = false
-            status = "Вернитесь в приложение, чтобы произнести цель, или введите её текстом"
-        }
     }
 
     private func placeOnClipboard(_ text: String, reason: String) {
@@ -571,76 +488,8 @@ final class CallViewModel: ObservableObject {
         lastInstruction = "Ожидание подсказки"
     }
 
-    private func captureAndSendGoal(client: ServerClient, sessionID: String) async throws {
-        try Task.checkCancellation()
-        var text = try await listen(client: client)
-        if text.isEmpty {
-            await speaker.speakAndWait("Не слышу, повтори, пожалуйста.")
-            try Task.checkCancellation()
-            text = try await listen(client: client)
-        }
-        guard !text.isEmpty else { throw GoalError.empty }
-        recognizedText = text
-        goal = text
-        journal?.append("Цель распознана; отправляем /goal")
-        try await sendGoal(text, client: client, sessionID: sessionID)
-    }
-
-    private func listen(client: ServerClient) async throws -> String {
-        guard UIApplication.shared.applicationState == .active else {
-            throw GoalError.foregroundRequired
-        }
-        isRecording = true
-        status = "Слушаю. Скажите, что нужно"
-        journal?.append("Запись цели: WAV, 16 кГц, моно, 16 бит")
-        let wavURL: URL
-        do { wavURL = try await recordGoal(client: client) }
-        catch { isRecording = false; throw error }
-        defer { try? FileManager.default.removeItem(at: wavURL) }
-        isRecording = false
-        try Task.checkCancellation()
-        status = "Распознаю цель…"
-        let transcriber: any GoalTranscribing = FallbackGoalTranscriber(
-            primary: ServerGoalTranscriber(client: client), fallback: SpeechGoalTranscriber(), journal: journal
-        )
-        let started = Date()
-        let text = try await transcriber.transcribe(wavURL: wavURL).trimmingCharacters(in: .whitespacesAndNewlines)
-        try Task.checkCancellation()
-        let seconds = String(format: "%.1f", locale: Locale(identifier: "ru_RU"), Date().timeIntervalSince(started))
-        journal?.append("Распознавание \(seconds) с; \(text.isEmpty ? "пусто" : "есть текст")")
-        return text
-    }
-
-    private func recordGoal(client: ServerClient) async throws -> URL {
-        // Recording was proven on the iPhone without the voice engine next to it.
-        speaker.finish()
-        microphone?.stop()
-        defer { if isCallActive { speaker.prepare(client: client, journal: journal) } }
-        return try await recorder.record()
-    }
-
-    private func sendGoal(_ text: String, client: ServerClient, sessionID: String) async throws {
-        status = "Передаю цель агенту…"
-        doneDelivered = false
-        unwrittenPaste = nil
-        let reply = try await client.setGoal(text, sessionID: sessionID)
-        try Task.checkCancellation()
-        if let ready = reply.readyText { placeOnClipboard(ready, reason: "Буфер заранее") }
-        if let mode = reply.mode { applyMode(mode) }
-        hasGoal = true
-        needsUserConfirm = false
-        status = "Включите трансляцию экрана и перейдите в нужное приложение"
-        lastInstruction = reply.replyRU
-        lastSpokenHint = reply.replyRU
-        _ = await AVAudioApplication.requestRecordPermission()  // Only a typed goal has not asked yet.
-        hearPerson()
-        enqueue(Line(text: reply.replyRU))
-        if speaksRussian { speaker.keep(PauseWords.all) }
-        journal?.append("Цель принята; ответ произнесён; можно включать трансляцию")
-    }
-
     private func hearPerson() {
-        guard isCallActive, hasGoal, !isRecording, hearsDuringCall || callMode == .beside, let client, let sessionID else { return }
+        guard isCallActive, isGreeted, let client, let sessionID else { return }
         openStream(client: client, sessionID: sessionID)
         (microphone ?? makeMicrophone(client: client, sessionID: sessionID)).start()
     }
@@ -703,14 +552,14 @@ final class CallViewModel: ObservableObject {
         let waits = speechStream?.isOpen == true
         Task { [weak self] in
             if waits { try? await Task.sleep(nanoseconds: Self.streamWait) }
-            guard let self, self.isCallActive, self.heardTurn == turn, !self.isRecording else { return }
+            guard let self, self.isCallActive, self.heardTurn == turn else { return }
             self.journal?.append("Поток речи не услышал реплику, отправляю файлом")
             do {
                 let reply = try await client.say(phrase.wav, sessionID: sessionID)
                 self.journal?.append("Реплика файлом: распознавание \(reply.speechMS) мс; \(reply.heard ? "есть слова" : "пусто")")
             } catch {
                 self.journal?.append("Ошибка реплики: \(error.localizedDescription)")
-                if self.callMode == .lead { self.enqueue(Line(text: Self.sayingFailed, turn: turn)) }
+                self.enqueue(Line(text: Self.sayingFailed, turn: turn))
             }
         }
     }
@@ -719,11 +568,6 @@ final class CallViewModel: ObservableObject {
         guard let dropped = microphone?.dropped, dropped.count > droppedSounds else { return }
         droppedSounds = dropped.count
         journal?.append("Коротких звуков отброшено: \(dropped.count), громче всех \(Int(dropped.loudest)) дБ")
-    }
-
-    private func noteFrames() {
-        if owesFrameNote { journal?.append("Кадры не отправлены") }
-        owesFrameNote = false
     }
 
     /// A hint waits for the end of an answer, so the agent never cuts itself off.
@@ -753,14 +597,14 @@ final class CallViewModel: ObservableObject {
     }
 
     private func speakLines() {
-        guard voice == nil, isCallActive else { return }
-        voice = Task { [weak self] in
+        guard speaking == nil, isCallActive else { return }
+        speaking = Task { [weak self] in
             while let self, !Task.isCancelled, let line = self.takeLine() {
                 self.currentLine = line
                 await self.speaker.speakAndWait(line.text)
                 self.currentLine = nil
             }
-            self?.voice = nil
+            self?.speaking = nil
         }
     }
 
@@ -783,7 +627,7 @@ final class CallViewModel: ObservableObject {
         guard sounding else { return }
         if hearsOverVoice { watchForInterruption() }
         guard let line = currentLine, let turn = line.turn, let client, let sessionID else { return }
-        journal?.append("Ход \(turn): первый звук через \(sinceVoiceEnded()) мс после конца речи; \(line.layer)")
+        journal?.append("Ход \(turn): первый звук через \(sinceVoiceEnded()) мс после конца речи")
         let journal = journal
         Task {
             do { _ = try await client.played(turn: turn, sessionID: sessionID) }
@@ -808,19 +652,19 @@ final class CallViewModel: ObservableObject {
         }
     }
 
-    /// A short word while the agent works, so the line never goes dead. It only ever fills silence.
-    private func fillPause(_ kind: PauseWords.Kind, after seconds: Double, evenSoon: Bool = false) {
+    /// A short ready word while the agent thinks, so the line never goes dead. It only ever fills silence.
+    private func fillPause(after seconds: Double) {
         guard speaksRussian else { return }
         pause?.cancel()
         pause = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard let self, !Task.isCancelled, self.isCallActive, self.currentLine == nil, self.lines.isEmpty,
-                  self.waitingHint == nil, !self.isRecording, self.microphone?.isSpeaking != true,
-                  self.wordsThisTurn < Self.mostWords,
-                  let words = evenSoon ? self.pauseWords.any(kind) : self.pauseWords.next(kind) else { return }
+                  self.waitingHint == nil, self.microphone?.isSpeaking != true,
+                  self.wordsThisTurn < Self.mostWords, let words = self.pauseWords.next() else { return }
             self.wordsThisTurn += 1
             self.journal?.append("Фраза на паузе")
             self.enqueue(Line(text: words, kind: .filler))
+            self.fillPause(after: PauseWords.gap)
         }
     }
 
@@ -844,7 +688,7 @@ final class CallViewModel: ObservableObject {
         }
         self.connection = connection
         connection.start(sessionID: sessionID)
-        if hearsDuringCall || callMode == .beside { openStream(client: client, sessionID: sessionID) }
+        openStream(client: client, sessionID: sessionID)
         warmth = Task {
             while !Task.isCancelled {
                 try? await client.health()
@@ -858,168 +702,107 @@ final class CallViewModel: ObservableObject {
         switch event {
         case .hint(let hint):
             guard seenSteps.insert(hint.stepID).inserted else { return }
-            keepQuiet()
             isSharing = true
             if let timestamp = hint.frameTS {
                 let elapsed = Date().timeIntervalSince1970 - Double(timestamp) / 1000
                 let seconds = String(format: "%.1f", locale: Locale(identifier: "ru_RU"), elapsed)
                 let timings = hint.timings.map {
-                    "; очередь \($0.queueMS) мс, модель \($0.modelMS) мс, рамка \($0.boxMS) мс, \($0.boxSource); окно на кадре: \($0.window == true ? "да" : "нет")"
+                    "; модель \($0.modelMS) мс, рамка \($0.boxMS) мс, \($0.boxSource); окно на кадре: \($0.window == true ? "да" : "нет")"
                 } ?? ""
                 journal?.append("Подсказка \(hint.stepID) через \(seconds) с после кадра\(timings)")
             }
-            if let text = hint.pasteText { placeOnClipboard(text, reason: "Буфер из hint") }
             lastInstruction = hint.instructionRU
-            needsUserConfirm = hint.needsUserConfirm
-            status = hint.needsUserConfirm ? "Требуется ваше подтверждение в приложении" : "Новая подсказка"
-            lastSpokenHint = hint.instructionRU
-            if hint.needsUserConfirm { lastSpokenHint += " Подтвердите действие самостоятельно в приложении." }
-            if hint.speak || hint.needsUserConfirm { announce(lastSpokenHint) }
             do {
-                guard let data = Data(base64Encoded: hint.imageJPEGBase64) else { throw GoalError.image }
+                guard let data = Data(base64Encoded: hint.imageJPEGBase64) else { throw CallError.image }
                 if let eyes {
-                    try eyes.show(hint: data, box: hint.eyesBox, gaze: hint.gaze, calm: hint.needsUserConfirm || hint.calm == true)
+                    try eyes.show(hint: data, box: hint.eyesBox, gaze: hint.gaze, calm: hint.calm == true)
                 } else { try window.display(jpegData: data) }
                 lastJPEG = data
-                isLooking = false
-                journal?.append("Показана подсказка; подтверждение: \(hint.needsUserConfirm ? "да" : "нет")")
+                journal?.append("Показана подсказка")
             } catch { journal?.append("Ошибка картинки подсказки: \(error.localizedDescription)") }
         case .status(let status):
-            if !isRecording && !isWorking { self.status = status.textRU }
+            if !isWorking { self.status = status.textRU }
             journal?.append("Сервер: \(status.state); \(status.textRU)")
-            if status.state == "analyzing" { eyes?.wait(for: .screen) } else { eyes?.stopWaiting(for: .screen) }
-            updateLookingCard(status)
             updateSharing(status)
-            let firstLook = status.state == "analyzing" && seenSteps.isEmpty
-            if status.newScreen == true || firstLook { fillPause(.looking, after: 1.5) }
         case .done(let done):
-            guard !doneDelivered else { return }  // The server repeats it on every reconnect.
-            doneDelivered = true
-            keepQuiet()
             status = done.textRU
-            lastInstruction = done.textRU
-            lastSpokenHint = done.textRU
-            needsUserConfirm = false
-            announce(done.textRU)
-            isLooking = false
-            if let eyes { eyes.celebrate(words: Self.doneWords) }
-            else if let card = TestFrameFactory.make(title: Self.doneWords).jpegData(compressionQuality: 0.9) {
-                lastJPEG = card
-                try? window.display(jpegData: card)
-            }
-            journal?.append("Цель достигнута, разговор продолжается")
+            journal?.append("Сервер закрыл сессию")
         case .heard(let event):
-            noteFrames()
-            owesFrameNote = callMode == .beside
             heardTurn = event.turn
             lastHeard = Date()
             voiceEnded = microphone?.lastVoice ?? lastHeard
             journal?.append("Ход \(event.turn): услышан через \(sinceVoiceEnded()) мс после конца речи")
             eyes?.wait(for: .reply)
-            dropLines { ($0.kind == .reply && $0.layer == "quick") || $0.kind == .filler }
+            dropLines { $0.kind != .hint }
             wordsThisTurn = 0
-            if callMode == .lead { fillPause(.thinking, after: 2.5) }
+            fillPause(after: Self.firstWordAfter)
         case .say(let say):
             hear(say)
         case .look(let event):
             look(turn: event.turn)
         case .quiet(let event):
             guard event.turn == heardTurn else { break }
-            keepQuiet()
+            pause?.cancel()
             eyes?.stopWaiting(for: .reply)
             dropLines { $0.kind == .filler }
         case .left:
-            showBesideCard()
-            lastInstruction = Self.besideWords
+            if let eyes { eyes.newScreen() } else { showRestCard() }
+            lastInstruction = Self.restWords
         }
     }
 
     private func hear(_ say: SayEvent) {
-        keepQuiet()
-        if let newGoal = say.goal {
-            goal = newGoal
-            doneDelivered = false
-            unwrittenPaste = nil
-            needsUserConfirm = false
-        }
-        if let mode = say.mode { applyMode(mode) }
-        let model = say.timings.screenMS ?? say.timings.quickMS ?? 0
-        journal?.append("Ход \(say.turn): ответ \(say.layer) через \(sinceVoiceEnded()) мс после конца речи; модель \(model) мс")
-        guard say.turn == heardTurn || say.layer == "screen" else { return }  // The person has said more since.
-        if say.layer == "screen" { dropLines { $0.turn == say.turn && $0.layer == "quick" } }
+        journal?.append("Ход \(say.turn): ответ через \(sinceVoiceEnded()) мс после конца речи; модель \(say.timings.modelMS) мс")
+        guard say.turn == heardTurn else { return }  // The person has said more since.
+        pause?.cancel()
+        eyes?.stopWaiting(for: .reply)
+        if let text = say.pasteText { placeOnClipboard(text, reason: "Буфер из ответа") }
+        guard !say.textRU.isEmpty else { return }
         status = say.textRU
-        if !say.looks { eyes?.stopWaiting(for: .reply) }
-        if !say.looks, say.textRU.hasSuffix("?") { eyes?.ask(say.textRU) }
-        guard say.looks, speaksRussian else {
-            enqueue(Line(text: say.textRU, turn: say.turn, layer: say.layer))
-            return
-        }
-        let waiting = PauseWords.waiting(for: say.wait)
-        if wordsThisTurn < Self.mostWords {  // Kept phrases sound at once.
-            wordsThisTurn += 1
-            enqueue(Line(text: pauseWords.any(waiting.first), kind: .filler, turn: say.turn, layer: say.layer))
-        }
-        fillPause(waiting.second, after: Self.secondWordAfter, evenSoon: true)
+        lastInstruction = say.textRU
+        lastSpokenHint = say.textRU
+        if say.textRU.hasSuffix("?") { eyes?.ask(say.textRU) }
+        enqueue(Line(text: say.textRU, turn: say.turn))
     }
 
-    /// The only way a screen leaves the phone beside the person: the server heard words for the agent and asked.
+    /// The screen as it is now for the line just heard. If it does not come, the server goes on with the last frame it has.
     private func look(turn: Int) {
         guard let client, let sessionID else { return }
-        owesFrameNote = false
         let journal = journal
         Task { [weak self] in
-            guard let frames = await self?.screensNow() else { return }
-            guard !frames.isEmpty else {
-                self?.enqueue(Line(text: "Пока не вижу экран. Покажи его, и я посмотрю.", turn: turn, layer: "screen"))
+            guard let screen = await self?.screenNow() else {
+                journal?.append("Кадры не отправлены")
                 return
             }
             do {
-                _ = try await client.look(frames, sessionID: sessionID)
+                _ = try await client.look([screen], sessionID: sessionID)
                 journal?.append("Кадры отправлены")
             } catch ClientError.http(409) {
                 journal?.append("Кадры не отправлены")  // The person went on, and a new line replaced this one.
-            } catch {
-                journal?.append("Ошибка /look: \(error.localizedDescription)")
-                self?.enqueue(Line(text: Self.sayingFailed, turn: turn, layer: "screen"))
-            }
+            } catch { journal?.append("Ошибка /look: \(error.localizedDescription)") }
         }
     }
 
-    /// The shelf with the screen as it is now on top, however little it changed. The broadcast looks for the question four times a second.
-    private func screensNow() async -> [KeptScreen] {
-        if isSharing, let store {
-            let started = Date()
-            let asked = store.screenAsked + 1
-            store.screenAsked = asked
-            while store.screenAnswered != asked, Date().timeIntervalSince(started) < Self.screenWait {
-                try? await Task.sleep(nanoseconds: 40_000_000)
-            }
-            let waited = Int(Date().timeIntervalSince(started) * 1000)
-            journal?.append(store.screenAnswered == asked ? "Свежий кадр за \(waited) мс" : "Свежий кадр не успел за \(waited) мс")
+    /// The broadcast looks for the question four times a second and puts the screen on the shelf, however little it changed.
+    private func screenNow() async -> KeptScreen? {
+        guard isSharing, let store else { return nil }
+        let started = Date()
+        let asked = store.screenAsked + 1
+        store.screenAsked = asked
+        while store.screenAnswered != asked, Date().timeIntervalSince(started) < Self.screenWait {
+            try? await Task.sleep(nanoseconds: 40_000_000)
         }
-        return shelf?.recent() ?? []
-    }
-
-    private func updateLookingCard(_ status: StatusEvent) {
-        // The highlighted button belongs to a screen the person has left, so it goes until the next hint comes.
-        if status.newScreen == true, !isLooking {
-            if let eyes {
-                eyes.newScreen()
-                isLooking = true
-            } else { isLooking = (try? window.display(image: TestFrameFactory.make(title: "Смотрю\nэкран…"))) != nil }
-        } else if status.state != "analyzing", isLooking {
-            isLooking = false
-            eyes?.sameScreen()
-            try? restoreWindowImage()
-        }
+        let waited = Int(Date().timeIntervalSince(started) * 1000)
+        journal?.append(store.screenAnswered == asked ? "Свежий кадр за \(waited) мс" : "Свежий кадр не успел за \(waited) мс")
+        return shelf?.recent().last
     }
 
     private func updateSharing(_ status: StatusEvent) {
         if status.state == "broadcast_stopped" {
             isSharing = false
-        } else if ["broadcasting", "analyzing"].contains(status.state), !isSharing {
+        } else if status.state == "broadcasting", !isSharing {
             isSharing = true
-            lastInstruction = callMode == .beside ? Self.besideWords : "Открой нужное приложение"
+            lastInstruction = "Открой нужное приложение"
         }
     }
 
@@ -1049,7 +832,7 @@ final class CallViewModel: ObservableObject {
         try autoreleasepool {
             let image = TestFrameFactory.make(number: frameNumber)
             if frameNumber.isMultiple(of: 2) {
-                guard let data = image.jpegData(compressionQuality: 0.9) else { throw GoalError.image }
+                guard let data = image.jpegData(compressionQuality: 0.9) else { throw CallError.image }
                 try window.display(jpegData: data)
             } else { try window.display(image: image) }
         }
@@ -1071,8 +854,6 @@ final class CallViewModel: ObservableObject {
         if type == .began {
             audioSession.interrupted()
             _ = newWorkflow()
-            recorder.cancel()
-            isRecording = false
             isWorking = false
             silence()
             microphone?.stop()
@@ -1093,6 +874,7 @@ final class CallViewModel: ObservableObject {
         do {
             try audioSession.activate()
             status = isTestingWindow ? "Тест окна: новый кадр каждые 3 секунды" : "Звонок продолжается"
+            if !isTestingWindow { isGreeted = true }  // The break may have cut the greeting off.
             hearPerson()
         } catch {
             endCall()
@@ -1105,15 +887,9 @@ final class CallViewModel: ObservableObject {
         catch { journal?.append("Ошибка выключения аудиосессии: \(error.localizedDescription)") }
     }
 
-    private enum GoalError: LocalizedError {
-        case foregroundRequired, empty, image
-        var errorDescription: String? {
-            switch self {
-            case .foregroundRequired: return "Вернитесь в приложение, чтобы произнести цель, или введите её текстом."
-            case .empty: return "Цель не распознана. Повторите её или введите текстом."
-            case .image: return "Не удалось прочитать картинку подсказки."
-            }
-        }
+    private enum CallError: LocalizedError {
+        case image
+        var errorDescription: String? { "Не удалось прочитать картинку подсказки." }
     }
 
     deinit {
@@ -1122,7 +898,7 @@ final class CallViewModel: ObservableObject {
         conversation?.cancel()
         streaming?.cancel()
         warmth?.cancel()
-        voice?.cancel()
+        speaking?.cancel()
         interruption?.cancel()
         pause?.cancel()
         clipboardTask?.cancel()

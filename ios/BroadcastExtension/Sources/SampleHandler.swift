@@ -65,7 +65,6 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private var textInFlight = false
     private var textTask: Task<Void, Never>?
     private var firstTextReadLogged = false
-    private var textPaused = false
     private var heldSample: Sample?
     private var newestSample: Sample?
     private var answeredAsk = 0
@@ -76,8 +75,6 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private var windowFinds = 0
     private var windowMisses = 0
     private var keptFrame: KeptFrame?
-    private var owesFrame = false
-    private var seenMode = CallMode.lead
     private var finished = true
     private var finishReported = false
     private var lastCheck: TimeInterval = -.infinity
@@ -104,12 +101,11 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             let asked = store.screenAsked
             lock.withLock {
                 self.run = run
-                seenMode = settings.mode
                 answeredAsk = asked
                 requestInFlight = true
                 requestID = ticket
             }
-            journal.append("Старт; только видео, 500 мс, JPEG 0,6, длинная сторона \(Int(Capture.maximumDimension)) px; текст: \(store.screenTextMode.rawValue); режим: \(settings.mode.rawValue); глаза: \(settings.eyes ? "да" : "нет")")
+            journal.append("Старт; только видео, 500 мс, JPEG 0,6, длинная сторона \(Int(Capture.maximumDimension)) px; текст: \(store.screenTextMode.rawValue); глаза: \(settings.eyes ? "да" : "нет")")
             startMonitoring(run: run)
             let task = Task { [self] in
                 do {
@@ -213,11 +209,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 return
             }
             keep(KeptFrame(jpeg: jpeg, thumbnail: thumbnail, size: size, timestamp: timestamp), outside: patch, run: check.run)
-            if check.run.store.callMode == .lead {
-                _ = upload(jpeg, sample: sample, thumbnail: thumbnail, size: size, timestamp: timestamp, small: !large, run: check.run)
-            } else {
-                frameCompleted(delivered: true, thumbnail: thumbnail, size: size, runID: check.run.id)
-            }
+            upload(jpeg, sample: sample, thumbnail: thumbnail, size: size, timestamp: timestamp, small: !large, run: check.run)
         }
     }
 
@@ -260,13 +252,12 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     }
 
     /// The person spoke to the agent, so the app wants the screen as it is now: however little it changed, settled or not.
-    /// This goes past every check above and only onto the shelf. Whether it also goes to the server stays up to them.
+    /// This goes past every check above and only onto the shelf, and the app sends it for that line.
     private func answerAsk(run: Run) {
         let asked = run.store.screenAsked
         let found: (isNew: Bool, sample: Sample?) = lock.withLock {
             guard runID == run.id, !finished, asked != answeredAsk else { return (false, nil) }
             answeredAsk = asked
-            textPaused = false
             return (true, newestSample)
         }
         guard found.isNew else { return }
@@ -321,7 +312,6 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             textInFlight = false
             textTask = nil
             firstTextReadLogged = false
-            textPaused = false
             heldSample = nil
             newestSample = nil
             answeredAsk = 0
@@ -332,8 +322,6 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             windowFinds = 0
             windowMisses = 0
             keptFrame = nil
-            owesFrame = false
-            seenMode = .lead
             heartbeat = nil
             memoryPressure = nil
             return old
@@ -345,8 +333,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         return id
     }
 
-    @discardableResult
-    private func upload(_ jpeg: Data, sample: Sample?, thumbnail: [UInt8], size: CGSize, timestamp: Int64, small: Bool = false, run: Run) -> Bool {
+    private func upload(_ jpeg: Data, sample: Sample, thumbnail: [UInt8], size: CGSize, timestamp: Int64, small: Bool, run: Run) {
         let ticket = UUID()
         let reserved = lock.withLock { () -> Bool in
             guard runID == run.id, !finished, !requestInFlight else { return false }
@@ -354,20 +341,17 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             requestID = ticket
             return true
         }
-        guard reserved else { return false }
+        guard reserved else { return }
         let task = Task { [self] in
             do {
-                let reply = try await run.client.sendFrame(jpeg, sessionID: run.sessionID, width: Int(size.width), height: Int(size.height), timestampMS: timestamp, small: small)
-                // With the goal reached or waiting for the person, nothing reads this text.
-                lock.withLock { textPaused = reply.reason == "done" || reply.reason == "user_confirm" }
+                _ = try await run.client.sendFrame(jpeg, sessionID: run.sessionID, width: Int(size.width), height: Int(size.height), timestampMS: timestamp, small: small)
                 // Any decoded server response confirms delivery, including all skip reasons.
                 frameCompleted(delivered: true, thumbnail: thumbnail, size: size, runID: run.id)
             } catch {
-                // A refused frame goes out again, or a still screen would stay unseen after the goal arrives.
+                // A refused frame goes out again, or a still screen would stay unseen.
                 frameCompleted(delivered: false, thumbnail: thumbnail, size: size, runID: run.id)
                 lock.withLock {
-                    guard runID == run.id, !finished else { return }
-                    if sample == nil { owesFrame = true } else if heldSample == nil { heldSample = sample }
+                    if runID == run.id, !finished, heldSample == nil { heldSample = sample }
                 }
                 if !Task.isCancelled { run.journal.append("Ошибка отправки кадра: \(error.localizedDescription)") }
                 if error as? ClientError == .http(404) || error as? ClientError == .http(401) {
@@ -378,7 +362,6 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         }
         installRequest(task, runID: run.id, ticket: ticket)
         scheduleScreenText(jpeg: jpeg, timestamp: timestamp, run: run)
-        return true
     }
 
     private func installRequest(_ task: Task<Void, Never>, runID id: UUID, ticket: UUID) {
@@ -394,7 +377,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         let mode = run.store.screenTextMode
         guard mode != .off else { return }
         let reserved = lock.withLock { () -> Bool in
-            guard runID == run.id, !finished, !textInFlight, !textPaused else { return false }
+            guard runID == run.id, !finished, !textInFlight else { return false }
             textInFlight = true
             return true
         }
@@ -633,7 +616,6 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         guard let statistics else { return }
         answerAsk(run: run)
         sendHeldSample()
-        sendOwedFrame(run: run)
         if run.store.sessionID != run.sessionID {
             run.journal.append("Сессия закрыта приложением, останавливаем трансляцию")
             stopForError(BroadcastError.ended, runID: run.id)  // Apple has no stop without this system alert.
@@ -641,23 +623,6 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             let availableMB = os_proc_available_memory() / 1_048_576
             run.journal.append("Кадров доставлено: \(statistics.1), пропущено: \(statistics.2); запрос кадра в полёте: \(statistics.3 ? "да" : "нет"); доступно памяти: \(availableMB) МБ\(statistics.4)")
         }
-    }
-
-    /// Beside the person the server holds no screen, and a still screen sends no frames. So when the agent starts to lead,
-    /// it gets the newest kept one.
-    private func sendOwedFrame(run: Run) {
-        let mode = run.store.callMode
-        let frame = lock.withLock { () -> KeptFrame? in
-            guard runID == run.id, !finished else { return nil }
-            if seenMode == .beside, mode == .lead { owesFrame = true }
-            seenMode = mode
-            guard owesFrame, mode == .lead, !requestInFlight else { return nil }
-            if keptFrame == nil { owesFrame = false }
-            return keptFrame
-        }
-        guard let frame else { return }
-        let sent = upload(frame.jpeg, sample: nil, thumbnail: frame.thumbnail, size: frame.size, timestamp: frame.timestamp, run: run)
-        if sent { lock.withLock { owesFrame = false } }
     }
 
     private enum BroadcastError: LocalizedError {

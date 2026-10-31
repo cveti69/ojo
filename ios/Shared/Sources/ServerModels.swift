@@ -1,31 +1,27 @@
 import Foundation
 
 public struct CreateSessionRequest: Encodable, Sendable {
-    public let goal: String
     public let userLang: String
     public let targetLang: String
     public let textEntry: TextEntry
     public let effort: ThinkingLevel?
     public let character: AgentCharacter
     public let ownCharacter: String
-    public let mode: CallMode
     public let eyes: Bool?  // Left out when off, so nothing changes for the server.
 
-    public init(settings: ServerSettings, goal: String = "") {
-        self.goal = goal
+    public init(settings: ServerSettings) {
         userLang = settings.userLang
         targetLang = settings.targetLang
         textEntry = settings.textEntry
         effort = settings.thinking == .auto ? nil : settings.thinking
         character = settings.character
         ownCharacter = settings.ownCharacter
-        mode = settings.mode
         eyes = settings.eyes ? true : nil
     }
 
     enum CodingKeys: String, CodingKey {
-        case goal, userLang = "user_lang", targetLang = "target_lang", textEntry = "text_entry"
-        case effort, character, ownCharacter = "own_character", mode, eyes
+        case userLang = "user_lang", targetLang = "target_lang", textEntry = "text_entry"
+        case effort, character, ownCharacter = "own_character", eyes
     }
 }
 
@@ -34,14 +30,7 @@ public struct SessionResponse: Decodable, Sendable {
     enum CodingKeys: String, CodingKey { case sessionID = "session_id" }
 }
 
-public struct GoalRequest: Encodable, Sendable { public let goal: String }
-public struct GoalResponse: Decodable, Sendable {
-    public let replyRU: String
-    public let readyText: String?
-    public let mode: CallMode?
-    enum CodingKeys: String, CodingKey { case replyRU = "reply_ru", readyText = "ready_text", mode }
-}
-public struct ModeRequest: Encodable, Sendable { public let mode: CallMode }
+public struct WordsRequest: Encodable, Sendable { public let text: String }
 public struct PlayedRequest: Encodable, Sendable { public let turn: Int }
 public struct SpokenReply: Decodable, Sendable {
     public let heard: Bool
@@ -49,7 +38,19 @@ public struct SpokenReply: Decodable, Sendable {
     enum CodingKeys: String, CodingKey { case heard, speechMS = "speech_ms" }
 }
 public struct TextResponse: Decodable, Sendable { public let text: String }
-public struct SpeechRequest: Encodable, Sendable { public let text: String }
+public struct SpeechRequest: Encodable, Sendable {
+    public let text: String
+    public let voice: String?
+}
+public struct Voice: Decodable, Sendable, Identifiable, Equatable {
+    public let id: String
+    public let name: String
+}
+public struct VoicesResponse: Decodable, Sendable {
+    public let voices: [Voice]
+    public let defaultVoice: String
+    enum CodingKeys: String, CodingKey { case voices, defaultVoice = "default" }
+}
 public struct OKResponse: Decodable, Sendable { public let ok: Bool }
 public struct FrameResponse: Decodable, Sendable {
     public let accepted: Bool
@@ -77,12 +78,7 @@ public struct BroadcastRequest: Encodable, Sendable { public let state: Broadcas
 public struct HintEvent: Decodable, Sendable {
     public let stepID: String
     public let instructionRU: String
-    public let speak: Bool
     public let imageJPEGBase64: String
-    public let insertTexts: [String]
-    public let insertHintRU: String
-    public let pasteText: String?
-    public let needsUserConfirm: Bool
     public let frameTS: Int64?
     public let timings: HintTimings?
     public let eyesBox: [Double]?
@@ -90,30 +86,25 @@ public struct HintEvent: Decodable, Sendable {
     public let calm: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case stepID = "step_id", instructionRU = "instruction_ru", speak, timings, gaze, calm
-        case eyesBox = "eyes_box"
-        case imageJPEGBase64 = "image_jpeg_base64", insertTexts = "insert_texts"
-        case insertHintRU = "insert_hint_ru", pasteText = "paste_text", needsUserConfirm = "needs_user_confirm"
-        case frameTS = "frame_ts"
+        case stepID = "step_id", instructionRU = "instruction_ru", timings, gaze, calm
+        case eyesBox = "eyes_box", imageJPEGBase64 = "image_jpeg_base64", frameTS = "frame_ts"
     }
 }
 
 public struct HintTimings: Decodable, Sendable {
-    public let queueMS: Int
     public let modelMS: Int
     public let boxMS: Int
     public let boxSource: String
     public let window: Bool?
     enum CodingKeys: String, CodingKey {
-        case queueMS = "queue_ms", modelMS = "model_ms", boxMS = "box_ms", boxSource = "box_source", window
+        case modelMS = "model_ms", boxMS = "box_ms", boxSource = "box_source", window
     }
 }
 
 public struct StatusEvent: Decodable, Sendable {
     public let state: String
     public let textRU: String
-    public let newScreen: Bool?
-    enum CodingKeys: String, CodingKey { case state, textRU = "text_ru", newScreen = "new_screen" }
+    enum CodingKeys: String, CodingKey { case state, textRU = "text_ru" }
 }
 
 public struct DoneEvent: Decodable, Sendable {
@@ -123,20 +114,15 @@ public struct DoneEvent: Decodable, Sendable {
 
 public struct SayEvent: Decodable, Sendable {
     public let turn: Int
-    public let layer: String
     public let textRU: String
-    public let goal: String?
-    public let mode: CallMode?
-    public let looks: Bool
-    public let wait: String?
+    public let pasteText: String?
     public let timings: SayTimings
-    enum CodingKeys: String, CodingKey { case turn, layer, textRU = "text_ru", goal, mode, looks, wait, timings }
+    enum CodingKeys: String, CodingKey { case turn, textRU = "text_ru", pasteText = "paste_text", timings }
 }
 
 public struct SayTimings: Decodable, Sendable {
-    public let quickMS: Int?
-    public let screenMS: Int?
-    enum CodingKeys: String, CodingKey { case quickMS = "quick_ms", screenMS = "screen_ms" }
+    public let modelMS: Int
+    enum CodingKeys: String, CodingKey { case modelMS = "model_ms" }
 }
 
 public struct TurnEvent: Decodable, Sendable {
