@@ -24,7 +24,6 @@ ELEVENLABS_VOICE = os.environ.get("ELEVENLABS_VOICE", "JBFqnCBsd6RMkjVDRZzb")
 VOICES = dict(pair.split(":", 1) for pair in os.environ.get(
     "ELEVENLABS_VOICES", "JBFqnCBsd6RMkjVDRZzb:George,O4dZDLAkF4Zo2yKOh6R4:Done,xyu8HSCv1JYrhLx4m8UG:Ariana").split(","))
 
-GROUNDING_MODE = os.environ.get("GROUNDING_MODE", "direct")
 SHARED_TOKEN = os.environ.get("SHARED_TOKEN", "")
 
 SESSION_TTL_SECONDS = float(os.environ.get("SESSION_TTL_SECONDS", "3600"))

@@ -60,7 +60,7 @@ class CallLog:
             log.warning("Call log: %s", type(error).__name__)
 
     def forget(self, timestamp_ms: int) -> None:
-        """The picture goes, and the line that answers it."""
+        """The picture goes, and the lines that answer it."""
         name = str(timestamp_ms) + ".jpg"
         log_file = self.folder / "call.log"
         try:

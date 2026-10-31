@@ -28,6 +28,7 @@ final class EyesStage {
     private static let longWaitWords = "Жду ответа дольше обычного"
     private static let noLinkWords = "Нет связи"
     private static let black = canvas { _ in }
+    private static let slowestRetry = 8  // In frames: a window that keeps refusing is not worth 30 tries a second.
 
     private let surface: any EyesSurface
     private let journal: SharedJournal?
@@ -49,6 +50,7 @@ final class EyesStage {
     private var waits = Set<Wait>()
     private var frames = 0
     private var skipped = 0
+    private var refused = 0
     private var drawing: TimeInterval = 0
 
     init(surface: any EyesSurface, journal: SharedJournal?) {
@@ -131,6 +133,7 @@ final class EyesStage {
 
     func wait(for reason: Wait) {
         waits.insert(reason)
+        director.isOnNewScreen = waits.contains(.screen)
         director.beginWaiting(at: clock)
         if reason == .reply, question != nil {
             question = nil
@@ -141,6 +144,7 @@ final class EyesStage {
 
     func stopWaiting(for reason: Wait, redraw: Bool = true) {
         waits.remove(reason)
+        director.isOnNewScreen = waits.contains(.screen)
         if waits.isEmpty { director.endWaiting() }
         if redraw { tick() }
     }
@@ -179,6 +183,11 @@ final class EyesStage {
     private func tick() {
         guard let timer else { return }
         let now = clock
+        if director.hasWaitedOut(at: now) {
+            waits.removeAll()
+            director.isOnNewScreen = false
+            director.endWaiting()
+        }
         let wanted = isLinkDown ? Self.noLinkWords : director.hasGivenUp(at: now) ? Self.longWaitWords : nil
         if wanted != notice || needsComposing {
             if wanted != notice { journal?.append("Глаза: \(wanted == nil ? "снова на месте" : "убраны, текст на чёрном")") }
@@ -192,7 +201,7 @@ final class EyesStage {
             moodSince = now
         }
         if pose != shown { draw(pose) }
-        let next = pose == shown ? director.nextChange : now + EyesDirector.frame
+        let next = pose == shown ? director.nextChange : now + EyesDirector.frame * Double(min(max(refused, 1), Self.slowestRetry))
         timer.schedule(deadline: .now() + max(0, next - now), leeway: .milliseconds(3))
     }
 
@@ -225,7 +234,11 @@ final class EyesStage {
             if sent {
                 shown = pose
                 frames += 1
-            } else { skipped += 1 }
+                refused = 0
+            } else {
+                skipped += 1
+                refused += 1
+            }
         } catch { journal?.append("Глаза: кадр не собран: \(error.localizedDescription)") }
         drawing += ProcessInfo.processInfo.systemUptime - started
     }

@@ -315,6 +315,22 @@ def test_the_screen_that_had_to_wait_gets_its_turn_after_the_answer(backend):
     assert session.chat[-2]["text"] == friend.SILENT_TURN and session.chat[-2]["frame"].timestamp_ms == 2 and not session.held
 
 
+def test_a_small_change_does_not_take_the_turn_of_the_screen_that_waited(backend):
+    entered, release = blocked(backend, only=1)
+    client = backend.client
+    session_id = sharing(client)
+    session = backend.store.sessions[session_id]
+    session.restarts = friend.MAX_RESTARTS
+    post_frame(client, session_id, SCREENS[0], timestamp=1)
+    assert entered.wait(2)
+    assert post_frame(client, session_id, SCREENS[1], timestamp=2).json() == {"accepted": False, "reason": "busy"}
+    assert post_frame(client, session_id, SCREENS[1], timestamp=3, small=True).json() == {"accepted": False, "reason": "small"}
+    release.set()
+    assert wait_until(lambda: len(backend.meta.calls) == 2)
+    idle(backend, session_id)
+    assert session.chat[-2]["text"] == friend.SILENT_TURN and session.chat[-2]["frame"].timestamp_ms == 3
+
+
 def test_words_under_way_take_the_place_of_the_screen_that_waited(backend):
     entered, release = blocked(backend, only=1)
     client = backend.client
@@ -863,6 +879,27 @@ def test_a_screen_whose_answer_broke_leaves_nothing_in_the_log(backend, monkeypa
     assert [row["private"] for row in written if row["kind"] == "answer"] == [True] and "Проверь сумму" not in str(written)
 
 
+def test_a_model_given_up_on_stays_silent(backend, monkeypatch):
+    monkeypatch.setattr(friend, "ANSWER_SECONDS", 0.2)
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Поздний ответ."), line("Ответ запасной модели.")]
+    spare_began, late_line = threading.Event(), threading.Event()
+
+    def hook(index):
+        if index == 1:
+            assert spare_began.wait(2)
+        else:
+            spare_began.set()
+            assert late_line.wait(2)
+    backend.meta.hook = hook
+    backend.meta.after_text = lambda index: late_line.set() if index == 1 else None
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    time.sleep(0.05)
+    assert spoken(seen) == ["Ответ запасной модели."]
+
+
 def test_a_line_from_an_answer_nobody_waits_for_stays_silent(backend):
     session_id = new_session(backend.client)
     seen = events_of(backend, session_id)
@@ -900,6 +937,45 @@ def test_a_payment_screen_stays_out_of_the_log_when_the_model_forgets_to_say_so(
     answer = next(line for line in lines_of(folder) if line["kind"] == "answer")
     assert answer["private"] is True and "answer" not in answer
     assert "Проверь сумму" not in (folder / "call.log").read_text(encoding="utf-8")
+
+
+def test_payment_words_that_come_during_the_drawing_reach_the_hint_and_the_log(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    client = backend.client
+    session_id = sharing(client, eyes=True)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    render = hint.render
+
+    def draw(*args):
+        assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={"frame_ts": 7, "lines": [{"text": "Bayar Sekarang", "words": []}]}).status_code == 200
+        return render(*args)
+    monkeypatch.setattr(hint, "render", draw)
+    backend.meta.replies = [line("Жми сюда.", show=SHOW)]
+    post_frame(client, session_id, timestamp=7)
+    idle(backend, session_id)
+    assert wait_until(lambda: "hint" in kinds(seen))
+    assert next(event for event in seen if event["type"] == "hint")["calm"] is True
+    folder = next((tmp_path / "calls").iterdir())
+    assert wait_until(lambda: any(row["kind"] == "show" for row in lines_of(folder)))
+    assert SHOW["label"] not in (folder / "call.log").read_text(encoding="utf-8")
+
+
+def test_payment_words_after_the_outline_take_it_out_of_the_log(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    client = backend.client
+    session_id = sharing(client, eyes=True)
+    session = backend.store.sessions[session_id]
+    backend.meta.replies = [line("Жми сюда.", show=SHOW)]
+    post_frame(client, session_id, timestamp=7)
+    idle(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    assert wait_until(lambda: any(row["kind"] == "show" for row in lines_of(folder)))
+    assert session.last_hint["calm"] is False
+    assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={"frame_ts": 7, "lines": [{"text": "Bayar Sekarang", "words": []}]}).status_code == 200
+    assert not [row for row in lines_of(folder) if row["kind"] in ("show", "answer")]
+    assert SHOW["label"] not in (folder / "call.log").read_text(encoding="utf-8")
+    assert session.last_hint["calm"] is True
 
 
 def test_a_product_card_is_not_a_bank_card(backend, monkeypatch, tmp_path):
@@ -1010,3 +1086,43 @@ def test_a_screen_that_got_no_answer_lets_the_eyes_stop_waiting(backend):
     post_frame(client, session_id, SCREENS[0])
     idle(backend, session_id)
     assert kinds(seen) == ["reading", "quiet"]
+
+
+def missed(backend, session_id):
+    async def connect():
+        session = backend.store.sessions[session_id]
+        queue = session.subscribe()
+        session.unsubscribe(queue)
+        return [queue.get_nowait() for _ in range(queue.qsize())]
+    return kinds(backend.client.portal.call(connect))
+
+
+def test_a_phone_that_reconnects_gets_the_line_it_never_played(backend):
+    session_id = new_session(backend.client)
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    assert missed(backend, session_id) == ["status", "heard", "say"]
+    played(backend, session_id, 1)
+    assert missed(backend, session_id) == ["status"]
+
+
+def test_a_phone_that_reconnects_does_not_get_an_older_line(backend):
+    session_id = new_session(backend.client)
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    entered, release = blocked(backend)
+    try:
+        words(backend.client, session_id, "И ещё")
+        assert entered.wait(2)
+        assert missed(backend, session_id) == ["status"]
+    finally:
+        release.set()
+    idle(backend, session_id)
+
+
+def test_a_silent_answer_leaves_nothing_to_get_back(backend):
+    session_id = new_session(backend.client)
+    backend.meta.replies = [line("")]
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    assert missed(backend, session_id) == ["status"]

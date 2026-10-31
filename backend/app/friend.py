@@ -292,6 +292,8 @@ class Friend:
         if session.call_log:
             session.call_log.forget(timestamp_ms)
         if session.eyes:
+            if session.last_hint and session.last_hint["frame_ts"] == timestamp_ms:
+                session.last_hint["calm"] = True  # A phone that reconnects gets it again.
             session.publish({"type": "face", "turn": session.turn, "face": None, "calm": True})
 
     def played(self, session: Session, turn: int) -> None:
@@ -314,14 +316,16 @@ class Friend:
         self._stop(session)
         session.answer = self._run(self._answer(session, session.turn, frame))
 
-    def _on_text(self, session: Session, turn: int, started: float, early: dict) -> Callable[[str], None]:
+    def _on_text(self, session: Session, turn: int, started: float, early: dict) -> tuple:
         """The line goes to the voice once it is whole, ahead of the rest of the answer. It reaches the chat at the same
-        moment, because the rest may never come. The call runs on in its thread after a new turn, which then has the say."""
+        moment, because the rest may never come. The call runs on in its thread after a new turn, which then has the say,
+        and after the spare model took over: the second thing returned is what shuts this one up."""
         loop, task = asyncio.get_running_loop(), asyncio.current_task()
         found: List[str] = []
+        dropped: List[bool] = []
 
         def deliver(line: str) -> None:
-            if session.answer is not task or session.ended or early:
+            if session.answer is not task or session.ended or early or dropped:
                 return
             early.update(line=line, ms=_ms(started), turn={"role": "assistant", "text": json.dumps({"say": line}, ensure_ascii=False)})
             session.chat.append(early["turn"])
@@ -331,19 +335,21 @@ class Friend:
             if not found and first_line(text):
                 found.append(first_line(text))
                 loop.call_soon_threadsafe(deliver, found[0])
-        return on_text
+        return on_text, lambda: dropped.append(True)
 
-    async def _ask(self, session: Session, on_text: Callable[[str], None], early: dict) -> Optional[tuple]:
+    async def _ask(self, session: Session, turn: int, started: float, early: dict) -> Optional[tuple]:
         """No answer in time, or a broken one: one try on the spare model. The person cannot wait for more.
         A line that has already gone out stands, and only the rest of the answer is lost."""
         messages = messages_of(session)
         effort = session.effort or config.META_TALK_REASONING
         for model in (config.META_TALK_MODEL, config.META_SPARE_MODEL):
+            on_text, drop = self._on_text(session, turn, started, early)
             try:
                 reply = await asyncio.wait_for(
                     run_in_threadpool(meta.chat_json, model, messages, effort, ANSWER_SECONDS + 1, on_text), ANSWER_SECONDS)
                 return model, reply, read(reply["text"])
             except Exception as error:
+                drop()
                 log.warning("Answer from %s: %s", model, type(error).__name__)
                 session.note("no answer", model=model, error=type(error).__name__)
                 if early:  # The word on this screen would have come with the rest, so nothing about it is written down.
@@ -354,14 +360,14 @@ class Friend:
         await self._reply(session, turn, frame)
         held, session.held = session.held, False
         now = session.last_frame
-        if held and now and not now.small and not session.heard and not session.ended and _new_screen(session, now):
+        if held and now and not session.heard and not session.ended and _new_screen(session, now):
             session.answer = None  # This one is done, and it is what would be stopped.
             self._start(session, SILENT_TURN, now)  # The screen that had to wait would otherwise go unseen.
 
     async def _reply(self, session: Session, turn: int, frame: Optional[Frame]) -> None:
         started = time.perf_counter()
         early: dict = {}
-        got = await self._ask(session, self._on_text(session, turn, started, early), early)
+        got = await self._ask(session, turn, started, early)
         session.restarts = 0
         if got is None:
             if session.open_words:
@@ -402,7 +408,7 @@ class Friend:
             session.publish({"type": "face", "turn": turn, "face": face if face in FACES and not private else None, "calm": private})
         target = _target(answer.get("show"))
         if target and frame:
-            await self._show(session, frame, said or target["label"], target, private, ms)
+            await self._show(session, frame, said or target["label"], target, answer, ms)
 
     def _hand_over(self, session: Session, paste: str) -> None:
         """The keyboard takes the ready text from here."""
@@ -411,22 +417,25 @@ class Friend:
             session.step_id = "s" + str(session.step_sequence)
             session.texts = [paste]
 
-    async def _show(self, session: Session, frame: Frame, text: str, target: dict, private: bool, model_ms: int) -> None:
+    async def _show(self, session: Session, frame: Frame, text: str, target: dict, answer: dict, model_ms: int) -> None:
         started = time.perf_counter()
-        written = None if private else target
+
+        def written() -> dict:  # The words of a payment screen can arrive while this is at work.
+            return {"target": None} if _private(session, frame, answer) else {"target": target, "frame": str(frame.timestamp_ms) + ".jpg"}
+
         if _gone(session, frame):  # Over a screen they have left it would only send them back.
-            session.note("show", outcome="left", target=written)
+            session.note("show", outcome="left", **written())
             return
         location = await run_in_threadpool(grounding.locate, frame.jpeg, frame.width, frame.height,
                                            {"action": "tap", "target": target}, _text_on(session, frame), [])
         box_ms = _ms(started)
         session.grounding = location
         if not location["box"]:
-            session.note("show", outcome="not found", target=written, box_ms=box_ms)
+            session.note("show", outcome="not found", box_ms=box_ms, **written())
             return
         image = await run_in_threadpool(hint.render, frame.jpeg, location["box"], text, session.eyes)
         if _gone(session, frame):  # A screen that came while the answer was busy stops nothing, so it can only be seen here.
-            session.note("show", outcome="left", target=written, box_ms=box_ms)
+            session.note("show", outcome="left", box_ms=box_ms, **written())
             return
         session.step_sequence += 1
         session.step_id = "s" + str(session.step_sequence)
@@ -438,8 +447,8 @@ class Friend:
         if session.eyes:
             event["eyes_box"] = hint.eyes_box(text)
             event["gaze"] = window.gaze(frame.window, location["box"], frame.width, frame.height)
-            event["calm"] = private
+            event["calm"] = _private(session, frame, answer)
         session.shown = True
         session.publish(event)
-        session.note("show", outcome="shown", step=session.step_id, target=written, box=location["box"],
-                     box_source=location["source"], box_ms=box_ms)
+        session.note("show", outcome="shown", step=session.step_id, box=location["box"],
+                     box_source=location["source"], box_ms=box_ms, **written())

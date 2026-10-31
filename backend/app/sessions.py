@@ -59,6 +59,7 @@ class Session:
     last_frame: Optional[Frame] = None
     last_answer: Optional[dict] = None
     last_hint: Optional[dict] = None
+    last_say: Optional[dict] = None
     last_status: dict = field(default_factory=lambda: {
         "type": "status", "state": "waiting_frames", "text_ru": "Включи демонстрацию экрана"
     })
@@ -90,6 +91,8 @@ class Session:
             self.last_status = event
         elif event["type"] == "hint":
             self.last_hint = event
+        elif event["type"] == "say" and event["text_ru"]:
+            self.last_say = event
         elif event["type"] == "done":
             self.last_done = event
         for queue in tuple(self.subscribers):
@@ -105,6 +108,9 @@ class Session:
         queue: asyncio.Queue = asyncio.Queue(maxsize=16)
         self.subscribers.add(queue)
         queue.put_nowait(self.last_status)
+        if self.last_say and self.last_say["turn"] == self.turn and self.open_words and not self.ended:
+            queue.put_nowait({"type": "heard", "turn": self.turn})  # No sound of the answer yet: it went to a dead socket.
+            queue.put_nowait(self.last_say)
         if self.last_hint and not self.ended:
             queue.put_nowait(self.last_hint)
         if self.last_done:

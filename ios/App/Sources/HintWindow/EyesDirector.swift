@@ -41,6 +41,7 @@ enum EyesJoke: CaseIterable {
 struct EyesDirector {
     static let frame = 1.0 / 30
     static let givesUpAfter = 9.0  // Eyes must not hide a call that has stalled.
+    private static let longestWait = 35.0  // Two tries of 15 s on the server and the look at the screen.
     private static let jump = 0.04...0.06
     private static let hold = 0.15...0.7
     private static let readingHold = 0.15...0.2
@@ -68,6 +69,7 @@ struct EyesDirector {
 
     var isSpeaking = false
     var isCalm = false  // Payment, card, password: nothing but rest.
+    var isOnNewScreen = false  // Nobody has said yet what this screen is, and it can be a payment. No jokes over it.
     private(set) var mood = EyesMood.rest
     private let random: () -> Double
     private var now = 0.0
@@ -119,6 +121,8 @@ struct EyesDirector {
     mutating func screenChanged(at time: TimeInterval) {
         readingUntil = time + Self.readingFor
         readingStep = 0
+        happyUntil = -.infinity  // A face belongs to the screen it was made for.
+        faceStart = -.infinity
     }
 
     mutating func stopReading() { readingUntil = -.infinity }
@@ -171,6 +175,11 @@ struct EyesDirector {
         waitingSince.map { time - $0 >= Self.givesUpAfter } ?? false
     }
 
+    /// No answer takes this long, so it is lost, with the connection for one, and nothing else would end the wait.
+    func hasWaitedOut(at time: TimeInterval) -> Bool {
+        waitingSince.map { time - $0 >= Self.longestWait } ?? false
+    }
+
     static func level(of samples: [Int16]) -> Double {
         guard !samples.isEmpty else { return 0 }
         let power = samples.reduce(0.0) { $0 + Double($1) * Double($1) } / Double(samples.count)
@@ -216,7 +225,8 @@ struct EyesDirector {
         let moments = [nextLook, nextBlink, secondBlink, readingUntil, pointStart + Self.flareFor, pointStart + Self.pointingFor, happyUntil,
                        faceStart + Self.foundFor, faceStart + Self.faceFor,
                        lastHeard + Self.hearingGap, (waitingSince ?? -.infinity) + Self.thinksAfter,
-                       (waitingSince ?? -.infinity) + Self.jokesAfter, (waitingSince ?? -.infinity) + Self.givesUpAfter]
+                       (waitingSince ?? -.infinity) + Self.jokesAfter, (waitingSince ?? -.infinity) + Self.givesUpAfter,
+                       (waitingSince ?? -.infinity) + Self.longestWait]
         return moments.filter { $0 > now }.min() ?? now + 1
     }
 
@@ -269,7 +279,7 @@ struct EyesDirector {
     }
 
     private mutating func considerJoke(at time: TimeInterval) {
-        guard mood == .thinking, !countedPause, let waitingSince, time - waitingSince >= Self.jokesAfter else { return }
+        guard mood == .thinking, !isOnNewScreen, !countedPause, let waitingSince, time - waitingSince >= Self.jokesAfter else { return }
         countedPause = true
         pausesToJoke -= 1
         guard pausesToJoke <= 0 else { return }

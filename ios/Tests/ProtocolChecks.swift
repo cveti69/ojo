@@ -503,6 +503,7 @@ private enum ProtocolChecks {
         for (one, two) in zip(thoughts, thoughts.dropFirst()) where abs(one.pose.x - two.pose.x) > 0.01 && two.pose.left > 0.99 { moves += 1 }
         try check(moves < 12, "jumps are short: a side change takes a couple of pictures, not a slide")
         try check(!thinking.hasGivenUp(at: 9.9) && thinking.hasGivenUp(at: 10.1), "after nine seconds the eyes give way to words")
+        try check(!thinking.hasWaitedOut(at: 35.9) && thinking.hasWaitedOut(at: 36.1), "no wait lasts past the longest answer")
 
         var reader = EyesDirector(random: sameRandom())
         _ = reader.advance(to: 1)
@@ -547,6 +548,14 @@ private enum ProtocolChecks {
         _ = happy.advance(to: 1)
         happy.rejoice(at: 1)
         try check(happy.advance(to: 1.5).isHappy && !happy.advance(to: 2.1).isHappy, "arcs for a second")
+
+        var moved = EyesDirector(random: sameRandom())
+        _ = moved.advance(to: 1)
+        moved.rejoice(at: 1)
+        moved.express(.found, at: 1)
+        moved.screenChanged(at: 1.2)
+        let carried = moved.advance(to: 1.3)
+        try check(moved.mood == .reading && !carried.isHappy, "a face stays on its own screen")
 
         var found = EyesDirector(random: sameRandom())
         _ = found.advance(to: 1)
@@ -611,6 +620,17 @@ private enum ProtocolChecks {
         }
         try check(seen.count >= 7 && seen.count <= 10, "a joke once in four or five pauses: \(seen.count) of 40")
         try check(zip(seen, seen.dropFirst()).allSatisfy { $1 - $0 >= 4 }, "never two pauses running")
+        var unknown = EyesDirector(random: sameRandom())
+        unknown.isOnNewScreen = true
+        var quietTime = 1.0
+        for _ in 0..<10 {
+            unknown.beginWaiting(at: quietTime)
+            let pictures = play(&unknown, from: quietTime, to: quietTime + 5.5)
+            try check(!pictures.contains { abs($0.pose.cross - 1) < 0.01 || $0.pose.right < $0.pose.left * 0.6 || hypot($0.pose.x, $0.pose.y) > 0.84 && $0.pose.y > 0.3 }, "no joke over a screen nobody has named")
+            unknown.endWaiting()
+            quietTime += 6
+            _ = unknown.advance(to: quietTime)
+        }
 
         var painted = [UInt8](repeating: 0, count: 720 * 960 * 4)
         let inked: (EyePose) throws -> Int = { pose in
@@ -746,6 +766,7 @@ private enum ProtocolChecks {
         let store = try SharedStore(configuration: configuration, defaults: defaults)
         try check(store.screenTextMode == .extension, "default screenTextMode")
         try check(store.voice == nil, "the server's voice by default")
+        try check(!store.eyes && !store.settings.eyes, "the eyes are off by default")
         store.voice = "voice-1"
         try check(defaults.string(forKey: "voice") == "voice-1", "a chosen voice stays")
         try check(store.settings.thinking == .auto && store.settings.character == .warm, "default level and manner")
