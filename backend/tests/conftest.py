@@ -93,6 +93,7 @@ class FakeMeta:
     def __init__(self):
         self.answers = []
         self.vision_calls = []
+        self.efforts = []
         self.text_calls = []
         self.asr_calls = []
         self.asr_reply = {"transcript": "Купить шампунь", "audioDurationMs": 100, "turns": []}
@@ -116,6 +117,7 @@ class FakeMeta:
         assert schema is not None
         with self.lock:
             self.vision_calls.append(messages)
+            self.efforts.append(effort)
             index = len(self.vision_calls)
             response = self.answers.pop(0) if self.answers else answer()
             self.active += 1

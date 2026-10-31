@@ -14,6 +14,7 @@ from . import config
 
 # Guards against a runaway answer; one step needs a few hundred tokens.
 MAX_COMPLETION_TOKENS = 1500
+THINKING_TOKENS = 16000  # Deeper levels think inside this limit, and an answer that runs out of it comes back empty.
 
 
 class MetaError(RuntimeError):
@@ -65,7 +66,8 @@ def data_url(jpeg: bytes) -> str:
 def chat(model: str, messages: list, effort: str | None = None, schema: dict | None = None,
          timeout: float = 60) -> dict:
     """One chat completion. Returns {"text", "usage", "ms"}."""
-    payload: dict = {"model": model, "messages": messages, "max_completion_tokens": MAX_COMPLETION_TOKENS}
+    payload: dict = {"model": model, "messages": messages,
+                     "max_completion_tokens": MAX_COMPLETION_TOKENS if effort == "minimal" else THINKING_TOKENS}
     if effort:
         payload["reasoning_effort"] = effort
     if schema:

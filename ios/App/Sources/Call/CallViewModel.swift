@@ -60,6 +60,10 @@ final class CallViewModel: ObservableObject {
     private var conversation: Task<Void, Never>?
     private var isAnswering = false
     private var heldWords: String?
+    private var agentIsSpeaking = false
+    private var pauseWords = PauseWords()
+    private var pause: Task<Void, Never>?
+    private var isFilling = false
     private var subscriptions = Set<AnyCancellable>()
 
     init(speaker: (any Speaker)? = nil) {
@@ -99,7 +103,10 @@ final class CallViewModel: ObservableObject {
         }
         window.onDiagnostic = { [weak self] in self?.journal?.append($0) }
         recorder.onDiagnostic = { [weak self] in self?.journal?.append($0) }
-        self.speaker.onSpeaking = { [weak self] in self?.microphone?.agentSpeaks($0) }
+        self.speaker.onSpeaking = { [weak self] isSpeaking in
+            self?.agentIsSpeaking = isSpeaking
+            self?.microphone?.agentSpeaks(isSpeaking)
+        }
         window.onRepeatHint = { [weak self] in self?.repeatHint() }
         audioSession.onActivityChange = { [weak self] active in
             self?.audioIsActive = active
@@ -153,7 +160,8 @@ final class CallViewModel: ObservableObject {
                 store.sessionID = response.sessionID
                 try self.beginLocalCall()
                 self.speaker.prepare(client: client, journal: self.journal)
-                self.journal?.append("Сессия создана")
+                let own = settings.character == .own ? ", \(settings.ownCharacter.count) знаков" : ""
+                self.journal?.append("Сессия создана; рассуждения: \(settings.thinking.rawValue); характер: \(settings.character.rawValue)\(own)")
                 self.connect(client: client, sessionID: response.sessionID)
                 self.status = "Агент здоровается"
                 await self.speaker.speakAndWait("Привет, чем помочь?")
@@ -226,6 +234,8 @@ final class CallViewModel: ObservableObject {
         _ = newWorkflow()
         recorder.cancel()
         stopHearing()
+        pause?.cancel()
+        isFilling = false
         speaker.finish()
         connection?.stop()
         connection = nil
@@ -499,6 +509,7 @@ final class CallViewModel: ObservableObject {
         _ = await AVAudioApplication.requestRecordPermission()  // Only a typed goal has not asked yet.
         hearPerson()
         speaker.speak(reply.replyRU)
+        if speaksRussian { speaker.keep(PauseWords.all) }
         journal?.append("Цель принята; ответ произнесён; можно включать трансляцию")
     }
 
@@ -534,11 +545,13 @@ final class CallViewModel: ObservableObject {
     private func answer(_ phrase: Phrase, client: ServerClient, sessionID: String) async {
         let seconds = String(format: "%.1f", locale: Locale(identifier: "ru_RU"), phrase.seconds)
         journal?.append("Реплика \(seconds) с; фон \(Int(phrase.noiseFloor)) дБ, пик \(Int(phrase.loudest)) дБ")
+        fillPause(.thinking, after: 2.5)
         let started = Date()
+        let id = workflowID
         var words: String?
         do {
             let reply = try await client.say(phrase.wav, sessionID: sessionID)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, workflowID == id else { return }  // A new goal went in meanwhile.
             let elapsed = Int(Date().timeIntervalSince(started) * 1000)
             journal?.append("Ответ на реплику через \(elapsed) мс; распознавание \(reply.timings.speechMS) мс, модель \(reply.timings.modelMS) мс; \(reply.replyRU == nil ? "промолчал" : "ответил")\(reply.goal == nil ? "" : "; цель изменена")")
             if let newGoal = reply.goal {
@@ -553,6 +566,7 @@ final class CallViewModel: ObservableObject {
             journal?.append("Ошибка реплики: \(error.localizedDescription)")
             words = "Не получилось ответить, повтори, пожалуйста."
         }
+        keepQuiet()
         guard let words, !isRecording else { return }
         isAnswering = true
         await speaker.waitUntilQuiet()
@@ -561,15 +575,40 @@ final class CallViewModel: ObservableObject {
         await speaker.speakAndWait(words)
         guard isAnswering else { return }
         isAnswering = false
-        if let held = heldWords {
-            heldWords = nil
-            speaker.speak(held)
-        }
+        speakHeldWords()
     }
 
     /// A hint waits for the end of an answer, so the agent never cuts itself off.
     private func announce(_ text: String) {
-        if isAnswering { heldWords = text } else { speaker.speak(text) }
+        if isAnswering || isFilling { heldWords = text } else { speaker.speak(text) }
+    }
+
+    private func speakHeldWords() {
+        guard !isAnswering, !isFilling, let held = heldWords else { return }
+        heldWords = nil
+        speaker.speak(held)
+    }
+
+    /// A short word while the agent works, so the line never goes dead. It only ever fills silence.
+    private func fillPause(_ kind: PauseWords.Kind, after seconds: Double) {
+        guard !isFilling, speaksRussian else { return }
+        pause?.cancel()
+        pause = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard let self, !Task.isCancelled, self.isCallActive, !self.agentIsSpeaking, !self.isAnswering, !self.isRecording,
+                  let words = self.pauseWords.next(kind) else { return }
+            self.isFilling = true
+            self.journal?.append("Фраза на паузе")
+            await self.speaker.speakAndWait(words)
+            self.isFilling = false
+            self.speakHeldWords()
+        }
+    }
+
+    private var speaksRussian: Bool { store?.settings.userLang == "ru" }
+
+    private func keepQuiet() {
+        if !isFilling { pause?.cancel() }
     }
 
     private func connect(client: ServerClient, sessionID: String) {
@@ -592,6 +631,7 @@ final class CallViewModel: ObservableObject {
         switch event {
         case .hint(let hint):
             guard seenSteps.insert(hint.stepID).inserted else { return }
+            keepQuiet()
             isSharing = true
             if let timestamp = hint.frameTS {
                 let elapsed = Date().timeIntervalSince1970 - Double(timestamp) / 1000
@@ -620,9 +660,12 @@ final class CallViewModel: ObservableObject {
             journal?.append("Сервер: \(status.state); \(status.textRU)")
             updateLookingCard(status)
             updateSharing(status)
+            let firstLook = status.state == "analyzing" && seenSteps.isEmpty
+            if status.newScreen == true || firstLook { fillPause(.looking, after: 1.5) }
         case .done(let done):
             guard !doneDelivered else { return }  // The server repeats it on every reconnect.
             doneDelivered = true
+            keepQuiet()
             status = done.textRU
             lastInstruction = done.textRU
             lastSpokenHint = done.textRU
@@ -754,6 +797,7 @@ final class CallViewModel: ObservableObject {
         testTimer?.invalidate()
         workflow?.cancel()
         conversation?.cancel()
+        pause?.cancel()
         clipboardTask?.cancel()
         textTestTask?.cancel()
     }

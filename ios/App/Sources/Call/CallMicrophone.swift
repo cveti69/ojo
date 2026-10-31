@@ -5,7 +5,7 @@ import Combine
 @MainActor
 final class CallMicrophone {
     private static let ringing: TimeInterval = 0.3  // The agent's last word still sounds in the room this long.
-    private static let restartLimit = 5
+    private static let restartLimit = 5  // In a row, less than a minute apart: more means the route will not settle.
 
     var onDiagnostic: ((String) -> Void)?
     var onLost: (() -> Void)?
@@ -16,6 +16,7 @@ final class CallMicrophone {
     private var engine: AVAudioEngine?
     private var configurationChange: AnyCancellable?
     private var restarts = 0
+    private var lastRestart = Date.distantPast
 
     /// iOS lets the microphone start only while the app is on screen.
     @discardableResult
@@ -72,7 +73,8 @@ final class CallMicrophone {
     private func restart() {
         // iOS stops an engine when the sound route changes, for example when headphones connect.
         stop()
-        restarts += 1
+        restarts = Date().timeIntervalSince(lastRestart) < 60 ? restarts + 1 : 1
+        lastRestart = Date()
         onDiagnostic?("Микрофон: звук изменился, перезапуск \(restarts)")
         if restarts > Self.restartLimit || !start() { onLost?() }
     }

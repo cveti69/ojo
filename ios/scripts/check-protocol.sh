@@ -14,6 +14,7 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -warnings-as-errors \
   "$protocol_ios_dir/Shared/Sources/ScreenTextMailbox.swift" \
   "$protocol_ios_dir/App/Sources/Call/SpeechDetector.swift" \
   "$protocol_ios_dir/App/Sources/Call/PhraseListener.swift" \
+  "$protocol_ios_dir/App/Sources/Call/PauseWords.swift" \
   "$protocol_ios_dir/Tests/ProtocolChecks.swift" \
   -o "$protocol_tmp/check-protocol"
 "$protocol_tmp/check-protocol" "$@"

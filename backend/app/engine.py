@@ -202,6 +202,7 @@ class Engine:
         prompt = step.build_prompt(
             session.goal, [item["summary"] for item in session.history[-HISTORY_STEPS:]],
             user_lang=session.user_lang, target_lang=session.app_lang or session.target_lang,
+            character=session.character,
         )
         if session.target_lang == "auto":
             prompt += (
@@ -218,7 +219,7 @@ class Engine:
 
     async def _ask(self, session: Session, frame: Frame, prompt: str) -> Optional[dict]:
         """Stops waiting once the person leaves the screen. The call itself cannot be stopped and ends unused."""
-        model = asyncio.ensure_future(run_in_threadpool(step.ask, frame.jpeg, prompt))
+        model = asyncio.ensure_future(run_in_threadpool(step.ask, frame.jpeg, prompt, effort=session.effort))
         stale = asyncio.ensure_future(session.stale.wait())
         try:
             await asyncio.wait((model, stale), return_when=asyncio.FIRST_COMPLETED)

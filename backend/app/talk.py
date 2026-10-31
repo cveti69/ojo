@@ -20,7 +20,8 @@ SCHEMA = {
     },
 }
 
-PROMPT = """You are {app_name}, a calm guide on a phone call with a person using an unfamiliar phone app. {screen}
+PROMPT = """You are {app_name}, a calm guide on a phone call with a person using an unfamiliar phone app.{manner}
+{screen}
 Their goal: {goal}.
 They speak {user_lang}; the app is in {target_lang}.
 Steps done so far: {history}.
@@ -40,10 +41,11 @@ Answer with JSON only, matching the schema."""
 
 
 def build_prompt(goal: str, history: list[str], instruction: str, dialog: list[dict], said: str, has_screen: bool,
-                 user_lang: str = "ru", target_lang: str = "id") -> str:
+                 user_lang: str = "ru", target_lang: str = "id", character: str = "") -> str:
     turns = [turn["who"] + ": " + turn["text"] for turn in dialog[-DIALOG_TURNS:]]
     return PROMPT.format(
         app_name=config.APP_NAME,
+        manner=character,
         screen="You see their iPhone screen." if has_screen else "You do not see their screen yet.",
         goal=goal,
         user_lang=step.LANGUAGES.get(user_lang, user_lang),
@@ -55,12 +57,13 @@ def build_prompt(goal: str, history: list[str], instruction: str, dialog: list[d
     )
 
 
-def ask(jpeg: Optional[bytes], prompt: str) -> dict:
+def ask(jpeg: Optional[bytes], prompt: str, effort: Optional[str] = None) -> dict:
     """Returns {"reply", "new_goal"}, with an empty reply when the words were not meant for the agent."""
     content: list[dict] = [{"type": "text", "text": prompt}]
     if jpeg:
         content.append({"type": "image_url", "image_url": {"url": meta.data_url(jpeg)}})
-    reply = meta.chat(config.META_VISION_MODEL, [{"role": "user", "content": content}], config.META_REASONING, SCHEMA)
+    reply = meta.chat(config.META_VISION_MODEL, [{"role": "user", "content": content}], effort or config.META_REASONING,
+                      SCHEMA)
     answer = json.loads(reply["text"])
     if not answer["addressed"]:
         return {"reply": "", "new_goal": None}

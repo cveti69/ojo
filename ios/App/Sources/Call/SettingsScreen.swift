@@ -8,7 +8,35 @@ private final class SettingsForm: ObservableObject {
     @Published var userLang = "ru"
     @Published var targetLang = ""
     @Published var textEntry: TextEntry = .clipboard
+    @Published var thinking: ThinkingLevel = .minimal
+    @Published var character: AgentCharacter = .strict
+    @Published var ownCharacter = ""
     @Published var message = ""
+}
+
+private extension ThinkingLevel {
+    var title: String {
+        switch self {
+        case .minimal: return "Минимальные"
+        case .low: return "Низкие"
+        case .medium: return "Средние"
+        case .high: return "Высокие"
+        case .xhigh: return "Очень высокие"
+        case .max: return "Максимальные"
+        }
+    }
+}
+
+private extension AgentCharacter {
+    var title: String {
+        switch self {
+        case .strict: return "Строгий"
+        case .warm: return "Тёплый"
+        case .brief: return "Очень краткий"
+        case .patient: return "Терпеливый"
+        case .own: return "Свой текст"
+        }
+    }
 }
 
 struct SettingsScreen: View {
@@ -39,6 +67,22 @@ struct SettingsScreen: View {
                 Text("auto — агент определит язык по экрану. Буфер работает везде. Нашу клавиатуру включайте только для приложений, которые её пускают. Новые настройки применяются со следующего звонка.")
             }
             Section {
+                Picker("Рассуждения", selection: $form.thinking) {
+                    ForEach(ThinkingLevel.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                Picker("Характер", selection: $form.character) {
+                    ForEach(AgentCharacter.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                if form.character == .own {
+                    TextField("Каким быть агенту", text: $form.ownCharacter, axis: .vertical)
+                        .lineLimit(2...5)
+                }
+            } header: {
+                Text("Агент")
+            } footer: {
+                Text("Чем глубже рассуждения, тем дольше ждать ответа. Запреты на пароли, карты и оплату характер не меняет. Новые настройки применяются со следующего звонка.")
+            }
+            Section {
                 Toggle("Слушать весь звонок", isOn: Binding(
                     get: { model.hearsDuringCall }, set: { model.setHearsDuringCall($0) }
                 ))
@@ -62,14 +106,18 @@ struct SettingsScreen: View {
             form.userLang = settings.userLang
             form.targetLang = settings.targetLang
             form.textEntry = settings.textEntry
+            form.thinking = settings.thinking
+            form.character = settings.character
+            form.ownCharacter = settings.ownCharacter
         }
     }
 
     private func save() {
         do {
-            try model.store?.save(serverAddress: form.serverAddress, token: form.token, userLang: form.userLang, targetLang: form.targetLang, textEntry: form.textEntry)
+            try model.store?.save(serverAddress: form.serverAddress, token: form.token, userLang: form.userLang, targetLang: form.targetLang, textEntry: form.textEntry,
+                                  thinking: form.thinking, character: form.character, ownCharacter: form.ownCharacter)
             form.message = "Сохранено в общей группе приложения"
-            model.journal?.append("Настройки сохранены; text_entry: \(form.textEntry.rawValue)")
+            model.journal?.append("Настройки сохранены; text_entry: \(form.textEntry.rawValue); рассуждения: \(form.thinking.rawValue); характер: \(form.character.rawValue)")
         } catch { form.message = error.localizedDescription }
     }
 }

@@ -8,6 +8,7 @@ protocol Speaker: AnyObject {
     func speak(_ text: String)
     func speakAndWait(_ text: String) async
     func waitUntilQuiet() async
+    func keep(_ texts: [String])
     func stop()
     func finish()
 }
@@ -16,6 +17,7 @@ extension Speaker {
     var onSpeaking: ((Bool) -> Void)? { get { nil } set {} }
     func prepare(client: ServerClient, journal: SharedJournal?) {}
     func waitUntilQuiet() async {}
+    func keep(_ texts: [String]) {}
     func finish() { stop() }
 }
 
@@ -23,7 +25,7 @@ extension Speaker {
 @MainActor
 final class ServerSpeaker: Speaker {
     private static let sampleRate = 24_000.0
-    private static let bufferBytes = 9600  // 200 ms of 16-bit mono.
+    private static let bufferBytes = 4800  // 100 ms of 16-bit mono.
     var onSpeaking: ((Bool) -> Void)?
     private let fallback: any Speaker
     private let engine = AVAudioEngine()
@@ -32,6 +34,7 @@ final class ServerSpeaker: Speaker {
     private var client: ServerClient?
     private var journal: SharedJournal?
     private var playback: Task<Void, Never>?
+    private var kept: [String: Data] = [:]
 
     init(fallback: any Speaker) {
         self.fallback = fallback
@@ -67,6 +70,18 @@ final class ServerSpeaker: Speaker {
         await playback?.value
     }
 
+    /// Short phrases are fetched ahead, so they sound the moment they are needed.
+    func keep(_ texts: [String]) {
+        guard let client else { return }
+        Task { [weak self] in
+            for text in texts where self?.kept[text] == nil {
+                var sound = Data()
+                do { for try await byte in try await client.speech(text) { sound.append(byte) } } catch { return }
+                self?.kept[text] = sound
+            }
+        }
+    }
+
     func stop() {
         playback?.cancel()
         playback = nil
@@ -91,17 +106,21 @@ final class ServerSpeaker: Speaker {
         var frames = 0
         do {
             if !engine.isRunning { try engine.start() }
-            var pending = Data(capacity: Self.bufferBytes)
-            for try await byte in try await client.speech(text) {
-                pending.append(byte)
-                guard pending.count == Self.bufferBytes else { continue }
-                if frames == 0 {
-                    journal?.append("Голос сервера: первый звук через \(Int(Date().timeIntervalSince(started) * 1000)) мс")
+            if let sound = kept[text] {
+                frames = schedule(sound)
+            } else {
+                var pending = Data(capacity: Self.bufferBytes)
+                for try await byte in try await client.speech(text) {
+                    pending.append(byte)
+                    guard pending.count == Self.bufferBytes else { continue }
+                    if frames == 0 {
+                        journal?.append("Голос сервера: первый звук через \(Int(Date().timeIntervalSince(started) * 1000)) мс")
+                    }
+                    frames += schedule(pending)
+                    pending.removeAll(keepingCapacity: true)
                 }
                 frames += schedule(pending)
-                pending.removeAll(keepingCapacity: true)
             }
-            frames += schedule(pending)
             try Task.checkCancellation()
             guard frames > 0 else { throw ClientError.invalidResponse }
             await finishPlaying(seconds: Double(frames) / Self.sampleRate)

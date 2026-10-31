@@ -5,16 +5,23 @@ public struct CreateSessionRequest: Encodable, Sendable {
     public let userLang: String
     public let targetLang: String
     public let textEntry: TextEntry
+    public let effort: ThinkingLevel
+    public let character: AgentCharacter
+    public let ownCharacter: String
 
     public init(settings: ServerSettings, goal: String = "") {
         self.goal = goal
         userLang = settings.userLang
         targetLang = settings.targetLang
         textEntry = settings.textEntry
+        effort = settings.thinking
+        character = settings.character
+        ownCharacter = settings.ownCharacter
     }
 
     enum CodingKeys: String, CodingKey {
         case goal, userLang = "user_lang", targetLang = "target_lang", textEntry = "text_entry"
+        case effort, character, ownCharacter = "own_character"
     }
 }
 

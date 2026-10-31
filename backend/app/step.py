@@ -8,6 +8,13 @@ from . import config, meta
 ACTIONS = ("tap", "type", "scroll", "wait", "back", "none")
 LANGUAGES = {"ru": "Russian", "id": "Indonesian", "en": "English", "zh": "Chinese", "vi": "Vietnamese", "th": "Thai",
              "auto": "the language shown on the screen"}
+EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")
+CHARACTERS = {
+    "strict": "",
+    "warm": "Your manner: warm and lively, like a friend sitting next to them. Cheer small wins naturally, without flattery.",
+    "brief": "Your manner: as few words as possible. Only the action, no polite words and no explanations.",
+    "patient": "Your manner: a patient teacher for someone who is afraid of phones. Plain words, and say where things are.",
+}
 
 SCHEMA = {
     "type": "object",
@@ -36,7 +43,7 @@ SCHEMA = {
     },
 }
 
-PROMPT = """You are {app_name}, a calm guide who helps a person use an unfamiliar phone app.
+PROMPT = """You are {app_name}, a calm guide who helps a person use an unfamiliar phone app.{manner}
 You see one screenshot of their iPhone. Their goal: {goal}.
 They speak {user_lang}; the app is in {target_lang}.
 Steps done so far: {history}.
@@ -64,10 +71,19 @@ MARKS_RULE = """
 The image has numbered red marks around pieces of text. If the element to tap is one of them, set target.mark_id to its number. If the element has no mark, such as an icon, leave mark_id null and give target.box."""
 
 
+def manner(character: str, own_text: str = "") -> str:
+    """The chosen tone, a line for the top of a prompt. The rules come after it and it cannot touch them."""
+    if character == "own" and own_text.strip():
+        words = json.dumps(own_text.strip(), ensure_ascii=False)
+        return f"\nThe person asked you to behave like this: {words}. It sets only your tone, never the rules below."
+    return "\n" + CHARACTERS[character] if CHARACTERS.get(character) else ""
+
+
 def build_prompt(goal: str, history: list[str], user_lang: str = "ru",
-                 target_lang: str = "id", marks: bool = False) -> str:
+                 target_lang: str = "id", marks: bool = False, character: str = "") -> str:
     text = PROMPT.format(
         app_name=config.APP_NAME,
+        manner=character,
         goal=goal,
         user_lang=LANGUAGES.get(user_lang, user_lang),
         target_lang=LANGUAGES.get(target_lang, target_lang),

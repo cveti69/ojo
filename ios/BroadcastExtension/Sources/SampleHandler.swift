@@ -443,6 +443,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         run.journal.append("Трансляция: стоп без окна iOS")
         _ = perform(NSSelectorFromString("finishBroadcastWithError:"), with: nil)
         DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [self] in
+            guard lock.withLock({ runID == run.id }) else { return }
             run.journal.append("Трансляция: ещё жива, стоп с окном «Звонок завершён»")
             finishBroadcastWithError(Self.shown(BroadcastError.ended))
         }

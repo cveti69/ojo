@@ -164,7 +164,8 @@ private enum ProtocolChecks {
                   "spoken line endpoint")
         let create = requests.first { $0.url!.path == "/api/sessions" }!
         let createBody = try JSONSerialization.jsonObject(with: body(of: create)) as! [String: String]
-        try check(createBody == ["goal": "", "user_lang": "ru", "target_lang": "auto", "text_entry": "clipboard"], "create-session body")
+        try check(createBody == ["goal": "", "user_lang": "ru", "target_lang": "auto", "text_entry": "clipboard",
+                                 "effort": "minimal", "character": "strict", "own_character": ""], "create-session body")
         let translate = requests.first { $0.url!.path.hasSuffix("/translate") }!
         let translateBody = try JSONSerialization.jsonObject(with: body(of: translate)) as! [String: String]
         try check(translateBody["from"] == "ru" && translateBody["to"] == "auto" && translateBody["session_id"] == created.sessionID,
@@ -194,6 +195,7 @@ private enum ProtocolChecks {
         guard case .done = done else { throw CheckFailure(description: "done event") }
         try checkSpeechDetector()
         try await checkPhraseListener()
+        try checkPauseWords()
         try checkScreenTextGeometry()
         try checkSettingsAndMailbox()
         try await checkMemoryGate()
@@ -283,6 +285,22 @@ private enum ProtocolChecks {
         var heard = listener.phrases.makeAsyncIterator()
         guard let cut = await heard.next() else { throw CheckFailure(description: "the agent's voice cut a phrase and lost it") }
         try check(cut.seconds < 2, "only the person's words get through, got \(cut.seconds)")
+    }
+
+    private static func checkPauseWords() throws {
+        var words = PauseWords()
+        let start = Date()
+        var said: [String] = []
+        for step in 0..<40 {
+            let now = start.addingTimeInterval(Double(step) * 16)
+            guard let word = words.next(step % 3 == 0 ? .looking : .thinking, now: now) else {
+                throw CheckFailure(description: "a word after a long pause")
+            }
+            try check(word != said.last, "the same pause word twice in a row: \(word)")
+            said.append(word)
+        }
+        try check(Set(said).count == PauseWords.all.count, "every pause word gets its turn")
+        try check(words.next(.thinking, now: start.addingTimeInterval(39 * 16 + 5)) == nil, "pause words stay rare")
     }
 
     private static func checkScreenTextGeometry() throws {

@@ -33,6 +33,8 @@ class Session:
     user_lang: str
     target_lang: str
     text_entry: str
+    effort: str = config.META_REASONING
+    character: str = ""
     app_lang: Optional[str] = None
     history: List[dict] = field(default_factory=list)
     dialog: List[dict] = field(default_factory=list)
@@ -150,10 +152,11 @@ class SessionStore:
         self.ttl_seconds = config.SESSION_TTL_SECONDS if ttl_seconds is None else ttl_seconds
         self.sessions: Dict[str, Session] = {}
 
-    def create(self, goal: str, user_lang: str, target_lang: str, text_entry: str) -> Session:
+    def create(self, goal: str, user_lang: str, target_lang: str, text_entry: str, effort: Optional[str] = None,
+               character: str = "") -> Session:
         session = Session(
             id="s_" + uuid.uuid4().hex[:16], goal=goal, user_lang=user_lang,
-            target_lang=target_lang, text_entry=text_entry,
+            target_lang=target_lang, text_entry=text_entry, effort=effort or config.META_REASONING, character=character,
             app_lang=None if target_lang == "auto" else target_lang,
         )
         self.sessions[session.id] = session

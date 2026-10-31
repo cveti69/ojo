@@ -12,12 +12,23 @@ public enum ScreenTextMode: String, Codable, CaseIterable, Sendable {
     case off
 }
 
+public enum ThinkingLevel: String, Codable, CaseIterable, Sendable {
+    case minimal, low, medium, high, xhigh, max
+}
+
+public enum AgentCharacter: String, Codable, CaseIterable, Sendable {
+    case strict, warm, brief, patient, own
+}
+
 public struct ServerSettings: Sendable, Equatable {
     public let serverURL: URL
     public let token: String
     public let userLang: String
     public let targetLang: String
     public let textEntry: TextEntry
+    public var thinking: ThinkingLevel = .minimal
+    public var character: AgentCharacter = .strict
+    public var ownCharacter = ""
 }
 
 public final class SharedStore: @unchecked Sendable {
@@ -44,7 +55,10 @@ public final class SharedStore: @unchecked Sendable {
             token: defaults.string(forKey: "token") ?? "",
             userLang: defaults.string(forKey: "userLang") ?? "ru",
             targetLang: defaults.string(forKey: "targetLang") ?? "id",
-            textEntry: TextEntry(rawValue: defaults.string(forKey: "textInput") ?? "") ?? .clipboard
+            textEntry: TextEntry(rawValue: defaults.string(forKey: "textInput") ?? "") ?? .clipboard,
+            thinking: ThinkingLevel(rawValue: defaults.string(forKey: "thinking") ?? "") ?? .minimal,
+            character: AgentCharacter(rawValue: defaults.string(forKey: "character") ?? "") ?? .strict,
+            ownCharacter: defaults.string(forKey: "ownCharacter") ?? ""
         )
     }
 
@@ -93,7 +107,8 @@ public final class SharedStore: @unchecked Sendable {
         defaults.synchronize()
     }
 
-    public func save(serverAddress: String, token: String, userLang: String, targetLang: String, textEntry: TextEntry) throws {
+    public func save(serverAddress: String, token: String, userLang: String, targetLang: String, textEntry: TextEntry,
+                     thinking: ThinkingLevel, character: AgentCharacter, ownCharacter: String) throws {
         let address = serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: address), ["http", "https"].contains(url.scheme?.lowercased()),
               url.host != nil, url.query == nil, url.fragment == nil else {
@@ -107,6 +122,9 @@ public final class SharedStore: @unchecked Sendable {
         defaults.set(user, forKey: "userLang")
         defaults.set(target, forKey: "targetLang")
         defaults.set(textEntry.rawValue, forKey: "textInput")
+        defaults.set(thinking.rawValue, forKey: "thinking")
+        defaults.set(character.rawValue, forKey: "character")
+        defaults.set(String(ownCharacter.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500)), forKey: "ownCharacter")
         defaults.synchronize()
     }
 

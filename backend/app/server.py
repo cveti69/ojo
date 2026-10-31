@@ -58,6 +58,9 @@ class CreateSession(Payload):
     user_lang: str = Field(default="ru", min_length=1, max_length=64)
     target_lang: str = Field(default="id", min_length=1, max_length=64)
     text_entry: Literal["keyboard", "clipboard"] = "clipboard"
+    effort: Optional[Literal[step.EFFORTS]] = None
+    character: Literal["strict", "warm", "brief", "patient", "own"] = "strict"
+    own_character: str = Field(default="", max_length=500)
 
 
 class Goal(Payload):
@@ -200,7 +203,8 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
 
     @router.post("/sessions", status_code=201)
     async def create_session(body: CreateSession):
-        session = sessions.create(body.goal.strip(), body.user_lang, body.target_lang, body.text_entry)
+        session = sessions.create(body.goal.strip(), body.user_lang, body.target_lang, body.text_entry, body.effort,
+                                  step.manner(body.character, body.own_character))
         return {"session_id": session.id}
 
     @router.post("/sessions/{session_id}/goal")
@@ -215,7 +219,7 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
             json.dumps({"goal": session.goal}, ensure_ascii=False),
             "Ты помощник в приложении. Обращайся к человеку на «ты». Коротко, одним-двумя предложениями по-русски подтверди, "
             f"что поможешь с целью пользователя, и {next_step}. "
-            "Не заявляй, что цель уже выполнена. Верни только реплику, без пояснений и кавычек.",
+            "Не заявляй, что цель уже выполнена. Верни только реплику, без пояснений и кавычек." + session.character,
         ), ready_text(session))
         require_active(session)
         if session.broadcasting and session.last_frame:  # A still screen sends no frames, so the new goal takes this one.
@@ -319,9 +323,10 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
             session.goal, [item["summary"] for item in session.history[-HISTORY_STEPS:]],
             last_hint.get("instruction_ru", ""), session.dialog, said, frame is not None,
             user_lang=session.user_lang, target_lang=session.app_lang or session.target_lang,
+            character=session.character,
         )
         try:
-            answer = await run_in_threadpool(talk.ask, frame.jpeg if frame else None, prompt)
+            answer = await run_in_threadpool(talk.ask, frame.jpeg if frame else None, prompt, session.effort)
         except Exception:
             raise HTTPException(502, "Не удалось получить ответ Meta. Попробуй ещё раз.") from None
         timings["model_ms"] = round((time.perf_counter() - heard) * 1000)
