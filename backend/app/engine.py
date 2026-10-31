@@ -310,7 +310,7 @@ class Engine:
             "insert_texts": texts, "insert_hint_ru": answer["insert_hint_ru"] if texts else "",
             "paste_text": paste_text, "needs_user_confirm": needs_confirm, "frame_ts": frame.timestamp_ms,
             "timings": {"queue_ms": timings["queue_ms"], "model_ms": timings["model_ms"], "box_ms": timings["box_ms"],
-                        "box_source": location["source"]},
+                        "box_source": location["source"], "window": frame.window is not None},
         }
         session.step_id = step_id
         session.texts = texts

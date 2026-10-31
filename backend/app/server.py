@@ -258,7 +258,9 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
             "если человек просит только смотреть и ждать, пока он сам заговорит, иначе lead. Во второй коротко, одним-двумя "
             "предложениями по-русски подтверди, что поможешь с целью пользователя (при beside: что будешь рядом и ответишь, "
             f"когда позовут), и {next_step}. "
-            "Не заявляй, что цель уже выполнена. Без пояснений и кавычек." + session.character,
+            "Не заявляй, что цель уже выполнена. Без пояснений и кавычек."
+            + (" Человек уже выбрал режим, где ты только смотришь: в первой строке beside." if session.mode == "beside" else "")
+            + session.character,
         ), ready_text(session))
         require_active(session)
         mode, reply = goal_reply(text)

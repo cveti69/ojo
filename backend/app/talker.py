@@ -85,14 +85,14 @@ class Talker:
                           timings: dict, started: float) -> None:
         if session.mode == "beside":
             if quick["reply"]:
-                self._say(session, turn, said, quick, "quick", timings)
+                self._say(session, turn, said, quick, "quick", timings, looks=True)
             session.heard = said
             session.publish({"type": "look", "turn": turn})
             return
         seeing = seeing or asyncio.ensure_future(self._see(session, said, []))
         session.looking = turn
         if quick["reply"] and not seeing.done():
-            self._say(session, turn, said, quick, "quick", timings)
+            self._say(session, turn, said, quick, "quick", timings, looks=True)
         await self._from_screen(session, turn, said, seeing, timings, started)
 
     async def look(self, session: Session, pictures: Sequence[bytes]) -> None:
@@ -126,7 +126,8 @@ class Talker:
             character=session.character, done=session.completed, quick=quick, mode=session.mode,
         )
 
-    def _say(self, session: Session, turn: int, said: str, answer: dict, layer: str, timings: dict) -> None:
+    def _say(self, session: Session, turn: int, said: str, answer: dict, layer: str, timings: dict,
+             looks: bool = False) -> None:
         if turn > session.written_turn:
             session.written_turn = turn
             session.dialog.append({"who": "person", "text": said})
@@ -138,4 +139,4 @@ class Talker:
             if session.broadcasting and session.last_frame:  # A still screen sends no frames.
                 self.engine.submit(session, session.last_frame)
         session.publish({"type": "say", "turn": turn, "layer": layer, "text_ru": answer["reply"], "goal": answer["new_goal"],
-                         "mode": answer["mode"], "timings": timings})
+                         "mode": answer["mode"], "looks": looks, "timings": timings})

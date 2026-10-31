@@ -159,7 +159,7 @@ def test_hint_says_where_its_time_went(backend):
     post_frame(backend.client, session_id)
     idle(backend, session_id)
     timings = backend.store.sessions[session_id].last_hint["timings"]
-    assert set(timings) == {"queue_ms", "model_ms", "box_ms", "box_source"}
+    assert set(timings) == {"queue_ms", "model_ms", "box_ms", "box_source", "window"}
 
 
 def test_model_done_event(backend):
@@ -329,8 +329,8 @@ def test_a_quick_line_comes_first_and_the_screen_answers_after_it(backend):
         assert receive_type(websocket, "heard") == {"type": "heard", "turn": 1}
         first = receive_type(websocket, "say")
         second = receive_type(websocket, "say")
-    assert (first["layer"], first["text_ru"], first["turn"]) == ("quick", "Сейчас гляну.", 1)
-    assert (second["layer"], second["text_ru"], second["turn"]) == ("screen", "Это кнопка оплаты.", 1)
+    assert (first["layer"], first["text_ru"], first["turn"], first["looks"]) == ("quick", "Сейчас гляну.", 1, True)
+    assert (second["layer"], second["text_ru"], second["turn"], second["looks"]) == ("screen", "Это кнопка оплаты.", 1, False)
     assert set(second["timings"]) == {"quick_ms", "screen_ms"}
     assert len(backend.meta.quick_calls[-1][0]["content"]) == 1
     content = backend.meta.talk_calls[-1][0]["content"]
@@ -671,6 +671,13 @@ def test_the_mode_can_be_set_directly(backend):
     seen_frame(backend, session_id)
     assert backend.store.sessions[session_id].mode == "lead"
     assert client.post("/sessions/" + session_id + "/mode", headers=AUTH, json={"mode": "other"}).status_code == 422
+
+
+def test_a_goal_set_beside_the_person_says_so(backend):
+    client = backend.client
+    session_id = new_session(client, mode="beside")
+    client.post("/sessions/" + session_id + "/goal", headers=AUTH, json={"goal": "Купить шампунь"})
+    assert any("только смотришь" in call[0]["content"] for call in backend.meta.text_calls)
 
 
 def test_a_goal_can_ask_only_to_watch(backend):

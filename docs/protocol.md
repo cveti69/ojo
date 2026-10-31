@@ -70,17 +70,18 @@
 {"type": "hint", "step_id": "s3", "instruction_ru": "Нажми на строку поиска вверху", "speak": true,
  "image_jpeg_base64": "...", "insert_texts": ["sampo anti ketombe"], "insert_hint_ru": "запрос для поиска",
  "paste_text": null, "needs_user_confirm": false, "frame_ts": 1793436844526,
- "timings": {"queue_ms": 12, "model_ms": 2710, "box_ms": 3, "box_source": "text"}}
+ "timings": {"queue_ms": 12, "model_ms": 2710, "box_ms": 3, "box_source": "text", "window": true}}
 {"type": "status", "state": "analyzing", "text_ru": "Агент думает", "new_screen": false}
 {"type": "done", "text_ru": "Готово, вот список шампуней. Что дальше?"}
 {"type": "heard", "turn": 3}
-{"type": "say", "turn": 3, "layer": "quick", "text_ru": "Сейчас гляну.", "goal": null, "mode": null,
+{"type": "say", "turn": 3, "layer": "quick", "text_ru": "Сейчас гляну.", "goal": null, "mode": null, "looks": true,
  "timings": {"quick_ms": 900}}
 {"type": "look", "turn": 3}
 ```
 
 `status.state`: `waiting_frames`, `broadcasting`, `analyzing`, `broadcast_stopped`, `error`. `new_screen` есть только при `analyzing`:
-экран уже не тот, что на последней подсказке, поэтому приложение убирает её из окна, пока агент смотрит. `timings` нужны для журнала.
+экран уже не тот, что на последней подсказке, поэтому приложение убирает её из окна, пока агент смотрит. `timings` нужны для журнала,
+`window` говорит, нашёл ли сервер наше окно на кадре.
 
 Если `text_entry` равен `clipboard`, в подсказке есть `paste_text`: приложение кладёт его в буфер обмена сразу при получении
 события, а `instruction_ru` просит зажать поле и выбрать «Вставить» или набрать текст. При `keyboard` поле `paste_text`
@@ -93,7 +94,8 @@ iOS пускает приложение в фоне к буферу только
 `done` не заканчивает звонок: агент говорит `text_ru` и слушает дальше. Новые реплики работают как раньше.
 
 `heard` значит, что сервер услышал фразу и считает ответ. `say` несёт реплику агента: `layer` равен `quick` или `screen`, `goal` не
-`null`, если человек сменил цель, `mode` не `null`, если он сменил режим: сервер уже принял их. Реплику `quick` старого `turn` телефон
+`null`, если человек сменил цель, `mode` не `null`, если он сменил режим: сервер уже принял их. `looks` равен `true`, если реплика
+только обещает посмотреть: телефон может сказать вместо неё готовую фразу, она звучит сразу. Реплику `quick` старого `turn` телефон
 отбрасывает, если она ещё не зазвучала. Реплика `screen` звучит и после новой фразы, если та только поддержала разговор. Если фраза
 не агенту, после `heard` ничего не приходит.
 
