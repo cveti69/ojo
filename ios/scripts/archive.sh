@@ -56,8 +56,9 @@ ARCHIVE_ARGS=(-project "$IOS_DIR/App.xcodeproj" -scheme App -configuration Relea
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER")
 
 rm -rf "$ARCHIVE" "$EXPORT_DIR"
+# Automatic signing wants a registered device at this step, so the archive stays unsigned and the export signs it.
+xcodebuild archive "${ARCHIVE_ARGS[@]}" CODE_SIGNING_ALLOWED=NO
 if [ "$UNSIGNED" = 1 ]; then
-  xcodebuild archive "${ARCHIVE_ARGS[@]}" CODE_SIGNING_ALLOWED=NO
   echo "Unsigned archive compiled: $ARCHIVE, build $BUILD_NUMBER"
   exit 0
 fi
@@ -68,7 +69,14 @@ if [ -z "$TEAM" ]; then
   exit 1
 fi
 
-xcodebuild archive "${ARCHIVE_ARGS[@]}" -allowProvisioningUpdates
+# The export reads entitlements from the existing signatures, so a local signature has to carry them.
+APP=$ARCHIVE/Products/Applications/App.app
+ENTITLEMENTS=$BUILD_DIR/AppGroup.entitlements
+sed "s/\$(APP_GROUP_IDENTIFIER)/$(setting APP_GROUP_IDENTIFIER)/" "$IOS_DIR/Config/AppGroup.entitlements" > "$ENTITLEMENTS"
+codesign --force --sign - "$APP"/Frameworks/*.framework
+for item in "$APP"/PlugIns/*.appex "$APP"; do
+  codesign --force --sign - --entitlements "$ENTITLEMENTS" "$item"
+done
 
 OPTIONS=$BUILD_DIR/ExportOptions.plist
 cat > "$OPTIONS" <<EOF
