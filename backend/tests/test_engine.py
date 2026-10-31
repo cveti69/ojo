@@ -106,6 +106,54 @@ def test_typed_text_reaches_the_model_as_history(backend):
     assert 'typed "sampo anti ketombe" into the field' in str(backend.meta.vision_calls[-1])
 
 
+def test_new_goal_during_broadcast_reads_the_screen_at_once(backend):
+    session_id = new_session(backend.client)
+    prefix = "/sessions/" + session_id
+    backend.client.post(prefix + "/broadcast", headers=AUTH, json={"state": "started"})
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    calls = len(backend.meta.vision_calls)
+    backend.client.post(prefix + "/goal", headers=AUTH, json={"goal": "Найти кондиционер"})
+    idle(backend, session_id)
+    assert len(backend.meta.vision_calls) == calls + 1
+    assert "кондиционер" in str(backend.meta.vision_calls[-1])
+    assert backend.store.sessions[session_id].last_status["state"] == "broadcasting"
+
+
+def test_new_goal_before_broadcast_still_asks_to_start_it(backend):
+    session_id = new_session(backend.client)
+    backend.client.post("/sessions/" + session_id + "/goal", headers=AUTH, json={"goal": "Найти кондиционер"})
+    idle(backend, session_id)
+    session = backend.store.sessions[session_id]
+    assert session.last_status["text_ru"] == "Включи демонстрацию экрана"
+    assert backend.meta.vision_calls == []
+
+
+def test_call_ended_during_the_goal_reply_reads_no_screen(backend, monkeypatch):
+    session_id = new_session(backend.client)
+    prefix = "/sessions/" + session_id
+    backend.client.post(prefix + "/broadcast", headers=AUTH, json={"state": "started"})
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    calls = len(backend.meta.vision_calls)
+
+    def chat_then_end(*args, **kwargs):
+        backend.store.sessions[session_id].finish()
+        return backend.meta.chat(*args, **kwargs)
+    monkeypatch.setattr(meta, "chat", chat_then_end)
+    reply = backend.client.post(prefix + "/goal", headers=AUTH, json={"goal": "Найти кондиционер"})
+    assert reply.status_code == 409
+    assert len(backend.meta.vision_calls) == calls
+
+
+def test_status_after_done_does_not_promise_more(backend):
+    backend.meta.answers.append(answer(done=True))
+    session_id = new_session(backend.client)
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    assert backend.store.sessions[session_id].last_status["text_ru"] == "Готово, цель достигнута"
+
+
 def test_model_retries_bad_json_once(backend):
     backend.meta.answers = ["bad JSON", answer()]
     session_id = new_session(backend.client)
@@ -309,3 +357,10 @@ def test_text_match_works_in_any_script(label, words, left):
 
 def test_text_match_keeps_different_chinese_labels_apart():
     assert grounding.snap_to_text("取消订单", [0.1, 0.8, 0.3, 0.85], [text_line("立即", "购买")]) is None
+
+
+def test_long_guess_stays_off_the_icon_next_to_it():
+    icon = [0.49, 0.128, 0.6, 0.177]
+    search_bar = [0.295, 0.03, 0.654, 0.047]
+    assert grounding.snap_to_icon(search_bar, [icon], 0.462) is None
+    assert grounding.snap_to_icon([0.5, 0.13, 0.58, 0.17], [icon], 0.462) == icon

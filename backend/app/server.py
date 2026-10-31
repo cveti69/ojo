@@ -181,12 +181,16 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
         if not body.goal.strip():
             raise HTTPException(422, "Укажи цель.")
         session.set_goal(body.goal.strip())
+        next_step = "скажи, что уже смотришь на экран" if session.broadcasting else "попроси включить демонстрацию экрана"
         reply = await text_reply(
             json.dumps({"goal": session.goal}, ensure_ascii=False),
             "Ты помощник в приложении. Обращайся к человеку на «ты». Коротко, одним-двумя предложениями по-русски подтверди, "
-            "что поможешь с целью пользователя, и попроси включить демонстрацию экрана. "
+            f"что поможешь с целью пользователя, и {next_step}. "
             "Не заявляй, что цель уже выполнена. Верни только реплику, без пояснений и кавычек.",
         )
+        require_active(session)
+        if session.broadcasting and session.last_frame:  # A still screen sends no frames, so the new goal takes this one.
+            processor.submit(session, session.last_frame)
         return {"reply_ru": reply}
 
     @router.post("/sessions/{session_id}/frames", status_code=202)

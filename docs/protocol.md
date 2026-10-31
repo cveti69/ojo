@@ -10,7 +10,7 @@
 | Метод и путь | Кто вызывает | Тело | Ответ |
 |---|---|---|---|
 | `POST /sessions` | приложение | `{"goal": "", "user_lang": "ru", "target_lang": "id", "text_entry": "keyboard"}` | `201 {"session_id": "s_ab12cd34"}` |
-| `POST /sessions/{id}/goal` | приложение | `{"goal": "Заказать шампунь от перхоти"}` | `200 {"reply_ru": "Хорошо. Включи демонстрацию экрана."}` |
+| `POST /sessions/{id}/goal` | приложение | `{"goal": "Заказать шампунь от перхоти"}` | `200 {"reply_ru": "Хорошо. Включи демонстрацию экрана."}`. Если трансляция уже идёт, сервер сразу разбирает последний кадр |
 | `POST /transcribe` | приложение | `audio/wav`: моно, 16 бит, 16 кГц | `200 {"text": "..."}` |
 | `POST /sessions/{id}/frames` | расширение записи | `image/jpeg` | `202 {"accepted": true}` или `202 {"accepted": false, "reason": "busy"}` |
 | `POST /sessions/{id}/text` | расширение записи или приложение | `{"frame_ts": 1793436844526, "lines": [{"text": "Beli sekarang", "words": [{"text": "Beli", "box": [0.1, 0.8, 0.2, 0.83]}]}]}` | `200 {"ok": true}` |

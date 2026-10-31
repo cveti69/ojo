@@ -21,6 +21,7 @@ MARK_QUALITY = 70
 ICON_PHRASE = "icon"
 ICON_REACH = 0.14  # How far the model's guess may land from the real icon, in shares of the frame.
 ICON_MAX_AREA = 0.03  # A target larger than this share of the frame is not an icon.
+ICON_MAX_STRETCH = 2.5  # Icons are nearly square, so a longer guess is a bar or a button, however small.
 SHAPE_WORDS = ("icon", "checkbox", "toggle", "switch", "radio")  # Text next to these is a caption, not the target.
 
 
@@ -100,9 +101,17 @@ def _is_large(box: list[float] | None) -> bool:
     return bool(box) and (box[2] - box[0]) * (box[3] - box[1]) > ICON_MAX_AREA
 
 
-def snap_to_icon(near: list[float] | None, icons: list[list[float]]) -> list[float] | None:
-    """Takes the icon closest to the model's guess when the guess looks like an icon at all."""
-    if not near or not icons or _is_large(near):
+def _is_stretched(box: list[float], frame_ratio: float) -> bool:
+    width, height = (box[2] - box[0]) * frame_ratio, box[3] - box[1]
+    return max(width, height) > ICON_MAX_STRETCH * min(width, height)
+
+
+def snap_to_icon(near: list[float] | None, icons: list[list[float]], frame_ratio: float) -> list[float] | None:
+    """Takes the icon closest to the model's guess when the guess looks like an icon at all.
+
+    `frame_ratio` is the frame's width over its height: boxes are in shares of the frame, not in real proportions.
+    """
+    if not near or not icons or _is_large(near) or _is_stretched(near, frame_ratio):
         return None
     box = min(icons, key=lambda candidate: _distance(candidate, near))
     return box if _distance(box, near) <= ICON_REACH ** 2 else None
@@ -124,7 +133,7 @@ def locate(jpeg: bytes, width: int, height: int, answer: dict, lines: list[dict]
     snapped = None if shape else snap_to_text(target["label"], near, lines or [])
     if snapped:
         return {"box": snapped, "source": "text", "ms": 0}
-    icon = snap_to_icon(near, icons or [])
+    icon = snap_to_icon(near, icons or [], width / height)
     if icon:
         return {"box": icon, "source": "icon", "ms": 0}
     ms = 0

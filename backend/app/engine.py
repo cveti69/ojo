@@ -21,6 +21,7 @@ GRAY_SIZE = (64, 96)
 FRAME_DIFF_THRESHOLD = 3.0
 PAYMENT_INSTRUCTION = "Проверь сумму и подтверди сам."
 PASTE_INSTRUCTION = "Зажми поле и выбери «Вставить»."
+DONE_TEXT = "Готово, цель достигнута"
 ICON_WAIT_SECONDS = 1.5
 HISTORY_STEPS = 12
 PIXEL_CHANGED = 12  # A thumbnail pixel counts as changed above this difference.
@@ -163,7 +164,8 @@ class Engine:
             if not session.ended and session.last_status["state"] == "analyzing":
                 session.publish({
                     "type": "status", "state": "broadcasting" if session.broadcasting else "waiting_frames",
-                    "text_ru": PAYMENT_INSTRUCTION if session.needs_user_confirm else "Жду изменения экрана",
+                    "text_ru": (PAYMENT_INSTRUCTION if session.needs_user_confirm
+                                else DONE_TEXT if session.completed else "Жду изменения экрана"),
                 })
 
     async def _analyze(self, session: Session, frame: Frame, revision: int) -> None:
@@ -216,7 +218,7 @@ class Engine:
             session.completed = True
             session.texts = []
             session.insert_hint_ru = ""
-            session.publish({"type": "done", "text_ru": "Готово, цель достигнута"})
+            session.publish({"type": "done", "text_ru": DONE_TEXT})
             timings["total_ms"] = round((time.perf_counter() - frame.received_at) * 1000)
             return
         texts = [value for value in answer["insert_texts"] if isinstance(value, str) and value.strip()]

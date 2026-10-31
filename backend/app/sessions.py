@@ -120,7 +120,10 @@ class Session:
         self.timings = {}
         self.completed = False
         self.needs_user_confirm = False
-        self.publish({"type": "status", "state": "waiting_frames", "text_ru": "Включи демонстрацию экрана"})
+        self.publish({
+            "type": "status", "state": "broadcasting" if self.broadcasting else "waiting_frames",
+            "text_ru": "Демонстрация экрана включена" if self.broadcasting else "Включи демонстрацию экрана",
+        })
         self.touch()
 
     def finish(self, text_ru: str = "Сессия завершена") -> None:

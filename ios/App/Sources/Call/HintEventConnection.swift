@@ -12,6 +12,7 @@ final class HintEventConnection {
     private var pollTask: Task<Void, Never>?
     private var pingTask: Task<Void, Never>?
     private var socketAvailable = false
+    private var pongPending = false
     private var lastStepID: String?
 
     init(client: ServerClient) { self.client = client }
@@ -27,11 +28,7 @@ final class HintEventConnection {
                     let socket = try self.client.eventSocket(sessionID: sessionID)
                     self.socket = socket
                     socket.resume()
-                    try await self.ping(socket)
-                    try Task.checkCancellation()
-                    self.socketAvailable = true
-                    self.onDiagnostic?("WebSocket подключён")
-                    delay = 1
+                    // A pong only comes back while a receive is pending, so the pings run next to this loop, not before it.
                     self.startPings(socket)
                     while !Task.isCancelled {
                         let message = try await socket.receive()
@@ -49,6 +46,7 @@ final class HintEventConnection {
                     if Task.isCancelled { break }
                     self.onDiagnostic?("WebSocket недоступен: \(error.localizedDescription); опрос /hint раз в секунду")
                 }
+                if self.socketAvailable { delay = 1 }
                 self.socketAvailable = false
                 self.pingTask?.cancel()
                 self.socket?.cancel(with: .goingAway, reason: nil)
@@ -103,24 +101,26 @@ final class HintEventConnection {
 
     private func startPings(_ socket: URLSessionWebSocketTask) {
         pingTask?.cancel()
+        pongPending = false
         pingTask = Task { [weak self] in
             while !Task.isCancelled {
-                do {
-                    try await Task.sleep(nanoseconds: 10_000_000_000)
-                    try await self?.ping(socket)
-                } catch {
-                    if !Task.isCancelled { socket.cancel(with: .goingAway, reason: nil) }
-                    break
+                guard let self else { return }
+                if self.pongPending {  // The socket went quiet: receive() now fails and the poll takes over.
+                    socket.cancel(with: .goingAway, reason: nil)
+                    return
                 }
-            }
-        }
-    }
-
-    private func ping(_ socket: URLSessionWebSocketTask) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            socket.sendPing { error in
-                if let error { continuation.resume(throwing: error) }
-                else { continuation.resume() }
+                self.pongPending = true
+                socket.sendPing { [weak self] error in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.socket === socket, error == nil else { return }
+                        self.pongPending = false
+                        if !self.socketAvailable {
+                            self.socketAvailable = true
+                            self.onDiagnostic?("WebSocket подключён")
+                        }
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
             }
         }
     }

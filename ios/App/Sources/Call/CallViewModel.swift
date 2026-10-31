@@ -46,6 +46,7 @@ final class CallViewModel: ObservableObject {
     private var lastJPEG: Data?
     private var lastSpokenHint = ""
     private var seenSteps = Set<String>()
+    private var doneDelivered = false
     private var subscriptions = Set<AnyCancellable>()
 
     init(speaker: (any Speaker)? = nil) {
@@ -201,6 +202,7 @@ final class CallViewModel: ObservableObject {
         hasGoal = false
         needsUserConfirm = false
         seenSteps.removeAll()
+        doneDelivered = false
         lastJPEG = nil
         lastSpokenHint = ""
         window.stop()
@@ -406,6 +408,7 @@ final class CallViewModel: ObservableObject {
 
     private func sendGoal(_ text: String, client: ServerClient, sessionID: String) async throws {
         status = "Передаю цель агенту…"
+        doneDelivered = false
         let reply = try await client.setGoal(text, sessionID: sessionID)
         try Task.checkCancellation()
         hasGoal = true
@@ -461,6 +464,8 @@ final class CallViewModel: ObservableObject {
             if !isRecording && !isWorking { self.status = status.textRU }
             journal?.append("Сервер: \(status.state); \(status.textRU)")
         case .done(let done):
+            guard !doneDelivered else { return }  // The server repeats it on every reconnect.
+            doneDelivered = true
             status = done.textRU
             lastInstruction = done.textRU
             lastSpokenHint = done.textRU
