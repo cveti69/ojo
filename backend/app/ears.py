@@ -65,7 +65,7 @@ class Ears:
                 raise
             except Exception as error:
                 failures += 1
-                log.warning("Speech stream: %s", type(error).__name__)
+                log.warning("Speech stream: %s %s", type(error).__name__, str(error)[:120])
             await asyncio.sleep(min(RETRY_SECONDS * max(failures, 1), LONGEST_WAIT))
 
     async def _exchange(self, socket) -> None:
@@ -78,7 +78,7 @@ class Ears:
                 if event.get("type") == "speechComplete" and tidy(event.get("transcript", "")):
                     self.on_turn(tidy(event["transcript"]))
                 elif event.get("type") == "error":
-                    raise ValueError("Meta closed the stream")
+                    raise ValueError(f"Meta closed the stream: {event.get('code') or event.get('message')}")
         finally:
             feed.cancel()
             with contextlib.suppress(asyncio.CancelledError):

@@ -730,7 +730,8 @@ final class CallViewModel: ObservableObject {
         case .heard(let event):
             heardTurn = event.turn
             lastHeard = Date()
-            voiceEnded = microphone?.lastVoice ?? lastHeard
+            let voice = microphone?.lastVoice ?? lastHeard
+            voiceEnded = voice == .distantPast ? lastHeard : voice
             journal?.append("Ход \(event.turn): услышан через \(sinceVoiceEnded()) мс после конца речи")
             eyes?.wait(for: .reply)
             dropLines { $0.kind != .hint }
