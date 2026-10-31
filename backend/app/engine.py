@@ -136,6 +136,8 @@ class Engine:
             return False, "beside"
         session.last_frame = frame
         session.touch()
+        if session.held:
+            return False, "held"
         if session.busy:
             session.pending_frame = frame
             if left_the_screen(session, frame):  # A hint for the old screen would only send them back.

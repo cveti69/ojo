@@ -79,6 +79,8 @@ class Talker:
         self._change(session, quick)
         if quick["new_goal"] or quick["mode"]:  # A new plan replaces the question the head is still on.
             session.looking = 0
+        if quick["reply"] or quick["needs_screen"]:
+            self._hold(session, quick)
         if quick["needs_screen"]:
             if quick["reply"]:
                 self._say(session, turn, said, quick, "quick", timings, looks=True)
@@ -127,10 +129,20 @@ class Talker:
             if session.looking != turn or session.ended:
                 return
         self._say(session, turn, said, answer, "screen", timings)
-        if answer["look_again"] and not again:
+        if answer["look_again"] and not again and not session.held:
             session.looks_again = said
             if left:
                 self.moved(session)
+
+    def _hold(self, session: Session, quick: dict) -> None:
+        """After "close", "go back" or "stop" the next step is theirs to say, so the pointer waits for their next words."""
+        held, session.held = session.held, quick["hold"]
+        if quick["hold"]:
+            session.revision += 1  # What the pointer is working on belongs to the old plan.
+            session.note("hold", turn=session.turn)
+        elif held and session.broadcasting and session.last_frame and not quick["needs_screen"]:
+            session.last_analyzed_gray = None  # A still screen sends no frames.
+            self.engine.submit(session, session.last_frame)
 
     def moved(self, session: Session) -> None:
         """The head said it would look at the screen they were about to open, and it is opening."""

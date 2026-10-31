@@ -69,6 +69,7 @@ class Session:
     shown: bool = False  # Beside the person: what the head showed is still in the window.
     looks_again: str = ""  # Their words, when the head waits for the screen they are about to open.
     second_look: bool = False
+    held: bool = False  # They said to close, go back or stop, so the pointer waits for their next words.
     moved_at: float = 0
     last_activity: float = field(default_factory=time.monotonic)
     last_frame: Optional[Frame] = None
@@ -143,6 +144,7 @@ class Session:
         """A refined goal keeps the steps done so far: the person is still on the same road."""
         self.note("goal", goal=goal)
         self.revision += 1
+        self.held = False
         self.goal = goal
         self.texts.clear()
         self.insert_hint_ru = ""

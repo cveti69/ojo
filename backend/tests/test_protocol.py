@@ -1009,6 +1009,65 @@ def test_a_second_look_the_phone_never_made_leaves_the_next_question_alone(backe
     assert "you speak first" not in backend.meta.talk_calls[-1][0]["content"][0]["text"]
 
 
+def held_call(backend):
+    """A call in which they have just said to close something and were told how."""
+    client = backend.client
+    session_id = new_session(client)
+    client.post("/sessions/" + session_id + "/broadcast", headers=AUTH, json={"state": "started"})
+    seen_frame(backend, session_id)
+    backend.meta.quick.append(quick_line(hold=True))
+    backend.meta.talk.append(talk_line("Нажми крестик вверху.", show=SHOW, look_again=True))
+    ask_the_screen(backend, session_id)
+    post = post_frame(client, session_id, jpeg((200, 30, 40)), timestamp=200)
+    assert post.json() == {"accepted": False, "reason": "held"} and not backend.store.sessions[session_id].looks_again
+    idle(backend, session_id)
+    return session_id
+
+
+def test_after_close_or_back_the_pointer_waits_for_their_word(backend):
+    session_id = held_call(backend)
+    pointer_calls = len(backend.meta.vision_calls)
+    backend.meta.quick.append(quick_line("Хорошо.", needs_screen=False))
+    say(backend.client, session_id)
+    idle(backend, session_id)
+    assert len(backend.meta.vision_calls) == pointer_calls + 1  # A still screen sends no frames.
+    assert post_frame(backend.client, session_id, jpeg((20, 200, 40)), timestamp=201).json()["accepted"] is True
+
+
+def test_talk_in_the_room_does_not_end_the_wait(backend):
+    session_id = held_call(backend)
+    backend.meta.quick.append(quick_line("", addressed=False, needs_screen=False))
+    say(backend.client, session_id)
+    assert backend.store.sessions[session_id].held is True
+
+
+def test_a_new_goal_ends_the_wait(backend):
+    session_id = held_call(backend)
+    pointer_calls = len(backend.meta.vision_calls)
+    backend.meta.quick.append(quick_line("Хорошо, ищем другое.", new_goal="Купить кондиционер", needs_screen=False))
+    say(backend.client, session_id)
+    idle(backend, session_id)
+    assert backend.store.sessions[session_id].held is False and len(backend.meta.vision_calls) == pointer_calls + 1
+
+
+def test_a_step_under_way_does_not_land_after_they_said_stop(backend):
+    client = backend.client
+    session_id = new_session(client)
+    client.post("/sessions/" + session_id + "/broadcast", headers=AUTH, json={"state": "started"})
+    seen_frame(backend, session_id)
+    session = backend.store.sessions[session_id]
+
+    def they_said_stop(index):
+        backend.meta.hook = None
+        backend.meta.quick.append(quick_line("Хорошо, жду.", needs_screen=False, hold=True))
+        session.open_words = ""
+        say(client, session_id)
+    backend.meta.hook = they_said_stop
+    post_frame(client, session_id, jpeg((200, 30, 40)), timestamp=200)
+    idle(backend, session_id)
+    assert session.step_sequence == 1
+
+
 def test_the_pointer_keeps_quiet_while_the_head_thinks(backend):
     client = backend.client
     session_id = new_session(client)

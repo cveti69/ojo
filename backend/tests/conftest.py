@@ -38,8 +38,9 @@ def answer(**changes):
 real_locate = grounding.locate
 
 
-def quick_line(reply="Сейчас гляну.", addressed=True, new_goal=None, mode="keep", needs_screen=True, wait="look"):
-    return {"addressed": addressed, "reply": reply, "new_goal": new_goal, "mode": mode, "needs_screen": needs_screen, "wait": wait}
+def quick_line(reply="Сейчас гляну.", addressed=True, new_goal=None, mode="keep", needs_screen=True, wait="look", hold=False):
+    return {"addressed": addressed, "reply": reply, "new_goal": new_goal, "mode": mode, "needs_screen": needs_screen, "wait": wait,
+            "hold": hold}
 
 
 def talk_line(reply="Это кнопка оплаты.", addressed=True, new_goal=None, mode="keep", show=None, private=False, look_again=False):

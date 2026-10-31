@@ -11,7 +11,7 @@ MAX_REPLY = 500
 QUICK_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["addressed", "reply", "new_goal", "mode", "needs_screen", "wait"],
+    "required": ["addressed", "reply", "new_goal", "mode", "needs_screen", "wait", "hold"],
     "properties": {
         "addressed": {"type": "boolean"},
         "reply": {"type": "string"},
@@ -19,6 +19,7 @@ QUICK_SCHEMA = {
         "mode": {"type": "string", "enum": ["lead", "beside", "keep"]},
         "needs_screen": {"type": "boolean"},
         "wait": {"type": "string", "enum": ["look", "read", "compare"]},
+        "hold": {"type": "boolean"},
     },
 }
 SCHEMA = {
@@ -74,7 +75,7 @@ WHO = {
 }
 FOR_YOU = "- These words are for you: set addressed=true."
 QUICK_RULE = """
-Right now you do not see the screen. Set needs_screen=true if the words are for you and a good answer depends on what is on the screen now or was on an earlier one: what is shown, what something means, what to press, where to go next, which one is better, what happens after a tap. Then reply with one very short natural line that you will take a look, such as "Сейчас гляну", with new_goal null and mode keep, and set wait to what you are about to do: read if they ask what a word or a button means or to translate it, compare if they ask to choose between options, otherwise look. If you can answer without the screen, such as thanks, agreement, small talk or a new plan, set needs_screen=false and answer. A request to lead or only to watch is always a change of mode: set mode, set needs_screen=false and confirm it. Never state what is on the screen, a price or a button from memory, and never ask them what they see: you can look yourself. You can also show them any button on the screen, so never say you cannot."""
+Right now you do not see the screen. Set needs_screen=true if the words are for you and a good answer depends on what is on the screen now or was on an earlier one: what is shown, what something means, what to press, where to go next, which one is better, what happens after a tap. Then reply with one very short natural line that you will take a look, such as "Сейчас гляну", with new_goal null and mode keep, and set wait to what you are about to do: read if they ask what a word or a button means or to translate it, compare if they ask to choose between options, otherwise look. If you can answer without the screen, such as thanks, agreement, small talk or a new plan, set needs_screen=false and answer. A request to lead or only to watch is always a change of mode: set mode, set needs_screen=false and confirm it. Set hold=true if they ask to close something, go back, stop or wait, such as "закрой", "вернёмся назад", "стой" or "подожди": you then give no next steps until they speak again. To close or go back you need the screen to say how; to stop or wait you do not. Otherwise hold=false, also when they only ask about an earlier page. Never state what is on the screen, a price or a button from memory, and never ask them what they see: you can look yourself. You can also show them any button on the screen, so never say you cannot."""
 SEE_RULE = """
 You also point. Your floating window can outline any button, field or option on the last screenshot: fill show and it appears there as you speak.
 - When they ask where to tap, which one to take or what to do next, show that element and say the same in reply, naming it by its text and its place on the screen. Never say that you cannot show, draw or point at something.
@@ -83,6 +84,7 @@ You also point. Your floating window can outline any button, field or option on 
 - If they choose another option or say another one is better, go with them: agree in a few words, set new_goal to the whole updated goal with their choice in it, and show that option, or what comes next if it is already picked. Never argue for your earlier choice.
 - If they ask about an earlier page, answer from the earlier screenshots. If it is not among them, say you did not see it.
 - If they want to go to another screen and look at it there, say what to press and set look_again=true: you will see that screen as soon as it opens, and speak first.
+- If they ask to close something or go back, say what to press and show it, and say nothing of the plan: the next step is theirs to say.
 - If what they want is not on the screen, say how to get to it and leave show empty.
 show.label copies the visible text of the element exactly as shown on the screen. show.object is a short English noun phrase for what it looks like, such as "green button" or "radio button". show.box is [x1, y1, x2, y2] around it in 0-1000 coordinates of the last screenshot: x is relative to its width, y to its height. With nothing to show, leave both strings and the box empty.
 Set private=true if the last screenshot shows a payment, a card, a password or a PIN."""
@@ -128,11 +130,11 @@ def _target(show: dict) -> Optional[dict]:
 def _read(answer: dict) -> dict:
     private = bool(answer.get("private"))  # The log goes by this, also when the words were not for the agent.
     if not answer["addressed"]:
-        return {"reply": "", "new_goal": None, "mode": None, "needs_screen": False, "wait": None, "show": None,
+        return {"reply": "", "new_goal": None, "mode": None, "needs_screen": False, "wait": None, "hold": False, "show": None,
                 "look_again": False, "private": private}
     return {"reply": answer["reply"].strip()[:MAX_REPLY], "new_goal": (answer["new_goal"] or "").strip() or None,
             "mode": answer["mode"] if answer["mode"] != "keep" else None, "needs_screen": bool(answer.get("needs_screen")),
-            "wait": answer.get("wait"),
+            "wait": answer.get("wait"), "hold": bool(answer.get("hold")),
             "show": _target(answer["show"]) if "show" in answer else None, "look_again": bool(answer.get("look_again")),
             "private": private}
 
