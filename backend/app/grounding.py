@@ -119,8 +119,10 @@ def snap_to_icon(near: list[float] | None, icons: list[list[float]], frame_ratio
 
 def locate(jpeg: bytes, width: int, height: int, answer: dict, lines: list[dict] | None = None,
            icons: list[list[float]] | None = None, marks: dict[int, list[float]] | None = None) -> dict:
-    """Picks the final box: a mark, text on screen, an icon, SAM by name, then the model's own box.
+    """Picks the final box: a mark, text on screen, SAM by name, an icon, then the model's own box.
 
+    Without `icons` SAM looks for them here, and only when nothing before it found the place. On the bench that order hit 35
+    of 40 against 33 with icons first: a name found is nearly always right, and an icon can be a neighbour of the target.
     Returns {"box": 0-1 coordinates or None, "source", "ms"}.
     """
     target = answer["target"]
@@ -135,9 +137,6 @@ def locate(jpeg: bytes, width: int, height: int, answer: dict, lines: list[dict]
         return {"box": snapped, "source": "text", "ms": 0}
     if snapped:  # The model's box can be a row off, and the words next to a radio button say which row it is.
         near = [near[0], snapped[1], near[2], snapped[3]] if near else snapped
-    icon = snap_to_icon(near, icons or [], width / height)
-    if icon:
-        return {"box": icon, "source": "icon", "ms": 0}
     ms = 0
     if target["object"] and not _is_large(near):  # A large target is easy to hit, a search would only cost time.
         try:
@@ -147,6 +146,14 @@ def locate(jpeg: bytes, width: int, height: int, answer: dict, lines: list[dict]
         ms = found["ms"]
         if found["box"]:
             return {"box": found["box"], "source": "sam", "ms": ms}
+    if icons is None and near and not _is_large(near) and not _is_stretched(near, width / height):
+        try:
+            icons = find_icons(jpeg, width, height)
+        except meta.MetaError:
+            icons = []
+    icon = snap_to_icon(near, icons or [], width / height)
+    if icon:
+        return {"box": icon, "source": "icon", "ms": ms}
     if snapped:
         return {"box": snapped, "source": "text", "ms": ms}
     return {"box": near, "source": "model" if near else "none", "ms": ms}

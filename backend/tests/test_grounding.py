@@ -22,6 +22,47 @@ def test_the_words_say_which_row_a_radio_button_is_in(monkeypatch):
     assert found["box"] == [0.05, 0.82, 0.2, 0.84] and found["source"] == "text"
 
 
+def asked_sam(monkeypatch, answers):
+    asked = []
+
+    def sam(image, phrase):
+        asked.append(phrase)
+        if isinstance(answers.get(phrase), Exception):
+            raise answers[phrase]
+        return {"boxes": [{"box": box} for box in answers.get(phrase, [])], "ms": 1}
+    monkeypatch.setattr(meta, "sam", sam)
+    return asked
+
+
+NAMELESS = {"label": "", "object": "camera icon in the search bar", "box": [500, 140, 560, 180], "mark_id": None, "words_first": True}
+
+
+def test_sam_looks_for_icons_when_the_name_finds_nothing(monkeypatch):
+    asked = asked_sam(monkeypatch, {grounding.ICON_PHRASE: [[480, 130, 520, 170]]})
+    found = real_locate(b"", 1000, 1000, {"action": "tap", "target": NAMELESS}, [])
+    assert found["box"] == [0.48, 0.13, 0.52, 0.17] and found["source"] == "icon"
+    assert asked == [NAMELESS["object"], grounding.ICON_PHRASE]
+
+
+def test_a_name_found_needs_no_search_for_icons(monkeypatch):
+    asked = asked_sam(monkeypatch, {NAMELESS["object"]: [[500, 150, 540, 190]], grounding.ICON_PHRASE: [[480, 130, 520, 170]]})
+    found = real_locate(b"", 1000, 1000, {"action": "tap", "target": NAMELESS}, [])
+    assert found["source"] == "sam" and asked == [NAMELESS["object"]]
+
+
+def test_a_long_thin_guess_is_no_icon(monkeypatch):
+    asked = asked_sam(monkeypatch, {grounding.ICON_PHRASE: [[480, 130, 520, 170]]})
+    target = {**NAMELESS, "box": [100, 140, 700, 180]}
+    assert real_locate(b"", 1000, 1000, {"action": "tap", "target": target}, [])["source"] == "model"
+    assert asked == [NAMELESS["object"]]
+
+
+def test_the_outline_goes_out_when_the_search_for_icons_fails(monkeypatch):
+    asked_sam(monkeypatch, {grounding.ICON_PHRASE: meta.MetaError(502, "down")})
+    found = real_locate(b"", 1000, 1000, {"action": "tap", "target": NAMELESS}, [])
+    assert found["source"] == "model" and found["box"] == [0.5, 0.14, 0.56, 0.18]
+
+
 def test_only_recent_screen_texts_are_kept(backend):
     session_id = new_session(backend.client)
     session = backend.store.sessions[session_id]

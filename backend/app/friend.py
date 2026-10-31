@@ -427,7 +427,7 @@ class Friend:
             session.note("show", outcome="left", **written())
             return
         location = await run_in_threadpool(grounding.locate, frame.jpeg, frame.width, frame.height,
-                                           {"action": "tap", "target": target}, _text_on(session, frame), [])
+                                           {"action": "tap", "target": target}, _text_on(session, frame))
         box_ms = _ms(started)
         session.grounding = location
         if not location["box"]:

@@ -3,12 +3,14 @@
 
     python3 -m eval.run --modes direct,sam,ocr,samtext --model <id> --effort minimal --repeat 2
 
-Modes: direct (the model's box), sam (SAM from the model's box), ocr (the label snapped to Apple
-Vision text), samtext (SAM finds the object by name, closest to the model's box), computer (the
-model's computer tool, a single tap point), grounded (grounding.locate from the plain answer),
-marks (numbered marks on the frame, then grounding.locate). Icons for grounded and marks are found
-once per frame, like the server does next to the model. Needs Pillow, so run it from .venv.
-Frames stay on this machine and go only to the Meta API.
+Modes: call (one turn of the real call: the person says the task and asks where to tap, the model
+answers under the call's own instructions, and the answer is pointed at the way the call does it),
+direct (the model's box), sam (SAM from the model's box), ocr (the label snapped to Apple Vision
+text), samtext (SAM finds the object by name, closest to the model's box), computer (the model's
+computer tool, a single tap point), grounded (grounding.locate from the plain answer), marks
+(numbered marks on the frame, then grounding.locate). Icons for grounded and marks are found once
+per frame. All but call use the step format of the earlier agent. Needs Pillow, so run it from
+.venv. Frames stay on this machine and go only to the Meta API.
 """
 from __future__ import annotations
 
@@ -21,7 +23,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from app import grounding, meta, step
+from app import friend, grounding, meta, step
+from app.sessions import Session
 
 HERE = Path(__file__).parent
 FRAMES = HERE / "frames"
@@ -150,6 +153,25 @@ def run_marks(case: dict, frame: dict, args) -> dict:
     return {"box": found["box"], "ms": reply["ms"] + found["ms"], "source": found["source"]}
 
 
+def run_call(case: dict, frame: dict, args, row: dict, truth: list[float]) -> None:
+    done = "Уже сделал: " + "; ".join(case["history"]) + ". " if case["history"] else ""
+    session = Session(id="bench", user_lang="ru", target_lang="id", text_entry="clipboard")
+    session.chat.append({"role": "user", "text": f"{case['goal']}. {done}Куда нажать?", "frame": frame["call"]})
+    reply = meta.chat_json(args.model, friend.messages_of(session), args.effort)
+    answer = friend.read(reply["text"])
+    target = friend._target(answer.get("show"))
+    row.update({"usage": reply["usage"], "say": answer.get("say"), "label": target and target["label"],
+                "object": target and target["object"], "shown": bool(target)})
+    near = [value / 1000 for value in target["box"]] if target and target["box"] else None
+    record(row, "direct", {"box": near, "ms": reply["ms"]}, truth)
+    if not target:
+        return record(row, "call", {"box": None, "ms": reply["ms"], "source": "none"}, truth)
+    started = time.perf_counter()
+    found = grounding.locate(frame["jpeg"], frame["width"], frame["height"], {"action": "tap", "target": target}, frame["lines"])
+    box_ms = round((time.perf_counter() - started) * 1000)
+    record(row, "call", {"box": found["box"], "ms": reply["ms"] + box_ms, "source": found["source"]}, truth)
+
+
 def record(row: dict, mode: str, result: dict, truth: list[float]) -> None:
     row[f"{mode}_box"] = result["box"]
     if "source" in result:
@@ -166,7 +188,9 @@ def run_case(case: dict, frame: dict, truth: list[float], args, repeat: int) -> 
             record(row, "computer", run_computer(case, frame, args), truth)
         if "marks" in args.modes:
             record(row, "marks", run_marks(case, frame, args), truth)
-        if not set(args.modes) - {"computer", "marks"}:
+        if "call" in args.modes:
+            run_call(case, frame, args, row, truth)
+        if not set(args.modes) - {"computer", "marks", "call"}:
             return row
         direct = run_direct(case, frame, args)
         answer = direct["answer"] or {}
@@ -241,6 +265,9 @@ def main() -> None:
     if "grounded" in args.modes or "marks" in args.modes:
         for frame in frames.values():
             frame["icons"] = grounding.find_icons(frame["jpeg"], frame["width"], frame["height"])
+    if "call" in args.modes:
+        for frame in frames.values():
+            frame["call"] = friend.prepare_frame(frame["jpeg"], frame["width"], frame["height"], 0, time.perf_counter())
     only = set(filter(None, args.only.split(",")))
     cases = [case for case in spec["cases"] if not only or case["id"] in only]
 
@@ -252,7 +279,8 @@ def main() -> None:
                 jobs.append(pool.submit(run_case, case, frames[case["frame"]], truth, args, repeat))
     rows = [job.result() for job in jobs]
 
-    keys = [mode for mode in ("direct", "computer", "sam", "ocr", "samtext", "grounded", "marks") if mode in args.modes]
+    keys = [mode for mode in ("direct", "call", "computer", "sam", "ocr", "samtext", "grounded", "marks")
+            if mode in args.modes or (mode == "direct" and "call" in args.modes)]
     summary = {key: summarize(rows, key) for key in keys}
     label = f"{args.model}-{args.effort}-{args.long_side}-{time.strftime('%H%M%S')}"
     target = REPORTS / label
@@ -266,7 +294,7 @@ def main() -> None:
             print(f"{key:9} {name:6} {group['hits']:3}/{group['total']:<3} iou {group['iou']}  "
                   f"median {group['median_ms']} ms  p90 {group['p90_ms']} ms")
     errors = sum(1 for row in rows if "error" in row)
-    print("ошибок:", errors, next((row["error"][:200] for row in rows if "error" in row), ""))
+    print("ошибок:", errors, next((row["error"][:80] for row in rows if "error" in row), ""))
     print("папка:", target)
 
 
