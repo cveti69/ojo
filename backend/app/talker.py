@@ -8,7 +8,7 @@ from typing import List, Optional, Sequence, Set, Tuple
 
 from starlette.concurrency import run_in_threadpool
 
-from . import talk
+from . import config, talk
 from .engine import HISTORY_STEPS, Engine
 from .sessions import Session
 
@@ -49,6 +49,7 @@ class Talker:
         session.open_mark = len(session.dialog)
         session.turn += 1
         session.heard = ""
+        session.note("heard", turn=session.turn, said=said)
         session.publish({"type": "heard", "turn": session.turn})
         return session.turn, said
 
@@ -65,11 +66,13 @@ class Talker:
             quick = await run_in_threadpool(talk.check, self._prompt(session, said, 0, quick=True))
         except Exception as error:
             log.warning("Quick line: %s", type(error).__name__)
+            session.note("quick", turn=turn, ms=_ms(started), error=type(error).__name__)
             _drop(seeing)
             if turn == session.turn and session.mode == "lead":  # Beside, this may be talk in the room: better silence.
                 self._say(session, turn, said, {"reply": FAILED, "new_goal": None, "mode": None}, "quick", {})
             return
         timings = {"quick_ms": _ms(started)}
+        session.note("quick", turn=turn, ms=timings["quick_ms"], **quick)
         if turn != session.turn or session.ended:
             _drop(seeing)
         elif quick["needs_screen"]:
@@ -112,6 +115,8 @@ class Talker:
             log.warning("Answer from the screen: %s", type(error).__name__)
             answer = {"reply": FAILED, "new_goal": None, "mode": None}
         timings["screen_ms"] = _ms(started)
+        session.note("head", turn=turn, ms=timings["screen_ms"], effort=session.effort or config.META_TALK_REASONING,
+                     used=session.looking == turn, **answer)
         if session.looking == turn and not session.ended and answer["reply"]:
             self._say(session, turn, said, answer, "screen", timings)
 

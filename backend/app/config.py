@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from pathlib import Path
 
 APP_NAME = os.environ.get("APP_NAME", "OjO")
@@ -24,7 +23,6 @@ ELEVENLABS_MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_v4_turbo")
 ELEVENLABS_VOICE = os.environ.get("ELEVENLABS_VOICE", "JBFqnCBsd6RMkjVDRZzb")
 
 GROUNDING_MODE = os.environ.get("GROUNDING_MODE", "direct")
-SAVE_FRAMES = os.environ.get("SAVE_FRAMES", "0") == "1"
 SHARED_TOKEN = os.environ.get("SHARED_TOKEN", "")
 
 SESSION_TTL_SECONDS = float(os.environ.get("SESSION_TTL_SECONDS", "3600"))
@@ -32,5 +30,5 @@ SESSION_CLEANUP_SECONDS = float(os.environ.get("SESSION_CLEANUP_SECONDS", "30"))
 MAX_FRAME_BYTES = int(os.environ.get("MAX_FRAME_BYTES", "8388608"))
 MAX_FRAME_PIXELS = int(os.environ.get("MAX_FRAME_PIXELS", "20000000"))
 MAX_AUDIO_BYTES = int(os.environ.get("MAX_AUDIO_BYTES", "16777216"))
-FRAMES_DIR = Path(os.environ.get("FRAMES_DIR", str(Path(tempfile.gettempdir()) / "screen-agent-frames")))
+CALLS_DIR = os.environ.get("CALLS_DIR", "")  # A folder outside the repository for a log of every call. Empty keeps nothing.
 HINT_FONT = Path(__file__).resolve().parents[1] / "assets" / "Inter-Bold.otf"

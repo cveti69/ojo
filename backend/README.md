@@ -28,8 +28,7 @@ export ELEVENLABS_API_KEY='задай ключ Eleven Labs, без него фр
 | `META_SAM_MODEL` | `sam-3.1` |
 | `META_REASONING` | `minimal` |
 | `GROUNDING_MODE` | `direct`; реализацию определяет `app/grounding.py` |
-| `SAVE_FRAMES` | `0`; только `1` разрешает запись кадров |
-| `FRAMES_DIR` | `screen-agent-frames` в системной временной папке; обязательно вне репозитория |
+| `CALLS_DIR` | пусто, журнал не ведётся; папка вне репозитория для файла на каждый звонок: что услышано, ответы слоёв, какой кадр видел каждый ответ. Папки 0700, экраны оплаты и пароли не сохраняются |
 | `SESSION_TTL_SECONDS` | `3600`, время без обращений до удаления сессии |
 | `SESSION_CLEANUP_SECONDS` | `30`, период удаления устаревших сессий |
 | `MAX_FRAME_BYTES` / `MAX_FRAME_PIXELS` | `8388608` / `20000000` |

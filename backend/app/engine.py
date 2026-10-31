@@ -7,8 +7,6 @@ import hashlib
 import io
 import re
 import time
-import uuid
-from pathlib import Path
 from typing import Optional
 
 from PIL import Image, UnidentifiedImageError
@@ -111,17 +109,6 @@ async def ready_icons(icons: asyncio.Future) -> list:
         return []
 
 
-def _save_frame(frame: Frame, session_id: str) -> None:
-    directory = config.FRAMES_DIR.expanduser().resolve()
-    repository = Path(__file__).resolve().parents[2]
-    if directory == repository or repository in directory.parents:
-        raise ValueError("FRAMES_DIR должна находиться вне репозитория.")
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    destination = directory / (session_id + "_" + str(frame.timestamp_ms) + "_" + uuid.uuid4().hex[:8] + ".jpg")
-    with destination.open("xb") as output:
-        output.write(frame.jpeg)
-
-
 def _detected_language(answer: dict) -> Optional[str]:
     match = _SCREEN_LANGUAGE.match(answer.get("screen", ""))
     candidates = [answer.get("app_lang"), answer.get("screen_lang"), answer.get("target_lang")]
@@ -205,7 +192,7 @@ class Engine:
         timings = {
             "receive_ms": frame.receive_ms, "model_ms": 0, "box_ms": 0, "image_ms": 0, "send_ms": 0,
             "queue_ms": round((started - frame.received_at) * 1000) - frame.receive_ms,
-            "frame_ts": frame.timestamp_ms,
+            "frame_ts": frame.timestamp_ms, "age_ms": round(time.time() * 1000) - frame.timestamp_ms,
         }
         session.timings = timings
         session.analyzing_gray = frame.gray
@@ -215,8 +202,6 @@ class Engine:
             "new_screen": bool(session.last_step) and changed_share(frame.gray, session.last_step["gray"]) >= (
                 MOVED_ON_SHARE_WITH_EYES if session.eyes else MOVED_ON_SHARE),
         })
-        if config.SAVE_FRAMES:
-            await run_in_threadpool(_save_frame, frame, session.id)
         if outdated(session, revision):
             return
         prompt = step.build_prompt(
@@ -233,11 +218,17 @@ class Engine:
                 "Use [lang=unknown] if the language cannot be identified. Keep the JSON schema."
             )
         icons = asyncio.ensure_future(find_icons(frame))
+        seen = {"outcome": "dropped"}
         try:
-            await self._next_step(session, frame, revision, prompt, timings, icons)
+            await self._next_step(session, frame, revision, prompt, timings, icons, seen)
+        except Exception as error:
+            seen["outcome"] = "failed: " + type(error).__name__
+            raise
         finally:
             icons.cancel()
             session.restarts = session.restarts + 1 if session.stale.is_set() else 0
+            session.note("step", frame_ts=frame.timestamp_ms, age_ms=timings["age_ms"], model_ms=timings["model_ms"],
+                         box_ms=timings["box_ms"], window=frame.window is not None, **seen)
 
     async def _ask(self, session: Session, frame: Frame, prompt: str) -> Optional[dict]:
         """Stops waiting once the person leaves the screen. The call itself cannot be stopped and ends unused."""
@@ -251,7 +242,7 @@ class Engine:
         return model.result() if model.done() else None
 
     async def _next_step(self, session: Session, frame: Frame, revision: int, prompt: str, timings: dict,
-                         icons: asyncio.Future) -> None:
+                         icons: asyncio.Future, seen: dict) -> None:
         stage = time.perf_counter()
         result = await self._ask(session, frame, prompt)
         timings["model_ms"] = round((time.perf_counter() - stage) * 1000)
@@ -265,6 +256,10 @@ class Engine:
         if language and session.target_lang == "auto":
             session.app_lang = language
         needs_confirm = answer["needs_user_confirm"] is True
+        private = needs_confirm or bool(_PRIVATE_SCREEN.search(answer["screen"] + " " + answer["instruction"]))
+        seen.update(frame=session.keep_picture(frame, private), private=private, screen=None if private else answer["screen"],
+                    instruction=answer["instruction"], action=answer["action"], target=answer["target"],
+                    confirm=needs_confirm, done=answer["done"])
         if answer["done"] is True and not needs_confirm:
             session.last_frame_hash = frame.digest
             session.last_analyzed_gray = frame.gray
@@ -272,6 +267,7 @@ class Engine:
             session.texts = []
             session.insert_hint_ru = ""
             session.publish({"type": "done", "text_ru": answer["instruction"].strip() or DONE_TEXT})
+            seen["outcome"] = "done"
             timings["total_ms"] = round((time.perf_counter() - frame.received_at) * 1000)
             return
         texts = [value for value in answer["insert_texts"] if isinstance(value, str) and value.strip()]
@@ -293,11 +289,13 @@ class Engine:
         if outdated(session, revision):
             return
         session.grounding = location
+        seen.update(box=location["box"], box_source=location["source"])
         if same_step(session.last_step, frame, answer["action"], location["box"], needs_confirm):
             session.last_frame_hash = frame.digest
             session.last_analyzed_gray = frame.gray
             session.publish({"type": "status", "state": "broadcasting" if session.broadcasting else "waiting_frames",
                              "text_ru": "Жду изменения экрана"})
+            seen["outcome"] = "same step"
             timings["total_ms"] = round((time.perf_counter() - frame.received_at) * 1000)
             return
         stage = time.perf_counter()
@@ -318,7 +316,7 @@ class Engine:
         if session.eyes:
             event["eyes_box"] = hint.eyes_box(instruction)
             event["gaze"] = window.gaze(frame.window, location["box"], frame.width, frame.height)
-            event["calm"] = needs_confirm or bool(_PRIVATE_SCREEN.search(answer["screen"] + " " + instruction))
+            event["calm"] = private
         session.step_id = step_id
         session.texts = texts
         session.insert_hint_ru = event["insert_hint_ru"]
@@ -333,5 +331,6 @@ class Engine:
         })
         stage = time.perf_counter()
         session.publish(event)
+        seen.update(outcome="hint", step=step_id, said=instruction)
         timings["send_ms"] = round((time.perf_counter() - stage) * 1000)
         timings["total_ms"] = round((time.perf_counter() - frame.received_at) * 1000)

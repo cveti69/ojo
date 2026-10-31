@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import threading
 import time
+from pathlib import Path
 
 import pytest
 from PIL import Image, ImageDraw
@@ -480,18 +482,53 @@ def test_only_recent_screen_texts_are_kept(backend):
     assert len(session.frame_text) == KEPT_FRAME_TEXTS and 11 in session.frame_text
 
 
-def test_frame_storage_is_opt_in_and_outside_repository(backend, monkeypatch):
-    first = new_session(backend.client)
-    post_frame(backend.client, first)
-    idle(backend, first)
-    assert not config.FRAMES_DIR.exists()
-    monkeypatch.setattr(config, "SAVE_FRAMES", True)
-    second = new_session(backend.client)
+def lines_of(folder):
+    return [json.loads(line) for line in (folder / "call.log").read_text(encoding="utf-8").splitlines()]
+
+
+def test_a_call_is_kept_only_when_asked_for_and_outside_the_repository(backend, monkeypatch, tmp_path):
+    session_id = new_session(backend.client)
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    assert not list(tmp_path.glob("calls/*"))
+    monkeypatch.setattr(config, "CALLS_DIR", str(Path(engine.__file__).parents[2] / "calls"))
+    new_session(backend.client)
+    assert not (Path(engine.__file__).parents[2] / "calls").exists()
+
+
+def test_the_log_of_a_call_says_what_the_pointer_saw(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    session_id = new_session(backend.client)
     image = jpeg()
-    post_frame(backend.client, second, image)
-    idle(backend, second)
-    saved = list(config.FRAMES_DIR.glob("*.jpg"))
-    assert len(saved) == 1 and saved[0].read_bytes() == image
+    post_frame(backend.client, session_id, image)
+    idle(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    assert (tmp_path / "calls").stat().st_mode & 0o777 == 0o700 and folder.stat().st_mode & 0o777 == 0o700
+    assert (folder / "frames").stat().st_mode & 0o777 == 0o700 and (folder / "call.log").stat().st_mode & 0o777 == 0o600
+    lines = lines_of(folder)
+    assert [line["kind"] for line in lines[:2]] == ["call", "frame"]
+    step = next(line for line in lines if line["kind"] == "step")
+    assert step["outcome"] == "hint" and step["step"] == "s1" and step["frame"] == "123.jpg" and step["age_ms"] > 0
+    assert (folder / "frames" / "123.jpg").read_bytes() == image
+    assert (folder / "frames" / "123.jpg").stat().st_mode & 0o777 == 0o600
+    assert config.SHARED_TOKEN not in (folder / "call.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("changes", [
+    {"needs_user_confirm": True},
+    {"instruction": "Введи пароль"},
+    {"screen": "Экран оплаты: номер карты"},
+])
+def test_a_private_screen_is_not_written_down(backend, monkeypatch, tmp_path, changes):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    backend.meta.answers = [answer(**changes)]
+    session_id = new_session(backend.client)
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    step = next(line for line in lines_of(folder) if line["kind"] == "step")
+    assert step["private"] is True and step["frame"] is None and step["screen"] is None
+    assert not list((folder / "frames").iterdir())
 
 
 def test_debug_escapes_model_text(backend):

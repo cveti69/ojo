@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from . import config
+from .calllog import CallLog
 
 KEPT_FRAME_TEXTS = 8
 
@@ -78,9 +79,18 @@ class Session:
     frame_text: Dict[int, List[dict]] = field(default_factory=dict)
     task: Optional[asyncio.Task] = None
     subscribers: Set[asyncio.Queue] = field(default_factory=set)
+    call_log: Optional[CallLog] = None
 
     def touch(self) -> None:
         self.last_activity = time.monotonic()
+
+    def note(self, kind: str, **fields: Any) -> None:
+        if self.call_log:
+            self.call_log.write(kind, fields)
+
+    def keep_picture(self, frame: Frame, private: bool) -> Optional[str]:
+        """A payment or password screen is never written down."""
+        return self.call_log.keep(frame.jpeg, frame.timestamp_ms) if self.call_log and not private else None
 
     def remember_text(self, timestamp_ms: int, lines: List[dict]) -> None:
         self.frame_text[timestamp_ms] = lines
@@ -119,6 +129,7 @@ class Session:
         self.subscribers.discard(queue)
 
     def set_goal(self, goal: str) -> None:
+        self.note("goal", goal=goal)
         self.revision += 1
         self.goal = goal
         self.history.clear()
@@ -146,6 +157,7 @@ class Session:
         """Beside drops what the server holds: the screen stays on the phone until the person speaks to the agent."""
         if mode == self.mode:
             return
+        self.note("mode", mode=mode)
         self.mode = mode
         self.revision += 1
         self.pending_frame = None
@@ -158,6 +170,7 @@ class Session:
         self.touch()
 
     def finish(self, text_ru: str = "Сессия завершена") -> None:
+        self.note("end", goal=self.goal, turns=self.turn, steps=self.step_sequence)
         self.ended = True
         self.revision += 1
         self.broadcasting = False
@@ -186,6 +199,10 @@ class SessionStore:
             target_lang=target_lang, text_entry=text_entry, effort=effort, character=character, mode=mode, eyes=eyes,
             app_lang=None if target_lang == "auto" else target_lang,
         )
+        session.call_log = CallLog.start(session.id)
+        session.note("call", goal=goal, mode=mode, user_lang=user_lang, target_lang=target_lang, text_entry=text_entry,
+                     effort=effort, eyes=eyes, pointer=config.META_VISION_MODEL, pointer_effort=config.META_REASONING,
+                     head=config.META_TALK_MODEL, head_effort=config.META_TALK_REASONING, quick=config.META_QUICK_MODEL)
         self.sessions[session.id] = session
         return session
 

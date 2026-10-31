@@ -101,7 +101,7 @@ Screen broadcast, picture-in-picture and the keyboard need a real iPhone.
 
 ## Privacy
 
-Frames are not written to disk unless the server is started with `SAVE_FRAMES=1`. Sessions live in memory. Requests need a shared
+Nothing from a call is written to disk unless the server is started with `CALLS_DIR`, a private folder for debugging calls: payment and password screens stay out of it even then. Sessions live in memory. Requests need a shared
 token. The server uses Meta's standard models, not the Contributor models that allow training on data.
 
 ## License

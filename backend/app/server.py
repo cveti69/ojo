@@ -290,6 +290,7 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
             raise HTTPException(422, str(error)) from None
         require_active(session)
         accepted, reason = processor.submit(session, prepared)
+        session.note("frame", frame_ts=timestamp, accepted=accepted, reason=reason, window=prepared.window is not None)
         result = {"accepted": accepted}
         if reason:
             result["reason"] = reason
@@ -388,6 +389,7 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
     async def moved(session_id: str):
         session = session_or_404(session_id)
         require_active(session)
+        session.note("moved")
         processor.moved(session)
         return {"ok": True}
 
@@ -405,6 +407,7 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
         if session.ended and body.state == "finished":  # The call ended first, so there is nothing left to stop.
             return {"ok": True}
         require_active(session)
+        session.note("broadcast", state=body.state)
         session.broadcasting = body.state == "started"
         if not session.broadcasting:
             session.revision += 1
