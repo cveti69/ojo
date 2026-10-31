@@ -708,6 +708,7 @@ final class CallViewModel: ObservableObject {
     }
 
     private func enqueue(_ line: Line) {
+        guard isCallActive else { return }  // A task from a call that has ended.
         if line.kind == .hint {
             waitingHint = line
         } else {

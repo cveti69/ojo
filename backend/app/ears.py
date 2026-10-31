@@ -20,7 +20,7 @@ PHONE_GAP = 0.4  # A gap this short is the network. Past it the phone has stoppe
 BACKLOG = 50  # Sound kept while the session opens, which takes about two seconds.
 ANSWER_SECONDS = 10
 RETRY_SECONDS = 1
-RETRIES = 5
+LONGEST_WAIT = 10
 connect = websockets.connect
 
 
@@ -44,10 +44,11 @@ class Ears:
         self.task.cancel()
 
     async def _keep_open(self) -> None:
-        """A session ends after an hour or an error, and a phrase lost to that is the only cost of a new one."""
+        """A session ends after an hour or an error, and a phrase lost to that is the only cost of a new one.
+        Through an outage it keeps trying for as long as the call lasts: the phone speaks through files until it is back."""
         failures = 0
         address = config.META_API_BASE.replace("https://", "wss://", 1) + "/asr/realtime"
-        while failures < RETRIES:
+        while True:
             try:
                 async with connect(address, max_size=None) as socket:
                     await socket.send(json.dumps({
@@ -65,7 +66,7 @@ class Ears:
             except Exception as error:
                 failures += 1
                 log.warning("Speech stream: %s", type(error).__name__)
-            await asyncio.sleep(RETRY_SECONDS)
+            await asyncio.sleep(min(RETRY_SECONDS * max(failures, 1), LONGEST_WAIT))
 
     async def _exchange(self, socket) -> None:
         feed = asyncio.create_task(self._feed(socket))

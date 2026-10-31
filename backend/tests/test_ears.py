@@ -138,16 +138,18 @@ def test_a_lost_session_opens_again(monkeypatch):
     assert turns == ["Снова слышу."]
 
 
-def test_a_refused_session_gives_up_quietly(monkeypatch):
-    refused = [FakeSocket() for _ in range(ears.RETRIES)]
+def test_the_stream_comes_back_after_a_long_outage(monkeypatch):
+    refused = [FakeSocket() for _ in range(8)]
     for socket in refused:
         socket.say({"type": "error"})
-    fake_connection(monkeypatch, *refused)
+    fresh = FakeSocket()
+    fake_connection(monkeypatch, *refused, fresh)
+    turns = []
 
     async def scenario():
-        hearing = ears.Ears(lambda said: None)
-        await asyncio.wait_for(hearing.task, 2)
-        hearing.hear(b"nobody listens")
+        hearing = ears.Ears(turns.append)
+        fresh.say({"sessionId": "live"}, {"type": "speechComplete", "transcript": "Снова слышу."})
+        await until(lambda: turns)
         hearing.close()
     run(scenario)
-    assert all(len(socket.sent) == 1 for socket in refused)
+    assert turns == ["Снова слышу."] and all(len(socket.sent) == 1 for socket in refused)

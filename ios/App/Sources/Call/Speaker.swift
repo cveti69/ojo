@@ -31,11 +31,13 @@ final class ServerSpeaker: Speaker {
     private static let sampleRate = 24_000.0
     private static let bufferBytes = 4800  // 100 ms of 16-bit mono.
     private static let longestWait: TimeInterval = 6  // A loud room must not keep the agent silent.
+    private static let breath: TimeInterval = 0.5  // The microphone is deaf through a line and just after it, so it gets time to hear.
     var onSpeaking: ((Bool) -> Void)?
     var onSounding: ((Bool) -> Void)?
     var mayStart: (() -> Bool)?
     let engine = AVAudioEngine()
     private var isSounding = false
+    private var lastSounded = Date.distantPast
     private let fallback: any Speaker
     private let player = AVAudioPlayerNode()
     private let format = AVAudioFormat(standardFormatWithSampleRate: ServerSpeaker.sampleRate, channels: 1)!
@@ -166,7 +168,8 @@ final class ServerSpeaker: Speaker {
     /// The answer may be ready before the person has finished. It holds its first sound until they have.
     private func waitForThePerson() async {
         let started = Date()
-        while let mayStart, !mayStart(), !Task.isCancelled, Date().timeIntervalSince(started) < Self.longestWait {
+        while !Task.isCancelled, Date().timeIntervalSince(started) < Self.longestWait,
+              Date().timeIntervalSince(lastSounded) < Self.breath || mayStart?() == false {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
@@ -174,6 +177,7 @@ final class ServerSpeaker: Speaker {
     private func sounds(_ value: Bool) {
         guard value != isSounding else { return }
         isSounding = value
+        if !value { lastSounded = Date() }
         onSounding?(value)
     }
 
@@ -196,13 +200,15 @@ final class ServerSpeaker: Speaker {
         guard player.isPlaying, let end = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1) else { return }
         end.frameLength = 1
         end.floatChannelData?[0][0] = 0
+        let played = OneWait()
         let watchdog = Task { [weak self] in  // A route change stops the engine with no callback at all.
             try? await Task.sleep(nanoseconds: UInt64((seconds + 2) * 1_000_000_000))
-            if !Task.isCancelled { self?.player.stop() }
+            guard !Task.isCancelled else { return }
+            self?.player.stop()
+            played.end()
         }
-        await withCheckedContinuation { continuation in
-            Self.schedule(end, on: player) { continuation.resume() }
-        }
+        Self.schedule(end, on: player) { played.end() }
+        await played.wait()
         watchdog.cancel()
     }
 
@@ -210,6 +216,29 @@ final class ServerSpeaker: Speaker {
     private nonisolated static func schedule(_ buffer: AVAudioPCMBuffer, on player: AVAudioPlayerNode,
                                              then done: @escaping @Sendable () -> Void) {
         player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { _ in done() }
+    }
+}
+
+/// A wait that whichever comes first can end, and the other finds already over.
+private final class OneWait: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOver = false
+    private var waiting: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            lock.withLock {
+                if isOver { continuation.resume() } else { waiting = continuation }
+            }
+        }
+    }
+
+    func end() {
+        lock.withLock {
+            isOver = true
+            waiting?.resume()
+            waiting = nil
+        }
     }
 }
 
