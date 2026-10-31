@@ -53,6 +53,7 @@ final class CallViewModel: ObservableObject {
     private static let sayingFailed = "Не получилось ответить, повтори, пожалуйста."
     private static let streamWait: UInt64 = 2_500_000_000  // Past this the server has not heard the phrase, so it goes as a file.
     private static let warmthGap: UInt64 = 20_000_000_000
+    private static let screenWait = 1.0
 
     private let audioSession = CallAudioSession()
     private let recorder = GoalAudioRecorder()
@@ -920,6 +921,9 @@ final class CallViewModel: ObservableObject {
             keepQuiet()
             eyes?.stopWaiting(for: .reply)
             dropLines { $0.kind == .filler }
+        case .left:
+            showBesideCard()
+            lastInstruction = Self.besideWords
         }
     }
 
@@ -946,14 +950,14 @@ final class CallViewModel: ObservableObject {
     /// The only way a screen leaves the phone beside the person: the server heard words for the agent and asked.
     private func look(turn: Int) {
         guard let client, let sessionID else { return }
-        let frames = shelf?.recent() ?? []
-        guard !frames.isEmpty else {
-            enqueue(Line(text: "Пока не вижу экран. Покажи его, и я посмотрю.", turn: turn, layer: "screen"))
-            return
-        }
         owesFrameNote = false
         let journal = journal
         Task { [weak self] in
+            guard let frames = await self?.screensNow() else { return }
+            guard !frames.isEmpty else {
+                self?.enqueue(Line(text: "Пока не вижу экран. Покажи его, и я посмотрю.", turn: turn, layer: "screen"))
+                return
+            }
             do {
                 _ = try await client.look(frames, sessionID: sessionID)
                 journal?.append("Кадры отправлены")
@@ -964,6 +968,21 @@ final class CallViewModel: ObservableObject {
                 self?.enqueue(Line(text: Self.sayingFailed, turn: turn, layer: "screen"))
             }
         }
+    }
+
+    /// The shelf with the screen as it is now on top, however little it changed. The broadcast looks for the question four times a second.
+    private func screensNow() async -> [KeptScreen] {
+        if isSharing, let store {
+            let started = Date()
+            let asked = store.screenAsked + 1
+            store.screenAsked = asked
+            while store.screenAnswered != asked, Date().timeIntervalSince(started) < Self.screenWait {
+                try? await Task.sleep(nanoseconds: 40_000_000)
+            }
+            let waited = Int(Date().timeIntervalSince(started) * 1000)
+            journal?.append(store.screenAnswered == asked ? "Свежий кадр за \(waited) мс" : "Свежий кадр не успел за \(waited) мс")
+        }
+        return shelf?.recent() ?? []
     }
 
     private func updateLookingCard(_ status: StatusEvent) {

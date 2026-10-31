@@ -893,6 +893,56 @@ def test_beside_nothing_of_the_shown_screen_stays(backend):
     assert session.last_hint is None and session.last_step is None and session.last_analyzed_gray is None
 
 
+def test_what_was_shown_beside_goes_when_they_leave_the_screen(backend):
+    client = backend.client
+    session_id = new_session(client, mode="beside")
+    backend.meta.talk.append(talk_line("Вот сюда.", show=SHOW))
+    moved = "/sessions/" + session_id + "/moved"
+    with client.websocket_connect("/sessions/" + session_id + "/events", headers=AUTH) as websocket:
+        websocket.receive_json()
+        assert client.post(moved, headers=AUTH).status_code == 200  # Nothing is up, so nothing is said.
+        ask_the_screen(backend, session_id)
+        receive_type(websocket, "hint")
+        client.post(moved, headers=AUTH)
+        client.post(moved, headers=AUTH)
+        receive_type(websocket, "left")
+        ask_the_screen(backend, session_id)
+        events = [websocket.receive_json()]
+        while events[-1].get("layer") != "screen":
+            events.append(websocket.receive_json())
+        assert "left" not in [event["type"] for event in events]
+
+
+def test_no_hint_over_a_screen_they_left_while_the_head_thought(backend):
+    client = backend.client
+    session_id = new_session(client)
+    seen_frame(backend, session_id)
+    backend.meta.talk.append(talk_line("Жми вот сюда.", show=SHOW))
+    backend.meta.talk_hook = lambda: client.post("/sessions/" + session_id + "/moved", headers=AUTH)
+    ask_the_screen(backend, session_id)
+    session = backend.store.sessions[session_id]
+    assert session.step_sequence == 1 and agent_words(backend, session_id)[-1] == "Жми вот сюда."
+
+
+def test_the_pointer_keeps_quiet_while_the_head_thinks(backend):
+    client = backend.client
+    session_id = new_session(client)
+    seen_frame(backend, session_id)
+
+    def point_meanwhile():
+        post_frame(client, session_id, jpeg((20, 30, 40)), timestamp=124)
+        idle(backend, session_id)
+    backend.meta.talk_hook = point_meanwhile
+    with client.websocket_connect("/sessions/" + session_id + "/events", headers=AUTH) as websocket:
+        assert receive_type(websocket, "hint")["step_id"] == "s1"
+        ask_the_screen(backend, session_id)
+        assert receive_type(websocket, "hint")["speak"] is False
+    backend.meta.talk_hook = None
+    post_frame(client, session_id, jpeg((200, 30, 40)), timestamp=125)
+    idle(backend, session_id)
+    assert backend.store.sessions[session_id].last_hint["speak"] is True
+
+
 def test_both_layers_know_the_window_can_show(backend):
     session_id = new_session(backend.client)
     ask_the_screen(backend, session_id)

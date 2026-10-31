@@ -1,6 +1,11 @@
 import Foundation
 
-/// The last settled screens, kept on the phone. They leave it only when the person speaks to the agent.
+public struct KeptScreen: Sendable, Equatable {
+    public let jpeg: Data
+    public let timestampMS: Int64
+}
+
+/// The last different screens, kept on the phone. They leave it only when the person speaks to the agent.
 public struct FrameShelf: Sendable {
     public static let capacity = 4
     private let folder: URL
@@ -16,15 +21,22 @@ public struct FrameShelf: Sendable {
         folder = directory.appendingPathComponent("kept-frames", isDirectory: true)
     }
 
-    public func put(_ jpeg: Data, timestampMS: Int64) throws {
+    /// A newer look at the same screen takes the place of the old one, or repeats would push out the page before it.
+    public func put(_ jpeg: Data, timestampMS: Int64, sameScreen: Bool = false) throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try jpeg.write(to: folder.appendingPathComponent("\(timestampMS).jpg"), options: .atomic)
+        let file = folder.appendingPathComponent("\(timestampMS).jpg")
+        let replaced = sameScreen ? files().last : nil
+        try jpeg.write(to: file, options: .atomic)
+        if let replaced, replaced.lastPathComponent != file.lastPathComponent { try? FileManager.default.removeItem(at: replaced) }
         for old in files().dropLast(Self.capacity) { try? FileManager.default.removeItem(at: old) }
     }
 
     /// Oldest first, and the last one is the screen now.
-    public func recent() -> [Data] {
-        files().compactMap { try? Data(contentsOf: $0) }
+    public func recent() -> [KeptScreen] {
+        files().compactMap { file in
+            guard let jpeg = try? Data(contentsOf: file), let time = Int64(file.deletingPathExtension().lastPathComponent) else { return nil }
+            return KeptScreen(jpeg: jpeg, timestampMS: time)
+        }
     }
 
     public func clear() {

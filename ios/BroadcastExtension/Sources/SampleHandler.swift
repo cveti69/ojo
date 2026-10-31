@@ -10,9 +10,8 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         static let interval: TimeInterval = 0.5
         static let maximumDimension: CGFloat = 1000
         static let jpegQuality = 0.6
-        static let thumbnailSide = 64
+        static let thumbnailSide = 256  // At 64 a price digit or a thin check mark changes nothing.
         static let changeThreshold = 0.025
-        static let movedThreshold = 0.08  // New screens change a frame by 0.17 and more, a new picture in our window by 0.06 at most.
         static let movedShare = 0.3  // With our window left out. On public pages a banner or a video reaches 0.29, the keyboard 0.33, a new screen 0.63.
         static let memoryReserve = 8 * 1024 * 1024
         static let textMemoryReserve = 16 * 1024 * 1024
@@ -26,7 +25,6 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         let client: ServerClient
         let mailbox: ScreenTextMailbox?
         let shelf: FrameShelf?
-        let leavesWindowOut: Bool  // Our window moves when it shows eyes, and that must not look like a moving screen.
     }
 
     private struct FrameCheck {
@@ -68,6 +66,8 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private var firstTextReadLogged = false
     private var textPaused = false
     private var heldSample: Sample?
+    private var newestSample: Sample?
+    private var answeredAsk = 0
     private var stillness = ScreenStillness()
     private var movedSent = false
     private var windowPatch: ScreenPatch?
@@ -97,11 +97,13 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             guard !settings.token.isEmpty else { throw ClientError.missingToken }
             let run = Run(id: id, sessionID: sessionID, store: store, journal: journal,
                           client: ServerClient(settings: settings), mailbox: try? ScreenTextMailbox(configuration: configuration),
-                          shelf: try? FrameShelf(configuration: configuration), leavesWindowOut: settings.eyes)
+                          shelf: try? FrameShelf(configuration: configuration))
             let ticket = UUID()
+            let asked = store.screenAsked
             lock.withLock {
                 self.run = run
                 seenMode = settings.mode
+                answeredAsk = asked
                 requestInFlight = true
                 requestID = ticket
             }
@@ -134,6 +136,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         let now = ProcessInfo.processInfo.systemUptime
         let check: FrameCheck? = lock.withLock {
             guard !finished, run != nil else { return nil }
+            newestSample = sample
             let check = beginCheck(now: now)
             // The system sends nothing once the screen goes still, so the newest skipped sample waits for the monitor.
             heldSample = check == nil ? sample : nil
@@ -174,28 +177,27 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         // ReplayKit owns the sample; only the pixel buffer of the newest one is ever kept.
         autoreleasepool {
             let timestamp = Int64(sample.capturedAt.timeIntervalSince1970 * 1000)
-            var image = CIImage(cvPixelBuffer: sample.buffer)
-            if let orientation = sample.orientation { image = image.oriented(orientation) }
-            image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
+            let image = upright(sample)
             let size = image.extent.size
             guard size.width > 0, size.height > 0 else { return }
             let thumbnail = makeThumbnail(image)
-            let patch = check.run.leavesWindowOut ? findWindow(image) : nil
+            let patch = findWindow(image)
             let previous = size == check.previousSize ? check.previousThumbnail : nil
             let change = previous.map { ScreenStillness.difference(thumbnail, $0, outside: patch) }
+            let cells = previous.map { ScreenStillness.changedCells(thumbnail, $0, outside: patch) } ?? 0
             let now = ProcessInfo.processInfo.systemUptime
-            let (settled, afterMove, waited) = lock.withLock { (stillness.see(thumbnail, at: now, outside: patch), movedSent, stillness.waited) }
-            guard (change ?? 1) >= Capture.changeThreshold || afterMove else {
+            let (settled, isQuiet, afterMove, waited) = lock.withLock {
+                (stillness.see(thumbnail, at: now, outside: patch), stillness.isQuiet, movedSent, stillness.waited)
+            }
+            let large = (change ?? 1) >= Capture.changeThreshold || afterMove
+            guard large || cells >= ScreenStillness.smallChange else {
                 skipFrame(runID: check.run.id)
                 return
             }
-            let mode = check.run.store.callMode
-            guard settled else {
+            guard large ? settled : isQuiet else {
                 hold(sample, runID: check.run.id)  // Frames stop with the screen, so the monitor looks at this one again.
-                if mode == .lead, let previous, let change {
-                    let moved = check.run.leavesWindowOut ? ScreenStillness.changedShare(thumbnail, previous, outside: patch) >= Capture.movedShare
-                        : change >= Capture.movedThreshold
-                    if moved { signalMoved(check.run) }
+                if large, let previous, ScreenStillness.changedShare(thumbnail, previous, outside: patch) >= Capture.movedShare {
+                    signalMoved(check.run)
                 }
                 skipFrame(runID: check.run.id)
                 return
@@ -203,21 +205,31 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             if waited > 0 {
                 check.run.journal.append("Экран успокоился за \(String(format: "%.1f", locale: Locale(identifier: "ru_RU"), waited)) с")
             }
-            let scale = min(1, Capture.maximumDimension / max(size.width, size.height))
-            let bounds = CGRect(x: 0, y: 0, width: floor(size.width * scale), height: floor(size.height * scale))
-            let resized = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale)).cropped(to: bounds)
-            guard let jpeg = makeJPEG(resized) else {
+            guard let jpeg = makeSmallJPEG(image) else {
                 skipFrame(runID: check.run.id)
                 check.run.journal.append("Не удалось сжать кадр")
                 return
             }
-            keep(KeptFrame(jpeg: jpeg, thumbnail: thumbnail, size: size, timestamp: timestamp), run: check.run)
-            if mode == .lead {
-                _ = upload(jpeg, sample: sample, thumbnail: thumbnail, size: size, timestamp: timestamp, run: check.run)
+            keep(KeptFrame(jpeg: jpeg, thumbnail: thumbnail, size: size, timestamp: timestamp), outside: patch, run: check.run)
+            if check.run.store.callMode == .lead {
+                _ = upload(jpeg, sample: sample, thumbnail: thumbnail, size: size, timestamp: timestamp, small: !large, run: check.run)
             } else {
                 frameCompleted(delivered: true, thumbnail: thumbnail, size: size, runID: check.run.id)
             }
         }
+    }
+
+    private func upright(_ sample: Sample) -> CIImage {
+        var image = CIImage(cvPixelBuffer: sample.buffer)
+        if let orientation = sample.orientation { image = image.oriented(orientation) }
+        return image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
+    }
+
+    private func makeSmallJPEG(_ image: CIImage) -> Data? {
+        let size = image.extent.size
+        let scale = min(1, Capture.maximumDimension / max(size.width, size.height))
+        let bounds = CGRect(x: 0, y: 0, width: floor(size.width * scale), height: floor(size.height * scale))
+        return makeJPEG(image.transformed(by: CGAffineTransform(scaleX: scale, y: scale)).cropped(to: bounds))
     }
 
     private func hold(_ sample: Sample, runID id: UUID) {
@@ -234,10 +246,38 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         Task { _ = try? await run.client.moved(sessionID: run.sessionID) }
     }
 
-    private func keep(_ frame: KeptFrame, run: Run) {
-        lock.withLock { if runID == run.id { keptFrame = frame } }
-        do { try run.shelf?.put(frame.jpeg, timestampMS: frame.timestamp) }
+    private func keep(_ frame: KeptFrame, outside patch: ScreenPatch?, run: Run) {
+        let sameScreen = lock.withLock { () -> Bool in
+            guard runID == run.id else { return false }
+            defer { keptFrame = frame }
+            guard let kept = keptFrame, kept.size == frame.size else { return false }
+            return ScreenStillness.changedShare(frame.thumbnail, kept.thumbnail, outside: patch) < Capture.movedShare
+        }
+        do { try run.shelf?.put(frame.jpeg, timestampMS: frame.timestamp, sameScreen: sameScreen) }
         catch { run.journal.append("Не удалось сохранить кадр: \(error.localizedDescription)") }
+    }
+
+    /// The person spoke to the agent, so the app wants the screen as it is now: however little it changed, settled or not.
+    /// This goes past every check above and only onto the shelf. Whether it also goes to the server stays up to them.
+    private func answerAsk(run: Run) {
+        let asked = run.store.screenAsked
+        let found: (isNew: Bool, sample: Sample?) = lock.withLock {
+            guard runID == run.id, !finished, asked != answeredAsk else { return (false, nil) }
+            answeredAsk = asked
+            textPaused = false
+            return (true, newestSample)
+        }
+        guard found.isNew else { return }
+        defer { run.store.screenAnswered = asked }
+        guard let sample = found.sample, os_proc_available_memory() >= Capture.memoryReserve else { return }
+        autoreleasepool {
+            let image = upright(sample)
+            let timestamp = Int64(sample.capturedAt.timeIntervalSince1970 * 1000)
+            guard image.extent.width > 0, image.extent.height > 0, let jpeg = makeSmallJPEG(image) else { return }
+            let frame = KeptFrame(jpeg: jpeg, thumbnail: makeThumbnail(image), size: image.extent.size, timestamp: timestamp)
+            keep(frame, outside: findWindow(image), run: run)
+            scheduleScreenText(jpeg: jpeg, timestamp: timestamp, run: run)
+        }
     }
 
     override func broadcastPaused() { currentJournal?.append("Трансляция приостановлена системой") }
@@ -281,6 +321,8 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             firstTextReadLogged = false
             textPaused = false
             heldSample = nil
+            newestSample = nil
+            answeredAsk = 0
             stillness = ScreenStillness()
             movedSent = false
             windowPatch = nil
@@ -301,7 +343,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     }
 
     @discardableResult
-    private func upload(_ jpeg: Data, sample: Sample?, thumbnail: [UInt8], size: CGSize, timestamp: Int64, run: Run) -> Bool {
+    private func upload(_ jpeg: Data, sample: Sample?, thumbnail: [UInt8], size: CGSize, timestamp: Int64, small: Bool = false, run: Run) -> Bool {
         let ticket = UUID()
         let reserved = lock.withLock { () -> Bool in
             guard runID == run.id, !finished, !requestInFlight else { return false }
@@ -312,7 +354,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         guard reserved else { return false }
         let task = Task { [self] in
             do {
-                let reply = try await run.client.sendFrame(jpeg, sessionID: run.sessionID, width: Int(size.width), height: Int(size.height), timestampMS: timestamp)
+                let reply = try await run.client.sendFrame(jpeg, sessionID: run.sessionID, width: Int(size.width), height: Int(size.height), timestampMS: timestamp, small: small)
                 // With the goal reached or waiting for the person, nothing reads this text.
                 lock.withLock { textPaused = reply.reason == "done" || reply.reason == "user_confirm" }
                 // Any decoded server response confirms delivery, including all skip reasons.
@@ -493,6 +535,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             finished = true
             previousThumbnail = nil
             heldSample = nil
+            newestSample = nil
             keptFrame = nil
             let state = (true, !requestInFlight, requestTask, textTask, heartbeat, memoryPressure, journal, sent, skipped)
             heartbeat = nil
@@ -556,6 +599,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 if self.runID == run.id, !self.finished {
                     self.previousThumbnail = nil
                     self.heldSample = nil
+                    self.newestSample = nil
                 }
             }
             self.context.clearCaches()
@@ -577,9 +621,10 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             guard runID == run.id, !finished else { return nil }
             let report = now - lastStatistics >= 5
             if report { lastStatistics = now }
-            return (report, sent, skipped, requestInFlight, run.leavesWindowOut ? "; окно на кадрах: \(windowFinds) из \(windowLooks)" : "")
+            return (report, sent, skipped, requestInFlight, "; окно на кадрах: \(windowFinds) из \(windowLooks)")
         }
         guard let statistics else { return }
+        answerAsk(run: run)
         sendHeldSample()
         sendOwedFrame(run: run)
         if run.store.sessionID != run.sessionID {

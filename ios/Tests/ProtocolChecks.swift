@@ -117,7 +117,8 @@ private enum ProtocolChecks {
         try check(spoken == 4, "speech bytes")
         let said = try await client.say(Data("RIFFtestWAVE".utf8), sessionID: created.sessionID)
         try check(said.heard && said.speechMS == 1200, "spoken line response decoding")
-        let looked = try await client.look([Data([1, 2]), Data([3, 4])], sessionID: created.sessionID)
+        let looked = try await client.look([KeptScreen(jpeg: Data([1, 2]), timestampMS: 15), KeptScreen(jpeg: Data([3, 4]), timestampMS: 16)],
+                                           sessionID: created.sessionID)
         try check(looked.ok, "look response")
         _ = try await client.setMode(.beside, sessionID: created.sessionID)
         _ = try await client.moved(sessionID: created.sessionID)
@@ -186,6 +187,7 @@ private enum ProtocolChecks {
         try check(lookType.hasPrefix("multipart/form-data; boundary="), "look format")
         let lookBody = String(decoding: try body(of: lookRequest), as: UTF8.self)
         try check(lookBody.components(separatedBy: #"name="frame""#).count == 3 && lookBody.hasSuffix("--\r\n"), "look sends every frame")
+        try check(lookBody.contains(#"filename="15.jpg""#) && lookBody.contains(#"filename="16.jpg""#), "each frame says when it was taken")
         let modeRequest = requests.first { $0.url!.path.hasSuffix("/mode") }!
         let modeBody = try JSONSerialization.jsonObject(with: body(of: modeRequest)) as! [String: String]
         try check(modeBody == ["mode": "beside"], "mode body")
@@ -201,7 +203,8 @@ private enum ProtocolChecks {
         try check(upload.httpMethod == "POST" && upload.value(forHTTPHeaderField: "Content-Type") == "image/jpeg", "frame format")
         try check(upload.value(forHTTPHeaderField: "X-Frame-Width") == "1170"
                   && upload.value(forHTTPHeaderField: "X-Frame-Height") == "2532"
-                  && upload.value(forHTTPHeaderField: "X-Frame-Ts") == "123456789", "frame metadata")
+                  && upload.value(forHTTPHeaderField: "X-Frame-Ts") == "123456789"
+                  && upload.value(forHTTPHeaderField: "X-Frame-Small") == nil, "frame metadata")
         let screenText = requests.first { $0.url!.path.hasSuffix("/text") }!
         let textBody = try JSONDecoder().decode(ScreenTextRequest.self, from: body(of: screenText))
         try check(screenText.url!.path == "/api/sessions/session-test/text" && screenText.httpMethod == "POST"
@@ -226,6 +229,9 @@ private enum ProtocolChecks {
                   && say.timings.quickMS == 900 && say.timings.screenMS == nil, "say event fields")
         guard case .heard(let heard) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"heard","turn":4}"#.utf8)), heard.turn == 4 else {
             throw CheckFailure(description: "heard event")
+        }
+        guard case .left = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"left"}"#.utf8)) else {
+            throw CheckFailure(description: "left event")
         }
         guard case .look(let look) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"look","turn":5}"#.utf8)), look.turn == 5 else {
             throw CheckFailure(description: "look event")
@@ -329,6 +335,7 @@ private enum ProtocolChecks {
         try check(ScreenStillness.difference(side, other) > 0.1 && ScreenStillness.difference(side, side) == 0, "difference")
         try check(ScreenStillness.difference(side, []) == 1, "different sizes count as a new screen")
         try checkWindowLeftOut()
+        try checkSmallChange()
         try checkWindowFinder()
         try checkEyes()
     }
@@ -349,6 +356,7 @@ private enum ProtocolChecks {
         let patch = ScreenPatch(left: 6.0 / 64, top: 20.0 / 64, right: 28.0 / 64, bottom: 46.0 / 64, side: 64)
         try check(patch.left == 5 && patch.top == 19 && patch.right == 29 && patch.bottom == 47, "the patch takes one more cell")
         try check(ScreenPatch(left: 0, top: 0, right: 1, bottom: 1, side: 64).right == 64, "the patch stays on the picture")
+        try check(ScreenPatch(left: 0.25, top: 0.25, right: 0.5, bottom: 0.5, side: 256).left == 60, "the edge is as wide on a larger picture")
         try check(ScreenStillness.difference(movingWindow(0), movingWindow(1)) >= ScreenStillness.threshold, "eyes do move the small picture")
         try check(ScreenStillness.difference(movingWindow(0), movingWindow(1), outside: patch) == 0, "the window is left out")
         func settles(outside patch: ScreenPatch?) -> Double {
@@ -367,6 +375,31 @@ private enum ProtocolChecks {
         var banner = page
         for index in 0..<(64 * 14) { banner[index] = 30 }
         try check(ScreenStillness.changedShare(page, banner, outside: patch) < 0.3, "a banner does not")
+    }
+
+    private static func checkSmallChange() throws {
+        let side = 256
+        let page = [UInt8](repeating: 200, count: side * side)
+        var checked = page
+        for y in 100..<104 { for x in 50..<53 { checked[y * side + x] = 40 } }
+        try check(ScreenStillness.changedCells(page, checked) == 12 && 12 >= ScreenStillness.smallChange, "a check mark counts")
+        let patch = ScreenPatch(left: 0.1, top: 0.3, right: 0.4, bottom: 0.5, side: side)
+        try check(ScreenStillness.changedCells(page, checked, outside: patch) == 0, "our window does not")
+        var clock = page
+        for y in 5..<15 { for x in 20..<40 { clock[y * side + x] = 40 } }
+        try check(ScreenStillness.changedCells(page, clock) == 0, "nor does the clock in the status bar")
+        var stillness = ScreenStillness()
+        _ = stillness.see(page, at: 0)
+        _ = stillness.see(checked, at: 0.5)
+        _ = stillness.see(checked, at: 1)
+        try check(!stillness.isQuiet, "a small change is not trusted at once")
+        _ = stillness.see(checked, at: 1.75)
+        try check(stillness.isQuiet, "once it stays, it is real")
+        var blinking = ScreenStillness()
+        for look in 0..<12 {
+            _ = blinking.see(look.isMultiple(of: 2) ? page : checked, at: Double(look) * 0.5)
+            try check(!blinking.isQuiet, "a cursor or a countdown never gets quiet")
+        }
     }
 
     private static func picture(width: Int, height: Int, window: (x: Int, y: Int, width: Int)?) -> [UInt8] {
@@ -553,7 +586,12 @@ private enum ProtocolChecks {
         let shelf = FrameShelf(directory: directory)
         try check(shelf.recent().isEmpty, "an empty shelf")
         for number in [9, 10, 11, 100, 101, 102] { try shelf.put(Data([UInt8(number)]), timestampMS: Int64(number)) }
-        try check(shelf.recent() == [Data([11]), Data([100]), Data([101]), Data([102])], "the newest four, oldest first")
+        try check(shelf.recent() == [11, 100, 101, 102].map { KeptScreen(jpeg: Data([UInt8($0)]), timestampMS: Int64($0)) },
+                  "the newest four, oldest first")
+        try shelf.put(Data([103]), timestampMS: 103, sameScreen: true)
+        try check(shelf.recent().map(\.timestampMS) == [11, 100, 101, 103], "a new look at the same screen keeps the page before it")
+        try shelf.put(Data([104]), timestampMS: 103, sameScreen: true)
+        try check(shelf.recent().last == KeptScreen(jpeg: Data([104]), timestampMS: 103), "the same moment twice is one file")
         shelf.clear()
         shelf.clear()
         try check(shelf.recent().isEmpty, "clearing leaves nothing, and twice is harmless")

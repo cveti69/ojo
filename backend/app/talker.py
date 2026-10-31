@@ -83,6 +83,13 @@ class Talker:
         said, session.heard = session.heard, ""
         turn = session.turn
         session.looking = turn
+        try:
+            await self._answer_from(session, turn, said, frames)
+        finally:
+            if session.looking == turn:
+                session.looking = 0
+
+    async def _answer_from(self, session: Session, turn: int, said: str, frames: Sequence[Frame]) -> None:
         started = time.perf_counter()
         newest = frames[-1]
         try:
@@ -98,7 +105,7 @@ class Talker:
         if session.looking != turn or session.ended or not answer["reply"]:
             return
         self._change(session, answer, newest)
-        if answer["show"]:
+        if answer["show"] and session.moved_at < newest.received_at:  # Over a screen they have left it would only send them back.
             await self.engine.show(session, newest, answer["reply"], answer["show"], answer["private"], timings["screen_ms"])
             if session.looking != turn or session.ended:
                 return

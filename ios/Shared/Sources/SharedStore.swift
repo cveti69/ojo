@@ -110,6 +110,29 @@ public final class SharedStore: @unchecked Sendable {
         }
     }
 
+    /// The app raises it to get the screen as it is now, and the broadcast sets `screenAnswered` to it once that is on the shelf.
+    public var screenAsked: Int {
+        get {
+            refresh()
+            return defaults.integer(forKey: "screenAsked")
+        }
+        set {
+            defaults.set(newValue, forKey: "screenAsked")
+            defaults.synchronize()
+        }
+    }
+
+    public var screenAnswered: Int {
+        get {
+            refresh()
+            return defaults.integer(forKey: "screenAnswered")
+        }
+        set {
+            defaults.set(newValue, forKey: "screenAnswered")
+            defaults.synchronize()
+        }
+    }
+
     public var measuresAppleSpeech: Bool {
         get { defaults.bool(forKey: "measuresAppleSpeech") }
         set {

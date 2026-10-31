@@ -34,12 +34,13 @@ public final class ServerClient: Sendable {
         return try JSONDecoder().decode(TextResponse.self, from: data)
     }
 
-    public func sendFrame(_ jpeg: Data, sessionID: String, width: Int, height: Int, timestampMS: Int64) async throws -> FrameResponse {
+    public func sendFrame(_ jpeg: Data, sessionID: String, width: Int, height: Int, timestampMS: Int64, small: Bool = false) async throws -> FrameResponse {
         var request = try request("POST", ["sessions", sessionID, "frames"])
         request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
         request.setValue(String(width), forHTTPHeaderField: "X-Frame-Width")
         request.setValue(String(height), forHTTPHeaderField: "X-Frame-Height")
         request.setValue(String(timestampMS), forHTTPHeaderField: "X-Frame-Ts")
+        if small { request.setValue("1", forHTTPHeaderField: "X-Frame-Small") }
         let (data, response) = try await session.upload(for: request, from: jpeg)
         try validate(response)
         return try JSONDecoder().decode(FrameResponse.self, from: data)
@@ -89,12 +90,12 @@ public final class ServerClient: Sendable {
     }
 
     /// The screens the phone kept, oldest first. Only a line that needs them may send them.
-    public func look(_ frames: [Data], sessionID: String) async throws -> OKResponse {
+    public func look(_ frames: [KeptScreen], sessionID: String) async throws -> OKResponse {
         let boundary = "ojo-" + UUID().uuidString
         var body = Data()
-        for (index, frame) in frames.enumerated() {
-            body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"frame\"; filename=\"\(index).jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".utf8))
-            body.append(frame)
+        for frame in frames {
+            body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"frame\"; filename=\"\(frame.timestampMS).jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".utf8))
+            body.append(frame.jpeg)
             body.append(Data("\r\n".utf8))
         }
         body.append(Data("--\(boundary)--\r\n".utf8))

@@ -84,11 +84,11 @@ def wav(rate=16000, channels=1, sample_width=2):
     return output.getvalue()
 
 
-def post_frame(client, session_id, image=None, timestamp=123):
+def post_frame(client, session_id, image=None, timestamp=123, small=False):
     return client.post(
         "/sessions/" + session_id + "/frames", content=jpeg() if image is None else image,
         headers={**AUTH, "Content-Type": "image/jpeg", "X-Frame-Width": "390", "X-Frame-Height": "844",
-                 "X-Frame-Ts": str(timestamp)},
+                 "X-Frame-Ts": str(timestamp), **({"X-Frame-Small": "1"} if small else {})},
     )
 
 
@@ -135,6 +135,7 @@ class FakeMeta:
         self.talk_calls = []
         self.talk_efforts = []
         self.talk_seconds = 0
+        self.talk_hook = None
         self.hook = None
         self.active = 0
         self.max_active = 0
@@ -157,6 +158,8 @@ class FakeMeta:
                 self.talk_efforts.append(effort)
                 response = self.talk.pop(0) if self.talk else talk_line()
             time.sleep(self.talk_seconds)
+            if self.talk_hook:
+                self.talk_hook()
             if isinstance(response, Exception):
                 raise response
             return {"text": json.dumps(response, ensure_ascii=False), "usage": {}, "ms": 1}

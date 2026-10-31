@@ -26,6 +26,7 @@ class Frame:
     received_at: float
     receive_ms: int
     window: Optional[List[float]] = None
+    small: bool = False  # The phone saw a small change that has settled, too small for the grey picture here.
 
 
 @dataclass
@@ -43,7 +44,7 @@ class Session:
     turn: int = 0
     open_words: str = ""
     open_mark: int = 0
-    looking: int = 0
+    looking: int = 0  # The turn the head is thinking about.
     written_turn: int = 0
     ears: Any = None
     app_lang: Optional[str] = None
@@ -65,6 +66,8 @@ class Session:
     analyzing_gray: Optional[bytes] = None
     stale: asyncio.Event = field(default_factory=asyncio.Event)
     restarts: int = 0
+    shown: bool = False  # Beside the person: what the head showed is still in the window.
+    moved_at: float = 0
     last_activity: float = field(default_factory=time.monotonic)
     last_frame: Optional[Frame] = None
     pending_frame: Optional[Frame] = None
@@ -171,6 +174,7 @@ class Session:
         self.last_frame_hash = None
         self.last_analyzed_gray = None
         self.last_step = None
+        self.shown = False
         self.frame_text.clear()
         self.completed = False
         self.touch()

@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 from . import meta
 
 MIN_TEXT_MATCH = 0.78
-TEXT_DISTANCE_WEIGHT = 3  # A spelling 0.1 worse still wins when it is 3% of the frame closer to the guess.
+TEXT_DISTANCE_WEIGHT = 1  # A spelling 0.1 worse still wins when it is 10% of the frame closer: the model's box can be a row off.
 MAX_UNSPACED_WORDS = 6
 FONT = Path(__file__).parent.parent / "assets" / "Inter-Bold.otf"
 MARK_FONT_SIZE = 13
@@ -130,9 +130,11 @@ def locate(jpeg: bytes, width: int, height: int, answer: dict, lines: list[dict]
     if marks and target.get("mark_id") in marks:
         return {"box": marks[target["mark_id"]], "source": "mark", "ms": 0}
     shape = any(word in target["object"].lower() for word in SHAPE_WORDS)
-    snapped = None if shape else snap_to_text(target["label"], near, lines or [])
-    if snapped:
+    snapped = snap_to_text(target["label"], near, lines or [])
+    if snapped and not shape:
         return {"box": snapped, "source": "text", "ms": 0}
+    if snapped:  # The model's box can be a row off, and the words next to a radio button say which row it is.
+        near = [near[0], snapped[1], near[2], snapped[3]] if near else snapped
     icon = snap_to_icon(near, icons or [], width / height)
     if icon:
         return {"box": icon, "source": "icon", "ms": 0}
@@ -145,6 +147,8 @@ def locate(jpeg: bytes, width: int, height: int, answer: dict, lines: list[dict]
         ms = found["ms"]
         if found["box"]:
             return {"box": found["box"], "source": "sam", "ms": ms}
+    if snapped:
+        return {"box": snapped, "source": "text", "ms": ms}
     return {"box": near, "source": "model" if near else "none", "ms": ms}
 
 

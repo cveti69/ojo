@@ -34,7 +34,7 @@ _PRIVATE_SCREEN = re.compile(r"парол|\bкарт[аыуеой]|пин-код
 
 
 def prepare_frame(jpeg: bytes, source_width: int, source_height: int, timestamp_ms: int,
-                  received_at: float) -> Frame:
+                  received_at: float, small: bool = False) -> Frame:
     """From here on our own window is a grey patch, so its changing picture never counts as a new screen."""
     try:
         with Image.open(io.BytesIO(jpeg)) as image:
@@ -53,7 +53,7 @@ def prepare_frame(jpeg: bytes, source_width: int, source_height: int, timestamp_
     return Frame(
         jpeg=jpeg, width=width, height=height, source_width=source_width, source_height=source_height,
         timestamp_ms=timestamp_ms, gray=gray, digest=hashlib.sha256(gray).hexdigest(),
-        received_at=received_at, receive_ms=round((time.perf_counter() - received_at) * 1000), window=found,
+        received_at=received_at, receive_ms=round((time.perf_counter() - received_at) * 1000), window=found, small=small,
     )
 
 
@@ -145,7 +145,7 @@ class Engine:
             return False, "user_confirm"
         if session.completed:
             return False, "done"
-        if same_frame(frame.gray, session.last_analyzed_gray):
+        if same_frame(frame.gray, session.last_analyzed_gray) and not frame.small:
             if session.last_status["state"] == "analyzing":  # It moved and came back to the same screen.
                 session.publish({"type": "status", "state": "broadcasting", "text_ru": "Жду изменения экрана"})
             return False, "unchanged"
@@ -155,6 +155,10 @@ class Engine:
 
     def moved(self, session: Session) -> None:
         """The screen started to change, and frames wait until it stops. A hint for the old one would only send them back."""
+        session.moved_at = time.perf_counter()
+        if session.mode == "beside" and session.shown:
+            session.shown = False
+            session.publish({"type": "left"})
         if session.mode != "lead" or session.completed or session.needs_user_confirm or not session.last_step:
             return
         if session.busy and session.restarts < MAX_RESTARTS:
@@ -167,7 +171,7 @@ class Engine:
             while not session.ended:
                 if session.needs_user_confirm or session.completed:
                     break
-                if not same_frame(frame.gray, session.last_analyzed_gray):
+                if frame.small or not same_frame(frame.gray, session.last_analyzed_gray):
                     revision = session.revision
                     try:
                         await self._analyze(session, frame, revision)
@@ -294,6 +298,7 @@ class Engine:
         session.publish(event)
         if session.mode == "beside":
             session.last_hint = None
+            session.shown = True
         else:
             session.last_step = {"action": action, "box": location["box"], "confirm": confirm, "gray": frame.gray}
             session.last_frame_hash = frame.digest
@@ -361,8 +366,10 @@ class Engine:
             return
         stage = time.perf_counter()
         session.needs_user_confirm = needs_confirm
-        step_id = self._put_up(session, frame, image, location, answer["action"], instruction, texts=texts,
-                               insert_hint=answer["insert_hint_ru"], paste_text=paste_text, confirm=needs_confirm, calm=private,
+        step_id = self._put_up(session, frame, image, location, answer["action"], instruction,
+                               speak=not (session.heard or session.looking),  # The answer they are waiting for goes first.
+                               texts=texts, insert_hint=answer["insert_hint_ru"], paste_text=paste_text,
+                               confirm=needs_confirm, calm=private,
                                timings={"queue_ms": timings["queue_ms"], "model_ms": timings["model_ms"], "box_ms": timings["box_ms"],
                                         "box_source": location["source"], "window": frame.window is not None})
         seen.update(outcome="hint", step=step_id, said=instruction)

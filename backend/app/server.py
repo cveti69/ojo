@@ -281,7 +281,8 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
     async def frame(session_id: str, request: Request,
                     width: int = Header(alias="X-Frame-Width", gt=0, le=20000),
                     height: int = Header(alias="X-Frame-Height", gt=0, le=20000),
-                    timestamp: int = Header(alias="X-Frame-Ts", ge=0)):
+                    timestamp: int = Header(alias="X-Frame-Ts", ge=0),
+                    small: bool = Header(alias="X-Frame-Small", default=False)):
         started = time.perf_counter()
         session = session_or_404(session_id)
         require_active(session)
@@ -291,12 +292,12 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
             raise HTTPException(415, "Нужен кадр image/jpeg.")
         body = await read_body(request, config.MAX_FRAME_BYTES)
         try:
-            prepared = await run_in_threadpool(prepare_frame, body, width, height, timestamp, started)
+            prepared = await run_in_threadpool(prepare_frame, body, width, height, timestamp, started, small)
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
         require_active(session)
         accepted, reason = processor.submit(session, prepared)
-        session.note("frame", frame_ts=timestamp, accepted=accepted, reason=reason, window=prepared.window is not None)
+        session.note("frame", frame_ts=timestamp, accepted=accepted, reason=reason, window=prepared.window is not None, small=small)
         result = {"accepted": accepted}
         if reason:
             result["reason"] = reason

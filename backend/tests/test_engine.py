@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw
 
 from app import config, engine, grounding, meta
 from app.sessions import KEPT_FRAME_TEXTS
-from conftest import AUTH, answer, idle, jpeg, new_session, post_frame
+from conftest import AUTH, answer, idle, jpeg, new_session, post_frame, real_locate
 
 
 def with_floating_window(color):
@@ -462,6 +462,30 @@ def test_screen_text_and_icons_reach_locate(backend, monkeypatch):
     assert post_frame(backend.client, session_id, timestamp=77).json()["accepted"] is True
     idle(backend, session_id)
     assert calls == [(lines, [[0.1, 0.1, 0.2, 0.2]])]
+
+
+def test_a_small_change_is_looked_at_though_the_grey_picture_is_the_same(backend):
+    session_id = new_session(backend.client)
+    post_frame(backend.client, session_id, timestamp=1)
+    idle(backend, session_id)
+    calls = len(backend.meta.vision_calls)
+    assert post_frame(backend.client, session_id, timestamp=2).json() == {"accepted": False, "reason": "unchanged"}
+    assert post_frame(backend.client, session_id, timestamp=3, small=True).json()["accepted"] is True
+    idle(backend, session_id)
+    assert len(backend.meta.vision_calls) == calls + 1
+
+
+def test_the_words_say_which_row_a_radio_button_is_in(monkeypatch):
+    lines = [{"text": "Next Day", "words": [{"text": "Next", "box": [0.05, 0.75, 0.1, 0.77]}, {"text": "Day", "box": [0.11, 0.75, 0.16, 0.77]}]},
+             {"text": "Reguler", "words": [{"text": "Reguler", "box": [0.05, 0.82, 0.2, 0.84]}]}]
+    radios = [[0.9, 0.74, 0.95, 0.78], [0.9, 0.81, 0.95, 0.85]]
+    monkeypatch.setattr(meta, "sam", lambda image, phrase: {"boxes": [{"box": [value * 1000 for value in box]} for box in radios], "ms": 1})
+    target = {"label": "Reguler", "object": "radio button", "box": [900, 745, 950, 775], "mark_id": None}  # A row too high.
+    found = real_locate(b"", 1000, 1000, {"action": "tap", "target": target}, lines, [])
+    assert found["box"] == radios[1] and found["source"] == "sam"
+    monkeypatch.setattr(meta, "sam", lambda image, phrase: {"boxes": [], "ms": 1})
+    found = real_locate(b"", 1000, 1000, {"action": "tap", "target": target}, lines, [])
+    assert found["box"] == [0.05, 0.82, 0.2, 0.84] and found["source"] == "text"
 
 
 def test_failed_icon_search_does_not_cost_the_hint(backend, monkeypatch):
