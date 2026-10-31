@@ -55,11 +55,15 @@ General vision models name the right element but miss its pixels, and a wrong ci
 
 | Method | All | Scenario steps | Icons |
 |---|---:|---:|---:|
-| Muse Spark 1.3 alone | 72 of 120 | 16 of 24 | 26 of 51 |
-| With text recognition and SAM 3.1 | **107 of 120** | **23 of 24** | **41 of 51** |
+| Muse Spark 1.3 alone | 68 of 120 | 16 of 24 | 24 of 51 |
+| With text recognition and SAM 3.1 | **111 of 120** | **22 of 24** | **46 of 51** |
 
-The median time for one step stayed at 3.1 seconds, because SAM runs next to the model and not after it. The bench is in
-[backend/eval](backend/eval). Its screenshots are not in this repository, because they show personal data.
+Repeat runs of the pipeline landed between 107 and 111. The median time for one step stayed at about 3 seconds, because SAM runs
+next to the model and not after it. The bench is in [backend/eval](backend/eval). Its screenshots are not in this repository,
+because they show personal data.
+
+We also drew our floating window over the same screens and ran the tasks again. The agent never pointed at its own window, and
+when the window hid the button it needed in the order, it asked to drag the window aside.
 
 ## Repository
 
