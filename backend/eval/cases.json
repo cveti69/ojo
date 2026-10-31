@@ -1,0 +1,55 @@
+{
+  "_comment": "Truth boxes are in pixels of a 921x2000 view of each frame. Frames stay out of git. Cases with \"step\" follow the order scenario, the others test harder targets on the same screens.",
+  "view": [921, 2000],
+  "private_frames": ["07-checkout-shipping-sheet", "08-checkout"],
+  "cases": [
+    {"id": "step1", "step": true, "frame": "01-home", "goal": "Заказать шампунь от перхоти", "history": [], "truth": [26, 138, 746, 212], "action": "tap"},
+    {"id": "step2", "step": true, "frame": "02-search-focus", "goal": "Заказать шампунь от перхоти", "history": ["tapped the search bar"], "truth": [101, 138, 788, 212], "action": "type"},
+    {"id": "step3", "step": true, "frame": "03-results", "goal": "Заказать первый шампунь в списке, Vichy Dercos Sensitive", "history": ["tapped the search bar", "searched for the shampoo"], "truth": [16, 556, 456, 1285], "action": "tap"},
+    {"id": "step4", "step": true, "frame": "04-product", "goal": "Положить этот шампунь в корзину", "history": ["searched for the shampoo", "opened the product"], "truth": [520, 1829, 896, 1912], "action": "tap"},
+    {"id": "step5", "step": true, "frame": "05-variant-sheet", "goal": "Положить этот шампунь в корзину, вариант Dandruff (DRY)", "history": ["opened the product", "tapped + Keranjang, the variant sheet opened"], "truth": [25, 1829, 896, 1912], "action": "tap"},
+    {"id": "step6", "step": true, "frame": "06-cart", "goal": "Оформить заказ на этот шампунь", "history": ["added the shampoo to the cart", "opened the cart"], "truth": [679, 1848, 887, 1930], "action": "tap"},
+    {"id": "step7", "step": true, "frame": "07-checkout-shipping-sheet", "goal": "Выбрать самую дешёвую доставку", "history": ["opened the cart", "tapped Beli", "opened the shipping options"], "truth": [0, 1540, 921, 1665], "action": "tap"},
+    {"id": "step8", "step": true, "frame": "08-checkout", "goal": "Заказать шампунь от перхоти", "history": ["added the shampoo to the cart", "tapped Beli", "shipping is chosen"], "truth": [34, 1812, 887, 1912], "action": "tap", "stop": true},
+
+    {"id": "home-cart", "frame": "01-home", "goal": "Открыть корзину", "history": [], "truth": [848, 156, 894, 198], "icon": true},
+    {"id": "home-chat", "frame": "01-home", "goal": "Открыть сообщения", "history": [], "truth": [776, 146, 842, 196], "icon": true},
+    {"id": "home-camera", "frame": "01-home", "goal": "Найти товар по фотографии", "history": [], "truth": [602, 158, 642, 194], "icon": true},
+    {"id": "home-profile", "frame": "01-home", "goal": "Открыть мой профиль", "history": [], "truth": [790, 1840, 866, 1920]},
+    {"id": "home-orders", "frame": "01-home", "goal": "Посмотреть мои заказы", "history": [], "truth": [595, 1840, 694, 1920]},
+    {"id": "home-beauty", "frame": "01-home", "goal": "Открыть раздел косметики", "history": [], "truth": [778, 254, 892, 388]},
+    {"id": "home-coupon", "frame": "01-home", "goal": "Взять купон на скидку 99%", "history": [], "truth": [42, 846, 452, 944]},
+
+    {"id": "search-back", "frame": "02-search-focus", "goal": "Вернуться назад", "history": [], "truth": [36, 156, 78, 196], "icon": true},
+    {"id": "search-go", "frame": "02-search-focus", "goal": "Нажать зелёную кнопку поиска рядом со строкой", "history": [], "truth": [822, 160, 888, 194]},
+    {"id": "search-remove", "frame": "02-search-focus", "goal": "Убрать из истории запрос dercos shampoo", "history": [], "truth": [856, 256, 886, 286], "icon": true},
+
+    {"id": "results-filter", "frame": "03-results", "goal": "Открыть фильтры", "history": [], "truth": [830, 322, 896, 388], "icon": true},
+    {"id": "results-sort", "frame": "03-results", "goal": "Поменять сортировку товаров", "history": [], "truth": [750, 322, 816, 388], "icon": true},
+    {"id": "results-shops", "frame": "03-results", "goal": "Показать магазины вместо товаров", "history": [], "truth": [462, 232, 900, 296]},
+    {"id": "results-claim", "frame": "03-results", "goal": "Забрать скидку 55 тысяч", "history": [], "truth": [754, 473, 888, 522]},
+    {"id": "results-cart", "frame": "03-results", "goal": "Открыть корзину", "history": [], "truth": [770, 152, 818, 198], "icon": true},
+    {"id": "results-second", "frame": "03-results", "goal": "Выбрать шампунь Vichy Dercos Advanced Action", "history": [], "truth": [466, 556, 906, 1250]},
+
+    {"id": "product-heart", "frame": "04-product", "goal": "Добавить товар в избранное", "history": [], "truth": [856, 1482, 894, 1520], "icon": true},
+    {"id": "product-share", "frame": "04-product", "goal": "Поделиться этим товаром", "history": [], "truth": [702, 158, 746, 194], "icon": true},
+    {"id": "product-chat", "frame": "04-product", "goal": "Написать продавцу", "history": [], "truth": [26, 1829, 108, 1912], "icon": true},
+    {"id": "product-buy", "frame": "04-product", "goal": "Купить сразу, минуя корзину", "history": [], "truth": [126, 1829, 502, 1912]},
+
+    {"id": "sheet-close", "frame": "05-variant-sheet", "goal": "Закрыть это окно с вариантами", "history": [], "truth": [38, 1130, 80, 1172], "icon": true},
+    {"id": "sheet-plus", "frame": "05-variant-sheet", "goal": "Взять две штуки вместо одной", "history": [], "truth": [836, 1692, 872, 1730], "icon": true},
+    {"id": "sheet-sensitive", "frame": "05-variant-sheet", "goal": "Выбрать вариант Sensitive", "history": [], "truth": [304, 1544, 486, 1628]},
+
+    {"id": "cart-trash", "frame": "06-cart", "goal": "Удалить шампунь из корзины значком корзины для мусора", "history": [], "truth": [708, 544, 744, 582], "icon": true},
+    {"id": "cart-plus", "frame": "06-cart", "goal": "Добавить ещё один такой шампунь", "history": [], "truth": [836, 546, 868, 580], "icon": true},
+    {"id": "cart-delete", "frame": "06-cart", "goal": "Удалить все выбранные товары кнопкой вверху", "history": [], "truth": [814, 204, 896, 234]},
+    {"id": "cart-variant", "frame": "06-cart", "goal": "Поменять вариант шампуня в корзине", "history": [], "truth": [280, 406, 556, 462]},
+
+    {"id": "shipping-close", "frame": "07-checkout-shipping-sheet", "goal": "Закрыть окно способов доставки", "history": [], "truth": [38, 1358, 78, 1398], "icon": true},
+    {"id": "shipping-regular", "frame": "07-checkout-shipping-sheet", "goal": "Выбрать доставку Reguler", "history": [], "truth": [0, 1670, 921, 1796]},
+
+    {"id": "checkout-all", "frame": "08-checkout", "goal": "Посмотреть все способы оплаты", "history": [], "truth": [736, 1396, 888, 1430]},
+    {"id": "checkout-insurance", "frame": "08-checkout", "goal": "Убрать страховку доставки галочкой", "history": [], "truth": [824, 898, 860, 934], "icon": true},
+    {"id": "checkout-address", "frame": "08-checkout", "goal": "Поменять адрес доставки", "history": [], "truth": [0, 262, 921, 412]}
+  ]
+}

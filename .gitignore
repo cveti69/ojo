@@ -1,0 +1,16 @@
+.env
+*.key
+node_modules/
+.venv/
+__pycache__/
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.ipa
+*.xcarchive
+backend/eval/frames/
+backend/eval/reports/
+/ios/*.xcodeproj/
+ios/scripts/local.env
+ios/Config/Local.xcconfig
