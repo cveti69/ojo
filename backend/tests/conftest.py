@@ -24,7 +24,7 @@ TOKEN = "test-shared-token"
 AUTH = {"X-Token": TOKEN}
 
 
-def line(say="Это кнопка оплаты.", **fields):
+def line(say="Это кнопка поиска.", **fields):
     """One answer of the model."""
     return {"say": say, "notes": "заметка", **fields}
 

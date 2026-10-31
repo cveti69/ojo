@@ -97,7 +97,7 @@ def test_words_with_no_screen_go_straight_to_the_model(backend):
     idle(backend, session_id)
     message = backend.meta.calls[0].messages[-1]
     assert texts(message) == ["Какие взять? " + friend.UNSEEN] and not pictures(message)
-    assert kinds(seen) == ["heard", "say"] and seen[1]["turn"] == 1 and seen[1]["text_ru"] == "Это кнопка оплаты."
+    assert kinds(seen) == ["heard", "say"] and seen[1]["turn"] == 1 and seen[1]["text_ru"] == "Это кнопка поиска."
 
 
 def test_words_on_a_shared_screen_wait_for_the_screen_as_it_is_now(backend):
@@ -683,6 +683,42 @@ def test_a_private_screen_is_not_written_down_and_not_sent_again(backend, monkey
     assert look(client, session_id, [SCREENS[0]]).status_code == 200
     idle(backend, session_id)
     assert sum(len(pictures(message)) for message in backend.meta.calls[1].messages if message["role"] == "user") == 1
+
+
+PAYMENT_SCREEN = [{"text": text, "box": [0.1, 0.1, 0.3, 0.2], "words": []} for text in (
+    "Pembayaran", "Total tagihan", "Rp33.900", "Metode pembayaran", "Transfer Bank", "Kartu Kredit •••• 4242", "Bayar Sekarang")]
+PAY_BOX = [100, 100, 300, 200]
+
+
+@pytest.mark.parametrize("screen,reply", [
+    (PAYMENT_SCREEN, line("Проверь сумму и нажми зелёную кнопку внизу.")),
+    ([], line("Сумма к оплате верная?")),
+    ([], line("Проверь сумму.", show={"label": "Bayar Sekarang", "object": "green button", "box": PAY_BOX})),
+    ([], line("Проверь сумму.", show={"label": "Lanjut", "object": "payment button", "box": PAY_BOX})),
+])
+def test_a_payment_screen_stays_out_of_the_log_when_the_model_forgets_to_say_so(backend, monkeypatch, tmp_path, screen, reply):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    session_id = sharing(backend.client)
+    backend.store.sessions[session_id].remember_text(123, screen)
+    backend.meta.replies = [reply]
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    assert not list((folder / "frames").iterdir())
+    answer = next(line for line in lines_of(folder) if line["kind"] == "answer")
+    assert answer["private"] is True and "answer" not in answer
+    assert "Проверь сумму" not in (folder / "call.log").read_text(encoding="utf-8")
+
+
+def test_a_product_card_is_not_a_bank_card(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    session_id = sharing(backend.client)
+    backend.meta.replies = [line("Открой карточку товара, посмотрим объём.")]
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    assert list((folder / "frames").iterdir())
+    assert next(line for line in lines_of(folder) if line["kind"] == "answer")["private"] is False
 
 
 def test_the_words_on_the_screen_make_it_private_without_the_model(backend, monkeypatch, tmp_path):

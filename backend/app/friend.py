@@ -54,7 +54,11 @@ LOOK_SECONDS = 2  # The phone sends the screen within this, unless iOS holds it 
 MAX_RESTARTS = 2  # A screen that keeps changing still gets an answer.
 MAX_REPLY = 500
 MAX_LABEL = 200
-_PRIVATE_SCREEN = re.compile(r"парол|\bкарт[аыуеой]|пин-код|password|\bpin\b|cvv|cvc|card number|credit card|kata sandi|nomor kartu", re.I)
+# Broad on purpose: a screen wrongly taken for a payment costs one picture in the log, the other way round costs a card number.
+_PRIVATE_SCREEN = re.compile(
+    r"парол|\bкарт[аыуе]\b|\bкартой\b|пин-код|оплат|заплат|плат[её]ж|код подтверждения|код из смс"
+    r"|password|\bpin\b|cvv|cvc|(credit|debit|bank) card|card (number|details)|payment|billing|\bpay\b|verification code|\botp\b"
+    r"|sandi|kartu|bayar|rekening|transfer bank|kode verifikasi", re.I)
 
 
 def prepare_frame(jpeg: bytes, source_width: int, source_height: int, timestamp_ms: int,
@@ -181,7 +185,7 @@ def _private(session: Session, frame: Optional[Frame], answer: dict) -> bool:
         return True
     target = answer.get("show") if isinstance(answer.get("show"), dict) else {}
     on_screen = " ".join(line["text"] for line in (_text_on(session, frame) or [])) if frame else ""
-    return bool(_PRIVATE_SCREEN.search(" ".join((_text(answer.get("say")), _text(target.get("label")), on_screen))))
+    return bool(_PRIVATE_SCREEN.search(" ".join((_text(answer.get("say")), _text(target.get("label")), _text(target.get("object")), on_screen))))
 
 
 def _ms(started: float) -> int:
