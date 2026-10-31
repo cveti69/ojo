@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreML
 import Darwin
 import Foundation
 import ImageIO
@@ -36,33 +37,72 @@ public struct ScreenTextRequest: Codable, Sendable {
     enum CodingKeys: String, CodingKey { case frameTS = "frame_ts", lines }
 }
 
+public enum ScreenTextLevel: String, Sendable {
+    case accurate
+    case fast
+}
+
 public struct ScreenTextReader: Sendable {
     public init() {}
 
+    private static let firstLanguages = [
+        ("zh-hant", "zh-Hant"), ("zh-tw", "zh-Hant"), ("zh-hk", "zh-Hant"), ("zh", "zh-Hans"), ("th", "th-TH"),
+        ("ja", "ja-JP"), ("ko", "ko-KR"), ("vi", "vi-VT"), ("ru", "ru-RU"), ("ar", "ar-SA"),
+    ]
+
+    // Order matters: with English first, Vision reads Chinese, Thai, Japanese and Korean as nothing.
     public static func recognitionLanguages(targetLang: String) -> [String] {
-        targetLang.lowercased().hasPrefix("zh") ? ["en-US", "zh-Hans"] : ["en-US"]
+        let code = targetLang.lowercased()
+        return (firstLanguages.first { code.hasPrefix($0.0) }.map { [$0.1] } ?? []) + ["en-US"]
     }
 
     public static func topLeftBox(_ rect: CGRect) -> [Double] {
         [rect.minX, 1 - rect.maxY, rect.maxX, 1 - rect.minY].map { min(1, max(0, Double($0))) }
     }
 
-    public func read(_ image: CGImage, targetLang: String) throws -> [ScreenTextLine] {
+    public static func word(_ text: String, box: CGRect?, lineBox: CGRect) -> ScreenTextWord {
+        ScreenTextWord(text: text, box: topLeftBox(box ?? lineBox))
+    }
+
+    public func read(_ image: CGImage, targetLang: String, level: ScreenTextLevel = .accurate, cpuOnly: Bool = false) throws -> [ScreenTextLine] {
         let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
+        request.recognitionLevel = level == .fast ? .fast : .accurate
         request.usesLanguageCorrection = false
-        request.recognitionLanguages = Self.recognitionLanguages(targetLang: targetLang)
+        if level == .fast {
+            request.recognitionLanguages = ["en-US"]
+        } else if targetLang.lowercased() == "auto" {
+            request.automaticallyDetectsLanguage = true
+        } else {
+            request.recognitionLanguages = Self.recognitionLanguages(targetLang: targetLang)
+        }
+        if cpuOnly {
+            if #available(iOS 17.0, macOS 14.0, *) {
+                let devices = try request.supportedComputeStageDevices
+                let cpu: MLComputeDevice? = devices[.main]?.first {
+                    if case .cpu = $0 { return true }
+                    return false
+                }
+                guard let cpu else { throw ReaderError.cpuUnavailable }
+                request.setComputeDevice(cpu, for: .main)
+            } else { throw ReaderError.cpuUnavailable }
+        }
         try VNImageRequestHandler(cgImage: image, orientation: .up, options: [:]).perform([request])
         return (request.results ?? []).compactMap { observation in
             guard let candidate = observation.topCandidates(1).first else { return nil }
             let text = candidate.string
             var words: [ScreenTextWord] = []
             text.enumerateSubstrings(in: text.startIndex..., options: .byWords) { word, range, _, _ in
-                guard let word, let box = try? candidate.boundingBox(for: range)?.boundingBox else { return }
-                words.append(ScreenTextWord(text: word, box: Self.topLeftBox(box)))
+                guard let word else { return }
+                let box = try? candidate.boundingBox(for: range)?.boundingBox
+                words.append(Self.word(word, box: box, lineBox: observation.boundingBox))
             }
             return ScreenTextLine(text: text, words: words)
         }
+    }
+
+    private enum ReaderError: LocalizedError {
+        case cpuUnavailable
+        var errorDescription: String? { "Vision не предоставил CPU для основной стадии распознавания." }
     }
 }
 
@@ -88,41 +128,72 @@ public struct ScreenTextReading: Sendable {
     public let error: String?
     public let elapsedMS: Double
     public let footprintMB: Double?
+    public let level: ScreenTextLevel
+    public let cpuOnly: Bool
+    public let retriedOnCPU: Bool
+    public let skipped: Bool
 
     public var diagnostic: String {
         let words = lines.reduce(0) { $0 + $1.words.count }
         let memory = footprintMB.map { String(format: "%.1f", locale: Locale(identifier: "ru_RU"), $0) } ?? "недоступно"
         let failure = error.map { "; ошибка Vision: \($0)" } ?? ""
-        return "\(Int(elapsedMS.rounded())) мс, слов: \(words), phys_footprint: \(memory) МБ\(failure)"
+        let retry = retriedOnCPU ? "; повтор с CPU" : ""
+        return "\(Int(elapsedMS.rounded())) мс, слов: \(words), phys_footprint: \(memory) МБ; \(level.rawValue), \(cpuOnly ? "только CPU" : "устройство автоматически")\(retry)\(failure)"
     }
 }
 
 public final class ScreenTextWorker: Sendable {
     private let queue = DispatchQueue(label: "screen-text.vision", qos: .utility)
+    private static let cpuFallback = CPUFallbackState()
 
     public init() {}
 
-    public func read(jpegData: Data, targetLang: String, onStart: @escaping @Sendable () -> Void = {}) async -> ScreenTextReading {
+    public func read(
+        jpegData: Data, targetLang: String, level: ScreenTextLevel = .accurate, cpuOnly: Bool = false,
+        canRead: @escaping @Sendable () -> Bool = { true },
+        onDiagnostic: (@Sendable (String) -> Void)? = nil,
+        onStart: @escaping @Sendable () -> Void = {}
+    ) async -> ScreenTextReading {
         await withCheckedContinuation { continuation in
             queue.async {
-                onStart()
                 let started = ProcessInfo.processInfo.systemUptime
+                var useCPU = cpuOnly || Self.cpuFallback.isEnabled
+                var retriedOnCPU = false
+                var skipped = false
+                Self.cpuFallback.reportIfNeeded(onDiagnostic)
                 let result: Result<[ScreenTextLine], Error> = Result {
                     try autoreleasepool {
                         guard let source = CGImageSourceCreateWithData(jpegData as CFData, nil),
                               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
                             throw ReaderError.invalidImage
                         }
-                        return try ScreenTextReader().read(image, targetLang: targetLang)
+                        guard canRead() else { skipped = true; return [] }
+                        onStart()
+                        do {
+                            return try ScreenTextReader().read(image, targetLang: targetLang, level: level, cpuOnly: useCPU)
+                        } catch {
+                            guard !useCPU, canRead() else { throw error }
+                            let originalError = error.localizedDescription
+                            retriedOnCPU = true
+                            useCPU = true
+                            do {
+                                let lines = try ScreenTextReader().read(image, targetLang: targetLang, level: level, cpuOnly: true)
+                                Self.cpuFallback.enable()
+                                Self.cpuFallback.reportIfNeeded(onDiagnostic)
+                                return lines
+                            } catch { throw ReaderError.cpuRetryFailed(originalError, error.localizedDescription) }
+                        }
                     }
                 }
                 let elapsed = (ProcessInfo.processInfo.systemUptime - started) * 1000
                 let reading: ScreenTextReading
                 switch result {
                 case .success(let lines):
-                    reading = ScreenTextReading(lines: lines, error: nil, elapsedMS: elapsed, footprintMB: ProcessMemory.physicalFootprintMB)
+                    reading = ScreenTextReading(lines: lines, error: nil, elapsedMS: elapsed, footprintMB: ProcessMemory.physicalFootprintMB,
+                                                level: level, cpuOnly: useCPU, retriedOnCPU: retriedOnCPU, skipped: skipped)
                 case .failure(let error):
-                    reading = ScreenTextReading(lines: [], error: error.localizedDescription, elapsedMS: elapsed, footprintMB: ProcessMemory.physicalFootprintMB)
+                    reading = ScreenTextReading(lines: [], error: error.localizedDescription, elapsedMS: elapsed, footprintMB: ProcessMemory.physicalFootprintMB,
+                                                level: level, cpuOnly: useCPU, retriedOnCPU: retriedOnCPU, skipped: false)
                 }
                 continuation.resume(returning: reading)
             }
@@ -131,6 +202,32 @@ public final class ScreenTextWorker: Sendable {
 
     private enum ReaderError: LocalizedError {
         case invalidImage
-        var errorDescription: String? { "Не удалось прочитать JPEG для распознавания текста." }
+        case cpuRetryFailed(String, String)
+        var errorDescription: String? {
+            switch self {
+            case .invalidImage: return "Не удалось прочитать JPEG для распознавания текста."
+            case .cpuRetryFailed(let original, let cpu): return "Автоматически: \(original); повтор с CPU: \(cpu)"
+            }
+        }
+    }
+
+    private final class CPUFallbackState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var enabled = false
+        private var reported = false
+
+        var isEnabled: Bool { lock.withLock { enabled } }
+
+        func enable() { lock.withLock { enabled = true } }
+
+        func reportIfNeeded(_ callback: (@Sendable (String) -> Void)?) {
+            guard let callback else { return }
+            let report = lock.withLock { () -> Bool in
+                guard enabled, !reported else { return false }
+                reported = true
+                return true
+            }
+            if report { callback("Vision: запасной CPU сработал; до конца процесса читаем только на CPU") }
+        }
     }
 }

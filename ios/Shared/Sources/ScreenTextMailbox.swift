@@ -46,6 +46,11 @@ public struct ScreenTextMailbox: Sendable {
         }
     }
 
+    public func clear() throws {
+        do { try FileManager.default.removeItem(at: fileURL) }
+        catch CocoaError.fileNoSuchFile { }
+    }
+
     private enum MailboxError: LocalizedError {
         case unavailable
         var errorDescription: String? { "Файл кадра в общей группе недоступен." }

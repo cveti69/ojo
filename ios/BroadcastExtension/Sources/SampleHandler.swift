@@ -13,6 +13,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         static let thumbnailSide = 64
         static let changeThreshold = 0.025
         static let memoryReserve = 8 * 1024 * 1024
+        static let textMemoryReserve = 16 * 1024 * 1024
     }
 
     private struct Run: Sendable {
@@ -246,7 +247,8 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         if mode == .app {
             mailboxQueue.async { [self] in
                 defer { completeText(runID: run.id) }
-                guard isActive(runID: run.id), run.store.screenTextMode == .app else { return }
+                guard isActive(runID: run.id), run.store.sessionID == run.sessionID,
+                      run.store.screenTextMode == .app else { return }
                 do {
                     guard let mailbox = run.mailbox else { throw BroadcastError.noMailbox }
                     try mailbox.publish(ScreenTextFrame(sessionID: run.sessionID, frameTS: timestamp, jpeg: jpeg))
@@ -256,16 +258,27 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             let task = Task { [self] in
                 defer { completeText(runID: run.id) }
                 guard isActive(runID: run.id), !Task.isCancelled else { return }
-                let reading = await textWorker.read(jpegData: jpeg, targetLang: run.client.settings.targetLang) { [self] in
+                let level: ScreenTextLevel = mode == .extensionFast ? .fast : .accurate
+                let reading = await textWorker.read(jpegData: jpeg, targetLang: run.client.settings.targetLang, level: level,
+                    canRead: { [self] in
+                        guard isActive(runID: run.id), run.store.sessionID == run.sessionID,
+                              run.store.screenTextMode == mode else { return false }
+                        guard os_proc_available_memory() >= Capture.textMemoryReserve else {
+                            run.journal.append("Текст в расширении пропущен: доступно менее 16 МБ")
+                            return false
+                        }
+                        return true
+                    }, onDiagnostic: { run.journal.append($0) }) { [self] in
                     let first = lock.withLock { () -> Bool in
                         guard runID == run.id, !firstTextReadLogged else { return false }
                         firstTextReadLogged = true
                         return true
                     }
-                    if first { run.journal.append("Первое чтение текста в расширении начинается; phys_footprint: \(ProcessMemory.description) МБ") }
+                    if first { run.journal.append("Первое чтение текста в расширении начинается; \(level.rawValue); phys_footprint: \(ProcessMemory.description) МБ") }
                 }
+                guard !reading.skipped else { return }
                 run.journal.append("Текст в расширении: \(reading.diagnostic)")
-                guard reading.error == nil, !Task.isCancelled, isActive(runID: run.id), run.store.screenTextMode == .extension else { return }
+                guard reading.error == nil, !Task.isCancelled, isActive(runID: run.id), run.store.screenTextMode == mode else { return }
                 do { _ = try await run.client.sendScreenText(reading.lines, sessionID: run.sessionID, frameTS: timestamp) }
                 catch { if !Task.isCancelled { run.journal.append("Ошибка /text в расширении: \(error.localizedDescription)") } }
             }
@@ -344,6 +357,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     }
 
     private func markFinished(runID id: UUID) -> Bool {
+        let stoppingRun = lock.withLock { runID == id ? run : nil }
         let state = lock.withLock { () -> (Bool, Bool, Task<Void, Never>?, Task<Void, Never>?, DispatchSourceTimer?, DispatchSourceMemoryPressure?, SharedJournal?, Int, Int) in
             guard runID == id, !finished else { return (false, false, nil, nil, nil, nil, nil, 0, 0) }
             finished = true
@@ -360,6 +374,14 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         state.5?.cancel()
         state.6?.append("Стоп; кадров доставлено: \(state.7), пропущено: \(state.8)")
         if state.1 { reportFinished(runID: id) }
+        if let stoppingRun {
+            // Drain earlier writes before removing the frame.
+            mailboxQueue.sync { [self] in
+                guard lock.withLock({ runID == id && finished }) else { return }
+                do { try stoppingRun.mailbox?.clear() }
+                catch { stoppingRun.journal.append("Не удалось удалить общий кадр: \(error.localizedDescription)") }
+            }
+        }
         return true
     }
 

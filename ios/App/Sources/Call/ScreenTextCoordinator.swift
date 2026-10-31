@@ -14,6 +14,8 @@ final class ScreenTextCoordinator {
     private var isReading = false
     private var lastFrameTS: Int64?
     private var firstRead = true
+    private var warmupTask: Task<Void, Never>?
+    private var warmupID = UUID()
 
     init(configuration: ProjectConfiguration, store: SharedStore, journal: SharedJournal) throws {
         self.store = store
@@ -37,14 +39,47 @@ final class ScreenTextCoordinator {
         client = nil
         lastFrameTS = nil
         task?.cancel()
+        warmupTask?.cancel()
+        warmupTask = nil
+        warmupID = UUID()
+        clearMailbox()
+    }
+
+    func prepareForCall(targetLang: String) {
+        clearMailbox()
+        warmupTask?.cancel()
+        warmupTask = nil
+        let id = UUID()
+        warmupID = id
+        guard store.screenTextMode == .app, UIApplication.shared.applicationState == .active,
+              let jpeg = TestFrameFactory.makeScreenText(targetLang: targetLang).jpegData(compressionQuality: 0.9) else { return }
+        let journal = journal
+        warmupTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.warmupID == id { self.warmupTask = nil } }
+            guard !Task.isCancelled, self.store.screenTextMode == .app,
+                  UIApplication.shared.applicationState == .active else { return }
+            let background = UIApplication.shared.applicationState == .background
+            let reading = await self.worker.read(jpegData: jpeg, targetLang: targetLang,
+                                                 onDiagnostic: { journal.append($0) }) {
+                journal.append("Прогрев текста: чтение начинается; phys_footprint: \(ProcessMemory.description) МБ")
+            }
+            self.log(reading, label: "Прогрев текста", backgroundBefore: background)
+        }
+    }
+
+    private func clearMailbox() {
+        do { try mailbox.clear() }
+        catch { journal.append("Не удалось удалить общий кадр: \(error.localizedDescription)") }
     }
 
     func modeChanged() { consumeLatest() }
 
-    func recognizeTest(jpeg: Data, targetLang: String, label: String) async {
+    func recognizeTest(jpeg: Data, targetLang: String, label: String, cpuOnly: Bool = false) async {
         let background = UIApplication.shared.applicationState == .background
         let journal = journal
-        let reading = await worker.read(jpegData: jpeg, targetLang: targetLang) {
+        let reading = await worker.read(jpegData: jpeg, targetLang: targetLang, cpuOnly: cpuOnly,
+                                        onDiagnostic: { journal.append($0) }) {
             journal.append("\(label): чтение начинается; фон перед чтением: \(background ? "да" : "нет"); phys_footprint: \(ProcessMemory.description) МБ")
         }
         log(reading, label: label, backgroundBefore: background)
@@ -67,7 +102,8 @@ final class ScreenTextCoordinator {
                     task = nil
                     consumeLatest()
                 }
-                let reading = await worker.read(jpegData: frame.jpeg, targetLang: client.settings.targetLang) {
+                let reading = await worker.read(jpegData: frame.jpeg, targetLang: client.settings.targetLang,
+                                                onDiagnostic: { journal.append($0) }) {
                     if logFirst {
                         journal.append("Первое чтение текста в приложении начинается; фон перед чтением: \(background ? "да" : "нет"); phys_footprint: \(ProcessMemory.description) МБ")
                     }
@@ -86,5 +122,8 @@ final class ScreenTextCoordinator {
         journal.append("\(label): \(reading.diagnostic); фон перед чтением: \(backgroundBefore ? "да" : "нет"), после: \(backgroundAfter ? "да" : "нет")")
     }
 
-    deinit { task?.cancel() }
+    deinit {
+        task?.cancel()
+        warmupTask?.cancel()
+    }
 }

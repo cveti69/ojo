@@ -180,18 +180,27 @@ private enum ProtocolChecks {
         guard case .done = done else { throw CheckFailure(description: "done event") }
         try checkScreenTextGeometry()
         try checkSettingsAndMailbox()
+        try await checkMemoryGate()
         if CommandLine.arguments.contains("--vision") { try await checkVision() }
-        print("Protocol checks passed: HTTP, /text, frame_ts, word boxes, languages, atomic mailbox, token defaults, WAV, lifecycle, events, errors, WebSocket.")
+        print("Protocol checks passed: HTTP, /text, frame_ts, word fallback, languages, mailbox clear, extensionFast, memory gate, token defaults, WAV, lifecycle, events, errors, WebSocket.")
     }
 
     private static func checkScreenTextGeometry() throws {
         try check(ScreenTextReader.recognitionLanguages(targetLang: "id") == ["en-US"], "Latin recognition language")
         try check(ScreenTextReader.recognitionLanguages(targetLang: "auto") == ["en-US"], "auto recognition language")
-        try check(ScreenTextReader.recognitionLanguages(targetLang: "zh-Hant") == ["en-US", "zh-Hans"], "Chinese recognition languages")
+        try check(ScreenTextReader.recognitionLanguages(targetLang: "zh") == ["zh-Hans", "en-US"], "Chinese recognition languages")
+        try check(ScreenTextReader.recognitionLanguages(targetLang: "zh-Hant") == ["zh-Hant", "en-US"], "Traditional Chinese recognition languages")
+        try check(ScreenTextReader.recognitionLanguages(targetLang: "th") == ["th-TH", "en-US"], "Thai recognition languages")
         let box = ScreenTextReader.topLeftBox(CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4))
         try check(zip(box, [0.1, 0.4, 0.4, 0.8]).allSatisfy { abs($0 - $1) < 0.00001 }, "top-left normalized coordinates")
         let clipped = ScreenTextReader.topLeftBox(CGRect(x: -0.1, y: -0.1, width: 1.2, height: 1.2))
         try check(clipped == [0, 0, 1, 1], "normalized box bounds")
+        let lineBox = CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4)
+        let fallback = ScreenTextReader.word("Beli", box: nil, lineBox: lineBox)
+        try check(fallback.text == "Beli", "keep word when its box is missing")
+        try check(zip(fallback.box, [0.1, 0.4, 0.4, 0.8]).allSatisfy { abs($0 - $1) < 0.00001 }, "line box for missing word box")
+        let precise = ScreenTextReader.word("Beli", box: CGRect(x: 0.2, y: 0.3, width: 0.1, height: 0.2), lineBox: lineBox)
+        try check(zip(precise.box, [0.2, 0.5, 0.3, 0.7]).allSatisfy { abs($0 - $1) < 0.00001 }, "prefer available word box")
     }
 
     private static func checkSettingsAndMailbox() throws {
@@ -212,6 +221,10 @@ private enum ProtocolChecks {
         try check(store.screenTextMode == .app, "default screenTextMode")
         store.screenTextMode = .extension
         try check(defaults.string(forKey: "screenTextMode") == "extension", "persisted screenTextMode")
+        store.screenTextMode = .extensionFast
+        let reloaded = try SharedStore(configuration: configuration, defaults: defaults)
+        try check(defaults.string(forKey: "screenTextMode") == "extensionFast" && reloaded.screenTextMode == .extensionFast,
+                  "restore extensionFast from App Group")
         store.seedDefaultToken(configuration.defaultServerToken)
         try check(store.settings.token == "fixture-token", "seed missing token")
         defaults.set("owner-token", forKey: "token")
@@ -230,6 +243,7 @@ private enum ProtocolChecks {
             try check(config.defaultServerToken.isEmpty, "optional token setting")
         }
         let mailbox = ScreenTextMailbox(directory: directory, notificationName: "test.screen-text")
+        try mailbox.clear()
         let missing = try mailbox.latest()
         try check(missing == nil, "missing shared frame")
         for timestamp in [Int64(42), 43] {
@@ -238,9 +252,13 @@ private enum ProtocolChecks {
             let read = try mailbox.latest()
             try check(read == frame, "atomic JPEG/session/timestamp round trip")
         }
+        try mailbox.clear()
+        try mailbox.clear()
+        let cleared = try mailbox.latest()
+        try check(cleared == nil, "clear removes JPEG and metadata; repeated clear is harmless")
     }
 
-    private static func checkVision() async throws {
+    private static func syntheticJPEG() throws -> Data {
         guard let context = CGContext(data: nil, width: 900, height: 300, bitsPerComponent: 8, bytesPerRow: 3600,
                                       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
             throw CheckFailure(description: "synthetic image context")
@@ -258,15 +276,40 @@ private enum ProtocolChecks {
         let destination = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil)!
         CGImageDestinationAddImage(destination, image, nil)
         try check(CGImageDestinationFinalize(destination), "synthetic JPEG")
-        let reading = await ScreenTextWorker().read(jpegData: data as Data, targetLang: "id")
-        print("Vision synthetic check: \(reading.diagnostic)")
-        guard reading.error == nil else { throw CheckFailure(description: "Vision runtime unavailable: \(reading.error!)") }
-        let words = reading.lines.flatMap(\.words)
-        try check(words.map { $0.text.lowercased() } == ["beli", "sekarang"], "Vision synthetic word recognition")
-        try check(words.allSatisfy { $0.box.count == 4 && $0.box.allSatisfy { (0...1).contains($0) }
-                  && $0.box[0] < $0.box[2] && $0.box[1] < $0.box[3] }, "Vision word box validity")
-        try check(words[0].box[2] < words[1].box[2], "separate candidate word boxes")
-        print("Vision synthetic check passed: two words, valid individual boxes; phys_footprint \(ProcessMemory.description) MB.")
+        return data as Data
+    }
+
+    private static func checkMemoryGate() async throws {
+        let jpeg = try syntheticJPEG()
+        let reading = await ScreenTextWorker().read(jpegData: jpeg, targetLang: "id", canRead: { false })
+        try check(reading.skipped && reading.lines.isEmpty && reading.error == nil && !reading.retriedOnCPU,
+                  "memory gate skips Vision and CPU retry")
+    }
+
+    private static func checkVision() async throws {
+        let jpeg = try syntheticJPEG()
+        var failures: [String] = []
+        let variants: [(String, ScreenTextLevel, Bool)] = [
+            ("accurate", .accurate, false), ("fast", .fast, false), ("accurate, CPU", .accurate, true)
+        ]
+        for (label, level, cpuOnly) in variants {
+            let reading = await ScreenTextWorker().read(jpegData: jpeg, targetLang: "id", level: level, cpuOnly: cpuOnly,
+                                                        onDiagnostic: { print($0) })
+            print("Vision synthetic check (\(label)): \(reading.diagnostic)")
+            if let error = reading.error {
+                failures.append("\(label): \(error)")
+                continue
+            }
+            do {
+                let words = reading.lines.flatMap(\.words)
+                try check(words.map { $0.text.lowercased() } == ["beli", "sekarang"], "Vision synthetic word recognition (\(label))")
+                try check(words.allSatisfy { $0.box.count == 4 && $0.box.allSatisfy { (0...1).contains($0) }
+                          && $0.box[0] < $0.box[2] && $0.box[1] < $0.box[3] }, "Vision word box validity (\(label))")
+                try check(reading.level == level && (!cpuOnly || reading.cpuOnly), "Vision level/device (\(label))")
+            } catch { failures.append(String(describing: error)) }
+        }
+        try check(failures.isEmpty, "Vision checks failed: " + failures.joined(separator: "; "))
+        print("Vision synthetic checks passed: accurate, fast and forced CPU on the same JPEG.")
     }
 
     private static func body(of request: URLRequest) throws -> Data {

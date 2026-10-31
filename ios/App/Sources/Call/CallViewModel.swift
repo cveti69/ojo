@@ -101,6 +101,9 @@ final class CallViewModel: ObservableObject {
 
     func startCall() {
         guard !isCallActive, !isWorking, let store else { return }
+        let settings = store.settings
+        store.sessionID = nil
+        textCoordinator?.prepareForCall(targetLang: settings.targetLang)
         recognizedText = ""
         isWorking = true
         status = "Соединяемся…"
@@ -109,7 +112,7 @@ final class CallViewModel: ObservableObject {
             guard let self else { return }
             defer { if self.workflowID == id { self.isWorking = false } }
             do {
-                let client = ServerClient(settings: store.settings)
+                let client = ServerClient(settings: settings)
                 let response = try await client.createSession()
                 guard !Task.isCancelled, self.workflowID == id else {
                     self.endRemoteSession(client: client, sessionID: response.sessionID)
@@ -184,11 +187,11 @@ final class CallViewModel: ObservableObject {
         speaker.stop()
         connection?.stop()
         connection = nil
+        if let endingID, store?.sessionID == endingID { store?.sessionID = nil }
         textCoordinator?.stop()
         startWindowWhenReady = false
         testTimer?.invalidate()
         testTimer = nil
-        if let endingID, store?.sessionID == endingID { store?.sessionID = nil }
         client = nil
         sessionID = nil
         isTestingWindow = false
@@ -318,6 +321,9 @@ final class CallViewModel: ObservableObject {
             let remaining = max(0, deadline.timeIntervalSinceNow)
             do { try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) } catch { return }
             await textCoordinator.recognizeTest(jpeg: jpeg, targetLang: targetLang, label: "Тест текста, через 8 секунд")
+            guard !Task.isCancelled else { return }
+            await textCoordinator.recognizeTest(jpeg: jpeg, targetLang: targetLang,
+                                                label: "Тест текста, через 8 секунд, только CPU", cpuOnly: true)
         }
         activity.onExpiration = { [weak self] in
             journal?.append("Тест текста: фоновое время истекло")

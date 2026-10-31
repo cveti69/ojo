@@ -8,6 +8,7 @@ public enum TextEntry: String, Codable, CaseIterable, Sendable {
 public enum ScreenTextMode: String, Codable, CaseIterable, Sendable {
     case app
     case `extension`
+    case extensionFast
     case off
 }
 

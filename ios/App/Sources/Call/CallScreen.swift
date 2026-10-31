@@ -39,7 +39,7 @@ struct CallScreen: View {
                         .buttonStyle(.bordered)
                         if model.isRecording {
                             Label("Слушаю. После фразы помолчите 1,2 секунды", systemImage: "mic.fill")
-                            Button("Я закончил говорить") { model.finishRecording() }
+                            Button("Закончить запись") { model.finishRecording() }
                         }
                         HStack {
                             BroadcastPicker(isEnabled: model.isCallActive && model.hasGoal)
