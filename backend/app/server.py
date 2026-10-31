@@ -258,6 +258,7 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
         if not body.goal.strip():
             raise HTTPException(422, "Укажи цель.")
         session.set_goal(body.goal.strip())
+        session.held = False
         next_step = "скажи, что уже смотришь на экран" if session.broadcasting else "попроси включить демонстрацию экрана"
         text, ready = await asyncio.gather(text_reply(
             json.dumps({"goal": session.goal}, ensure_ascii=False),

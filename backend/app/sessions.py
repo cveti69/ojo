@@ -144,7 +144,6 @@ class Session:
         """A refined goal keeps the steps done so far: the person is still on the same road."""
         self.note("goal", goal=goal)
         self.revision += 1
-        self.held = False
         self.goal = goal
         self.texts.clear()
         self.insert_hint_ru = ""

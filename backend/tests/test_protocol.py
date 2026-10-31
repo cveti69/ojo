@@ -1050,6 +1050,49 @@ def test_a_new_goal_ends_the_wait(backend):
     assert backend.store.sessions[session_id].held is False and len(backend.meta.vision_calls) == pointer_calls + 1
 
 
+def test_a_new_goal_outweighs_a_stop_in_the_same_words(backend):
+    session_id = held_call(backend)
+    pointer_calls = len(backend.meta.vision_calls)
+    backend.meta.quick.append(quick_line("Хорошо, ищем другое.", new_goal="Купить мыло", needs_screen=False, hold=True))
+    say(backend.client, session_id)
+    idle(backend, session_id)
+    assert backend.store.sessions[session_id].held is False and len(backend.meta.vision_calls) == pointer_calls + 1
+
+
+def test_a_goal_from_the_head_does_not_end_the_wait(backend):
+    session_id = held_call(backend)
+    backend.meta.quick.append(quick_line(hold=True))
+    backend.meta.talk.append(talk_line("Хорошо, закроем.", new_goal="Купить шампунь, без доставки"))
+    ask_the_screen(backend, session_id)
+    assert backend.store.sessions[session_id].held is True
+
+
+def test_a_typed_goal_ends_the_wait(backend):
+    session_id = held_call(backend)
+    assert backend.client.post("/sessions/" + session_id + "/goal", headers=AUTH, json={"goal": "Купить мыло"}).status_code == 200
+    assert backend.store.sessions[session_id].held is False
+
+
+def test_a_frame_in_the_queue_does_not_land_after_they_said_stop(backend):
+    client = backend.client
+    session_id = new_session(client)
+    client.post("/sessions/" + session_id + "/broadcast", headers=AUTH, json={"state": "started"})
+    seen_frame(backend, session_id)
+    session = backend.store.sessions[session_id]
+    calls = len(backend.meta.vision_calls)
+
+    def queue_then_stop(index):
+        backend.meta.hook = None
+        post_frame(client, session_id, jpeg((205, 30, 40)), timestamp=201, small=True)
+        backend.meta.quick.append(quick_line("Хорошо, жду.", needs_screen=False, hold=True))
+        session.open_words = ""
+        say(client, session_id)
+    backend.meta.hook = queue_then_stop
+    post_frame(client, session_id, jpeg((200, 30, 40)), timestamp=200)
+    idle(backend, session_id)
+    assert len(backend.meta.vision_calls) == calls + 1 and session.step_sequence == 1
+
+
 def test_a_step_under_way_does_not_land_after_they_said_stop(backend):
     client = backend.client
     session_id = new_session(client)

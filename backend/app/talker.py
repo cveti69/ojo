@@ -136,9 +136,10 @@ class Talker:
 
     def _hold(self, session: Session, quick: dict) -> None:
         """After "close", "go back" or "stop" the next step is theirs to say, so the pointer waits for their next words."""
-        held, session.held = session.held, quick["hold"]
-        if quick["hold"]:
+        held, session.held = session.held, quick["hold"] and not quick["new_goal"]  # A new goal is a word to go on.
+        if session.held:
             session.revision += 1  # What the pointer is working on belongs to the old plan.
+            session.pending_frame = None
             session.note("hold", turn=session.turn)
         elif held and session.broadcasting and session.last_frame and not quick["needs_screen"]:
             session.last_analyzed_gray = None  # A still screen sends no frames.

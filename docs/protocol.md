@@ -12,7 +12,7 @@
 | `POST /sessions` | приложение | `{"goal": "", "user_lang": "ru", "target_lang": "id", "text_entry": "clipboard", "effort": "minimal", "character": "warm", "own_character": "", "mode": "lead", "eyes": true}`, поле `eyes` только при включённых глазах | `201 {"session_id": "s_ab12cd34"}` |
 | `POST /sessions/{id}/goal` | приложение | `{"goal": "Заказать шампунь от перхоти"}` | `200 {"reply_ru": "Хорошо. Включи демонстрацию экрана.", "ready_text": "sampo anti ketombe", "mode": null}`. Если трансляция уже идёт, сервер сразу разбирает последний кадр. `mode` равен `"beside"`, если человек просит только смотреть: сервер уже переключился |
 | `POST /transcribe` | приложение | `audio/wav`: моно, 16 бит, 16 кГц | `200 {"text": "..."}` |
-| `POST /sessions/{id}/frames` | расширение записи | `image/jpeg` | `202 {"accepted": true}` или `202 {"accepted": false, "reason": "busy"}`. В режиме «Рядом» `reason` равен `beside`, кадр не хранится |
+| `POST /sessions/{id}/frames` | расширение записи | `image/jpeg` | `202 {"accepted": true}` или `202 {"accepted": false, "reason": "busy"}`. В режиме «Рядом» `reason` равен `beside`, кадр не хранится. Пока указка ждёт слова человека, `reason` равен `held` |
 | `POST /sessions/{id}/text` | расширение записи или приложение | `{"frame_ts": 1793436844526, "lines": [{"text": "Beli sekarang", "words": [{"text": "Beli", "box": [0.1, 0.8, 0.2, 0.83]}]}]}` | `200 {"ok": true}` |
 | `GET /sessions/{id}/suggestions` | клавиатура | | `200 {"step_id": "s3", "texts": ["sampo anti ketombe"], "hint_ru": "запрос для поиска"}` |
 | `GET /sessions/{id}/hint?after=s3` | приложение, запасной путь без WebSocket, раз в секунду | | `200` событие `hint` новее `after`, иначе `204` |
