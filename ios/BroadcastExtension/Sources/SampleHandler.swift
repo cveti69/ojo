@@ -433,7 +433,24 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     }
 
     private func stopForError(_ error: Error, runID: UUID) {
-        if markFinished(runID: runID) { finishBroadcastWithError(error) }
+        if markFinished(runID: runID) { finishBroadcastWithError(Self.shown(error)) }
+    }
+
+    /// A finished call is no error, yet Apple offers only a stop with an alert. An empty error stops with none. That is
+    /// not documented, so the alert stays as the way out if the broadcast is still alive a moment later.
+    private func stopQuietly(run: Run) {
+        guard markFinished(runID: run.id) else { return }
+        run.journal.append("Трансляция: стоп без окна iOS")
+        _ = perform(NSSelectorFromString("finishBroadcastWithError:"), with: nil)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [self] in
+            run.journal.append("Трансляция: ещё жива, стоп с окном «Звонок завершён»")
+            finishBroadcastWithError(Self.shown(BroadcastError.ended))
+        }
+    }
+
+    // iOS puts this into its own alert, and only a plain NSError brings its text across to the system.
+    private static func shown(_ error: Error) -> NSError {
+        NSError(domain: "OjO", code: 1, userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])
     }
 
     private func startMonitoring(run: Run) {
@@ -476,7 +493,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         sendHeldSample()
         if run.store.sessionID != run.sessionID {
             run.journal.append("Сессия закрыта приложением, останавливаем трансляцию")
-            stopForError(BroadcastError.ended, runID: run.id)
+            stopQuietly(run: run)
         } else if statistics.0 {
             let availableMB = os_proc_available_memory() / 1_048_576
             run.journal.append("Кадров доставлено: \(statistics.1), пропущено: \(statistics.2); запрос кадра в полёте: \(statistics.3 ? "да" : "нет"); доступно памяти: \(availableMB) МБ")
@@ -488,7 +505,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         var errorDescription: String? {
             switch self {
             case .noSession: return "Нет активного звонка. Откройте приложение и нажмите «Позвонить», затем включите трансляцию."
-            case .ended: return "Звонок завершён в приложении. Трансляция остановлена."
+            case .ended: return "Звонок завершён"
             case .noMailbox: return "Файл кадра в общей группе недоступен."
             }
         }

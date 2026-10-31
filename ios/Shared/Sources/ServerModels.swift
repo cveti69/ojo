@@ -29,6 +29,17 @@ public struct GoalResponse: Decodable, Sendable {
     public let readyText: String?
     enum CodingKeys: String, CodingKey { case replyRU = "reply_ru", readyText = "ready_text" }
 }
+public struct SpokenReply: Decodable, Sendable {
+    public let replyRU: String?
+    public let goal: String?
+    public let timings: SpokenTimings
+    enum CodingKeys: String, CodingKey { case replyRU = "reply_ru", goal, timings }
+}
+public struct SpokenTimings: Decodable, Sendable {
+    public let speechMS: Int
+    public let modelMS: Int
+    enum CodingKeys: String, CodingKey { case speechMS = "speech_ms", modelMS = "model_ms" }
+}
 public struct TextResponse: Decodable, Sendable { public let text: String }
 public struct SpeechRequest: Encodable, Sendable { public let text: String }
 public struct OKResponse: Decodable, Sendable { public let ok: Bool }

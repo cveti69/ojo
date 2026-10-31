@@ -1,3 +1,4 @@
+@preconcurrency import AVFAudio
 import Foundation
 import CoreGraphics
 import CoreText
@@ -49,6 +50,9 @@ private final class StubState: @unchecked Sendable {
         if path.hasSuffix("/goal") { return (200, #"{"reply_ru":"Включите трансляцию","ready_text":"sampo"}"#) }
         if path.hasSuffix("/frames") { return (202, #"{"accepted":false,"reason":"busy"}"#) }
         if path.hasSuffix("/speech") { return (200, "abcd") }
+        if path.hasSuffix("/say") {
+            return (200, #"{"reply_ru":"Там написано Войти","goal":"Купи кондиционер","timings":{"speech_ms":1200,"model_ms":2100}}"#)
+        }
         if path.hasSuffix("/suggestions") { return (200, #"{"step_id":"s3","texts":["hello"],"hint_ru":"запрос"}"#) }
         if path.hasSuffix("/transcribe") || path.hasSuffix("/translate") { return (200, #"{"text":"Результат"}"#) }
         if path.hasSuffix("/hint") {
@@ -111,6 +115,9 @@ private enum ProtocolChecks {
         var spoken = 0
         for try await _ in try await client.speech("Привет") { spoken += 1 }
         try check(spoken == 4, "speech bytes")
+        let said = try await client.say(Data("RIFFtestWAVE".utf8), sessionID: created.sessionID)
+        try check(said.replyRU == "Там написано Войти" && said.goal == "Купи кондиционер" && said.timings.modelMS == 2100,
+                  "spoken line response decoding")
         let frame = try await client.sendFrame(Data([0xff, 0xd8, 0xff, 0xd9]), sessionID: created.sessionID,
                                                width: 1170, height: 2532, timestampMS: 123456789)
         try check(!frame.accepted && frame.reason == "busy", "busy frame response")
@@ -152,6 +159,9 @@ private enum ProtocolChecks {
         try check(requests.allSatisfy { $0.value(forHTTPHeaderField: "X-Token") == "test-token" }, "X-Token on every HTTP request")
         let audio = requests.first { $0.url!.path.hasSuffix("/transcribe") }!
         try check(audio.httpMethod == "POST" && audio.value(forHTTPHeaderField: "Content-Type") == "audio/wav", "audio upload format")
+        let line = requests.first { $0.url!.path.hasSuffix("/say") }!
+        try check(line.url!.path == "/api/sessions/session-test/say" && line.value(forHTTPHeaderField: "Content-Type") == "audio/wav",
+                  "spoken line endpoint")
         let create = requests.first { $0.url!.path == "/api/sessions" }!
         let createBody = try JSONSerialization.jsonObject(with: body(of: create)) as! [String: String]
         try check(createBody == ["goal": "", "user_lang": "ru", "target_lang": "auto", "text_entry": "clipboard"], "create-session body")
@@ -182,11 +192,97 @@ private enum ProtocolChecks {
         try check(message.state == "analyzing", "status state")
         let done = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"done","text_ru":"Готово"}"#.utf8))
         guard case .done = done else { throw CheckFailure(description: "done event") }
+        try checkSpeechDetector()
+        try await checkPhraseListener()
         try checkScreenTextGeometry()
         try checkSettingsAndMailbox()
         try await checkMemoryGate()
         if CommandLine.arguments.contains("--vision") { try await checkVision() }
         print("Protocol checks passed: HTTP, /text, frame_ts, word fallback, languages, mailbox clear, extensionFast, memory gate, token defaults, WAV, lifecycle, events, errors, WebSocket.")
+    }
+
+    /// A tone at the given level in dB. Each repetition of the seed gives a slightly different noise.
+    private static func sound(seconds: Double, level: Double, hertz: Double = 220, rate: Double = 16_000) -> [Float] {
+        let amplitude = pow(10, level / 20) * 2.0.squareRoot()
+        return (0..<Int(seconds * rate)).map { index in
+            let wave = hertz > 0 ? sin(2 * .pi * hertz * Double(index) / rate) : Double.random(in: -1...1)
+            return Float(amplitude * wave)
+        }
+    }
+
+    private static func pcm(_ samples: [Float]) -> [Int16] { samples.map { Int16(max(-1, min(1, $0)) * 32767) } }
+
+    private static func checkSpeechDetector() throws {
+        func phrases(_ parts: [Float]...) -> [Phrase] {
+            var detector = SpeechDetector()
+            return parts.flatMap { detector.add(pcm($0)) }
+        }
+        func room(_ seconds: Double) -> [Float] { sound(seconds: seconds, level: -60, hertz: 0) }
+        func voice(_ seconds: Double) -> [Float] { sound(seconds: seconds, level: -25) }
+        try check(phrases(room(3)).isEmpty, "a quiet room is no speech")
+        try check(phrases(room(1), sound(seconds: 0.1, level: -15), room(2)).isEmpty, "a tap on the phone is no speech")
+        let one = phrases(room(1), voice(1.5), room(0.4), voice(1), room(1.2))
+        try check(one.count == 1, "a short pause stays inside the phrase, got \(one.count)")
+        try check(abs(one[0].seconds - 3.6) < 0.25, "phrase keeps its start and a little quiet, got \(one[0].seconds)")
+        try check(one[0].noiseFloor < -55 && one[0].loudest > -30, "phrase levels")
+        try check(phrases(room(1), voice(1), room(0.5)).isEmpty, "a phrase is not over before the pause is")
+        try check(phrases(room(1), voice(1), room(1.2), voice(1), room(1.2)).count == 2, "a long pause splits phrases")
+        let long = phrases(room(1), voice(20))
+        try check(long.count == 1 && abs(long[0].seconds - 15) < 0.1, "the longest phrase, got \(long.map(\.seconds))")
+        let noisy = phrases(sound(seconds: 1, level: -35, hertz: 0), sound(seconds: 1, level: -28), sound(seconds: 1.2, level: -35, hertz: 0))
+        try check(noisy.isEmpty, "speech has to stand out from a loud room")
+        var muted = SpeechDetector()
+        _ = muted.add([Int16](repeating: 0, count: 16_000))
+        let afterMute = muted.add(pcm(room(1) + voice(1) + room(1.2)))
+        try check(afterMute.count == 1, "the voice filter's silence does not teach the room level")
+        var cut = SpeechDetector()
+        _ = cut.add(pcm(room(1) + voice(0.6)))
+        try check(cut.finish() != nil && cut.finish() == nil, "finishing hands over what was heard, once")
+        var short = SpeechDetector()
+        _ = short.add(pcm(room(1) + voice(0.15)))
+        try check(short.finish() == nil, "finishing drops a click")
+        let file = one[0].wav
+        try check(file.count == 44 + one[0].samples.count * 2 && file.prefix(4) == Data("RIFF".utf8), "WAV size")
+        let header = file.withUnsafeBytes { (rate: $0.loadUnaligned(fromByteOffset: 24, as: UInt32.self),
+                                             size: $0.loadUnaligned(fromByteOffset: 40, as: UInt32.self)) }
+        try check(header.rate == 16_000 && Int(header.size) == one[0].samples.count * 2, "WAV header")
+    }
+
+    private static func checkPhraseListener() async throws {
+        func buffers(_ samples: [Float], rate: Double) -> [AVAudioPCMBuffer] {
+            let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)!
+            let size = Int(rate / 10)
+            return stride(from: 0, to: samples.count, by: size).map { start in
+                let part = samples[start..<min(start + size, samples.count)]
+                let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(part.count))!
+                buffer.frameLength = AVAudioFrameCount(part.count)
+                part.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: part.count) }
+                return buffer
+            }
+        }
+        func speech(rate: Double) -> [AVAudioPCMBuffer] {
+            buffers(sound(seconds: 1, level: -60, hertz: 0, rate: rate) + sound(seconds: 1.5, level: -25, rate: rate)
+                    + sound(seconds: 1.2, level: -60, hertz: 0, rate: rate), rate: rate)
+        }
+        for rate in [48_000.0, 44_100, 24_000, 16_000] {
+            let listener = PhraseListener()
+            speech(rate: rate).forEach(listener.hear)
+            var heard = listener.phrases.makeAsyncIterator()
+            guard let phrase = await heard.next() else { throw CheckFailure(description: "no phrase at \(rate) Hz") }
+            try check(abs(phrase.seconds - 2.2) < 0.3, "phrase length at \(rate) Hz, got \(phrase.seconds)")
+            try check(phrase.loudest > -29 && phrase.loudest < -21, "level survives \(rate) Hz, got \(phrase.loudest)")
+        }
+        let listener = PhraseListener()
+        listener.deafen(until: .distantFuture)
+        speech(rate: 48_000).forEach(listener.hear)
+        listener.deafen(until: .distantPast)
+        let late = buffers(sound(seconds: 1, level: -60, hertz: 0, rate: 48_000) + sound(seconds: 1, level: -25, rate: 48_000), rate: 48_000)
+        late.forEach(listener.hear)
+        listener.deafen(until: .distantFuture)
+        buffers(sound(seconds: 0.1, level: -25, rate: 48_000), rate: 48_000).forEach(listener.hear)
+        var heard = listener.phrases.makeAsyncIterator()
+        guard let cut = await heard.next() else { throw CheckFailure(description: "the agent's voice cut a phrase and lost it") }
+        try check(cut.seconds < 2, "only the person's words get through, got \(cut.seconds)")
     }
 
     private static func checkScreenTextGeometry() throws {

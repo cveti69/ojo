@@ -39,6 +39,13 @@ struct SettingsScreen: View {
                 Text("auto — агент определит язык по экрану. Буфер работает везде. Нашу клавиатуру включайте только для приложений, которые её пускают. Новые настройки применяются со следующего звонка.")
             }
             Section {
+                Toggle("Слушать весь звонок", isOn: Binding(
+                    get: { model.hearsDuringCall }, set: { model.setHearsDuringCall($0) }
+                ))
+            } footer: {
+                Text("С агентом можно говорить из другого приложения: спросить по ходу или поменять цель. Микрофон включён до конца звонка.")
+            }
+            Section {
                 Button("Сохранить") { save() }
                     .disabled(model.store == nil)
                 if !form.message.isEmpty { Text(form.message) }

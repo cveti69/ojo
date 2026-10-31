@@ -3,15 +3,19 @@ import Shared
 
 @MainActor
 protocol Speaker: AnyObject {
+    var onSpeaking: ((Bool) -> Void)? { get set }
     func prepare(client: ServerClient, journal: SharedJournal?)
     func speak(_ text: String)
     func speakAndWait(_ text: String) async
+    func waitUntilQuiet() async
     func stop()
     func finish()
 }
 
 extension Speaker {
+    var onSpeaking: ((Bool) -> Void)? { get { nil } set {} }
     func prepare(client: ServerClient, journal: SharedJournal?) {}
+    func waitUntilQuiet() async {}
     func finish() { stop() }
 }
 
@@ -20,6 +24,7 @@ extension Speaker {
 final class ServerSpeaker: Speaker {
     private static let sampleRate = 24_000.0
     private static let bufferBytes = 9600  // 200 ms of 16-bit mono.
+    var onSpeaking: ((Bool) -> Void)?
     private let fallback: any Speaker
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
@@ -44,7 +49,11 @@ final class ServerSpeaker: Speaker {
 
     func speak(_ text: String) {
         stop()
-        playback = Task { [weak self] in await self?.play(text) }
+        onSpeaking?(true)
+        playback = Task { [weak self] in
+            await self?.play(text)
+            if !Task.isCancelled { self?.onSpeaking?(false) }
+        }
     }
 
     func speakAndWait(_ text: String) async {
@@ -54,11 +63,16 @@ final class ServerSpeaker: Speaker {
         await withTaskCancellationHandler { await playback?.value } onCancel: { playback?.cancel() }
     }
 
+    func waitUntilQuiet() async {
+        await playback?.value
+    }
+
     func stop() {
         playback?.cancel()
         playback = nil
         player.stop()
         fallback.stop()
+        onSpeaking?(false)
     }
 
     func finish() {

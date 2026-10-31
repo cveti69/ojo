@@ -33,7 +33,7 @@ public final class SharedStore: @unchecked Sendable {
         defaults.register(defaults: [
             "serverURL": configuration.defaultServerURL.absoluteString,
             "userLang": "ru", "targetLang": "id", "textInput": TextEntry.clipboard.rawValue,
-            "screenReading": ScreenTextMode.extension.rawValue
+            "screenReading": ScreenTextMode.extension.rawValue, "hearsDuringCall": true
         ])
     }
 
@@ -63,6 +63,14 @@ public final class SharedStore: @unchecked Sendable {
         get { defaults.bool(forKey: "useVideoCallFallback") }
         set {
             defaults.set(newValue, forKey: "useVideoCallFallback")
+            defaults.synchronize()
+        }
+    }
+
+    public var hearsDuringCall: Bool {
+        get { defaults.bool(forKey: "hearsDuringCall") }
+        set {
+            defaults.set(newValue, forKey: "hearsDuringCall")
             defaults.synchronize()
         }
     }

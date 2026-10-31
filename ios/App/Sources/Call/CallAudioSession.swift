@@ -12,7 +12,7 @@ final class CallAudioSession {
         try session.setActive(true)
         if keepAlivePlayer == nil {
             // Keep the call's audio I/O running between spoken hints.
-            let player = try AVAudioPlayer(data: Self.silentWAV())
+            let player = try AVAudioPlayer(data: WAV.file(samples: [Int16](repeating: 0, count: 16_000), sampleRate: 16_000))
             player.numberOfLoops = -1
             keepAlivePlayer = player
         }
@@ -32,29 +32,6 @@ final class CallAudioSession {
     func interrupted() {
         isActive = false
         onActivityChange?(false)
-    }
-
-    private static func silentWAV() -> Data {
-        let sampleCount: UInt32 = 16_000
-        let byteCount = sampleCount * 2
-        var data = Data("RIFF".utf8)
-        func number<T: FixedWidthInteger>(_ value: T) {
-            var value = value.littleEndian
-            withUnsafeBytes(of: &value) { data.append(contentsOf: $0) }
-        }
-        number(byteCount + 36)
-        data.append(contentsOf: "WAVEfmt ".utf8)
-        number(UInt32(16))
-        number(UInt16(1))
-        number(UInt16(1))
-        number(sampleCount)
-        number(sampleCount * 2)
-        number(UInt16(2))
-        number(UInt16(16))
-        data.append(contentsOf: "data".utf8)
-        number(byteCount)
-        data.append(Data(repeating: 0, count: Int(byteCount)))
-        return data
     }
 
     private enum AudioError: LocalizedError {

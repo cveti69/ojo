@@ -79,6 +79,15 @@ public final class ServerClient: Sendable {
         return try JSONDecoder().decode(ServerEvent.self, from: data)
     }
 
+    /// A phrase the person said during the call. The reply is empty when the words were not meant for the agent.
+    public func say(_ wav: Data, sessionID: String) async throws -> SpokenReply {
+        var request = try request("POST", ["sessions", sessionID, "say"])
+        request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await session.upload(for: request, from: wav)
+        try validate(response)
+        return try JSONDecoder().decode(SpokenReply.self, from: data)
+    }
+
     /// The agent's words as raw 24 kHz, 16-bit mono audio, while it is being made.
     public func speech(_ text: String) async throws -> URLSession.AsyncBytes {
         var request = try request("POST", ["speech"])
