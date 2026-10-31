@@ -29,7 +29,7 @@ enum EyesPainter {
         eye(at: left, width: width, height: height, open: pose.left, inward: 1, pose: pose, on: context)
         eye(at: right, width: width, height: height, open: pose.right, inward: -1, pose: pose, on: context)
         if pose.brow > 0 {
-            let top = right.y - height / 2 - thick * 0.9
+            let top = right.y - height / 2 - thick * (0.9 + 1.3 * CGFloat(pose.browLift))
             context.setStrokeColor(red: 1, green: 1, blue: 1, alpha: CGFloat(pose.brow))
             context.setLineWidth(thick)
             context.move(to: CGPoint(x: right.x - width * 0.46, y: top + thick * 0.55))

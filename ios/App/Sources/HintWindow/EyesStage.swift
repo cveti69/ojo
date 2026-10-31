@@ -103,14 +103,6 @@ final class EyesStage {
         tick()
     }
 
-    /// The person came back to the same screen.
-    func sameScreen() {
-        if hint != nil { scene = .hint }
-        needsComposing = true
-        director.stopReading()
-        tick()
-    }
-
     /// A pause with no hint to go back to. Words stay under the eyes until the next change.
     func pause(words: String?) {
         hint = nil
@@ -122,12 +114,11 @@ final class EyesStage {
         tick()
     }
 
-    func celebrate(words: String) {
-        waits.removeAll()
-        director.endWaiting()
-        director.isCalm = false
-        director.rejoice(at: clock)
-        pause(words: words)
+    /// The face the model chose for what it said. On a payment screen there is none, and the eyes keep still.
+    func express(_ face: EyesFace?, calm: Bool) {
+        director.isCalm = calm
+        if let face { director.express(face, at: clock) }
+        tick()
     }
 
     /// The agent asked the person something. With a hint on screen the hint matters more.

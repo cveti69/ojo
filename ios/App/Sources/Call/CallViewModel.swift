@@ -745,10 +745,16 @@ final class CallViewModel: ObservableObject {
             guard event.turn == heardTurn else { break }
             pause?.cancel()
             eyes?.stopWaiting(for: .reply)
+            eyes?.stopWaiting(for: .screen)
             dropLines { $0.kind == .filler }
         case .left:
             if let eyes { eyes.newScreen() } else { showRestCard() }
             lastInstruction = Self.restWords
+        case .reading:
+            eyes?.newScreen()
+            eyes?.wait(for: .screen)
+        case .face(let event):
+            eyes?.express(event.face.flatMap(EyesFace.init(rawValue:)), calm: event.calm)
         }
     }
 
@@ -757,6 +763,7 @@ final class CallViewModel: ObservableObject {
         guard say.turn == heardTurn else { return }  // The person has said more since.
         pause?.cancel()
         eyes?.stopWaiting(for: .reply)
+        eyes?.stopWaiting(for: .screen)
         if let text = say.pasteText { placeOnClipboard(text, reason: "Буфер из ответа") }
         guard !say.textRU.isEmpty else { return }
         status = say.textRU

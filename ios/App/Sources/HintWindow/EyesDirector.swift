@@ -9,6 +9,7 @@ struct EyePose: Equatable {
     var pupil = 1.0  // 1 is the resting size.
     var squint = 0.0
     var brow = 0.0
+    var browLift = 0.0  // How far the brow goes up, in doubt.
     var cross = 0.0  // The pupils come together.
     var isHappy = false  // Arcs in place of the eyes.
 }
@@ -16,6 +17,12 @@ struct EyePose: Equatable {
 enum EyesMood: String {
     case rest = "покой", reading = "читает", thinking = "думает", listening = "слушает"
     case speaking = "говорит", pointing = "показывает", happy = "радуется"
+    case found = "нашёл", doubting = "сомневается", stopped = "стоп"
+}
+
+/// The model's own word for its face. It chooses by itself, and the eyes only show it.
+enum EyesFace: String, CaseIterable {
+    case thinking = "думаю", found = "нашёл", doubting = "сомневаюсь", happy = "рад", stopped = "стоп"
 }
 
 enum EyesJoke: CaseIterable {
@@ -50,6 +57,12 @@ struct EyesDirector {
     private static let pointingFor = 1.5
     private static let flareFor = 0.3
     private static let happyFor = 1.0
+    private static let faceFor = 1.6
+    private static let foundFor = 0.7
+    private static let doubtHold = 0.75
+    private static let doubtShut = 0.4  // Of the left eye.
+    private static let stoppedOpen = 1.16
+    private static let stoppedPupil = 0.6
     private static let hearingGap = 0.4  // Sound comes in pieces of 0.1 s, so this means it stopped.
     private static let softSpeed = 8.0  // Per second: the squint, the brow and the pupil take about 0.12 s.
 
@@ -78,12 +91,15 @@ struct EyesDirector {
     private var brow = 0.0
     private var cross = 0.0
     private var wink = 1.0
+    private var doubt = 0.0
 
     private var level = 0.0
     private var lastHeard = -Double.infinity
     private var readingUntil = -Double.infinity
     private var pointStart = -Double.infinity
     private var happyUntil = -Double.infinity
+    private var face = EyesMood.rest
+    private var faceStart = -Double.infinity
     private var waitingSince: TimeInterval?
     private var countedPause = false
     private var pausesToJoke: Int
@@ -130,6 +146,18 @@ struct EyesDirector {
 
     mutating func rejoice(at time: TimeInterval) { happyUntil = time + Self.happyFor }
 
+    mutating func express(_ face: EyesFace, at time: TimeInterval) {
+        switch face {
+        case .happy: return rejoice(at: time)
+        case .thinking: self.face = .thinking
+        case .found: self.face = .found
+        case .doubting: self.face = .doubting
+        case .stopped: self.face = .stopped
+        }
+        faceStart = time
+        nextLook = time
+    }
+
     mutating func perform(_ joke: EyesJoke, at time: TimeInterval) {
         self.joke = joke
         lastJoke = joke
@@ -169,7 +197,7 @@ struct EyesDirector {
             considerJoke(at: time)
             look(at: time)
         }
-        if time >= nextBlink {
+        if time >= nextBlink, mood != .stopped {
             startBlink(at: time)
             nextBlink = time + choose(mood == .rest ? Self.restBlinkGap : Self.blinkGap)
             if random() < Self.doubleBlink { secondBlink = time + 0.25 }
@@ -185,7 +213,8 @@ struct EyesDirector {
     /// When the picture can change next. The eyes draw nothing until then.
     var nextChange: TimeInterval {
         if isMoving { return now + Self.frame }
-        let moments = [nextLook, nextBlink, secondBlink, readingUntil, pointStart + Self.pointingFor, happyUntil,
+        let moments = [nextLook, nextBlink, secondBlink, readingUntil, pointStart + Self.flareFor, pointStart + Self.pointingFor, happyUntil,
+                       faceStart + Self.foundFor, faceStart + Self.faceFor,
                        lastHeard + Self.hearingGap, (waitingSince ?? -.infinity) + Self.thinksAfter,
                        (waitingSince ?? -.infinity) + Self.jokesAfter, (waitingSince ?? -.infinity) + Self.givesUpAfter]
         return moments.filter { $0 > now }.min() ?? now + 1
@@ -196,6 +225,7 @@ struct EyesDirector {
         if time < happyUntil { return .happy }
         if time < pointStart + Self.pointingFor { return .pointing }
         if time - lastHeard < Self.hearingGap { return .listening }
+        if time < faceStart + Self.faceFor { return face }
         if isSpeaking { return .speaking }
         if time < readingUntil { return .reading }
         if let waitingSince, time - waitingSince >= Self.thinksAfter { return .thinking }
@@ -205,18 +235,22 @@ struct EyesDirector {
     private var isMoving: Bool {
         now < jumpStart + jumpLength || now < blinkStart + blinkLength || joke != nil
             || pupil != pupilTarget || squint != squintTarget || brow != browTarget || cross != crossTarget || wink != winkTarget
+            || doubt != doubtTarget
     }
 
     private var pupilTarget: Double {
         switch mood {
         case .listening: return 1 + 0.55 * level
         case .pointing: return now - pointStart < Self.flareFor ? 1.3 : 1
+        case .found: return now - faceStart < Self.foundFor ? 1.4 : 1
+        case .stopped: return Self.stoppedPupil
         default: return 1
         }
     }
 
     private var squintTarget: Double { mood == .thinking ? 0.35 : 0 }
-    private var browTarget: Double { mood == .thinking ? 1 : 0 }
+    private var browTarget: Double { mood == .thinking || mood == .doubting ? 1 : 0 }
+    private var doubtTarget: Double { mood == .doubting ? 1 : 0 }
     private var crossTarget: Double { joke == .cross ? 1 : 0 }
     private var winkTarget: Double { joke == .squint ? 0.45 : 1 }
 
@@ -227,6 +261,7 @@ struct EyesDirector {
         brow = Self.approach(brow, browTarget, by: step)
         cross = Self.approach(cross, crossTarget, by: step)
         wink = Self.approach(wink, winkTarget, by: step)
+        doubt = Self.approach(doubt, doubtTarget, by: step)
     }
 
     private static func approach(_ value: Double, _ target: Double, by step: Double) -> Double {
@@ -255,10 +290,14 @@ struct EyesDirector {
             thinkingSide = -thinkingSide
             jump(to: (0.7 * thinkingSide, -0.75), at: time)
             nextLook = time + choose(0.35...Self.hold.upperBound)
+        case .doubting:
+            thinkingSide = -thinkingSide
+            jump(to: (0.55 * thinkingSide, 0.2), at: time)
+            nextLook = time + Self.doubtHold
         case .pointing:
             jump(to: pointingAt, at: time)
             nextLook = .infinity
-        case .rest, .listening, .speaking, .happy:
+        case .rest, .listening, .speaking, .happy, .found, .stopped:
             jump(to: (0, 0), at: time)
             nextLook = .infinity
         }
@@ -296,6 +335,15 @@ struct EyesDirector {
         return phase < 0.4 ? 1 - phase / 0.4 : (phase - 0.4) / 0.6
     }
 
+    private func opening(at time: TimeInterval) -> Double {
+        switch mood {
+        case .pointing: return time - pointStart < Self.flareFor ? 1.12 : 1
+        case .found: return time - faceStart < Self.foundFor ? 1.12 : 1
+        case .stopped: return Self.stoppedOpen
+        default: return 1
+        }
+    }
+
     private func pose(at time: TimeInterval) -> EyePose {
         var pose = EyePose()
         var place = gaze(at: time)
@@ -303,14 +351,15 @@ struct EyesDirector {
             let angle = jokeAngle + 2 * .pi * (time - jokeStart) / EyesJoke.circle.length
             place = (0.85 * cos(angle), 0.85 * sin(angle))
         }
-        let wide = mood == .pointing && time - pointStart < Self.flareFor ? 1.12 : 1
         pose.x = place.x
         pose.y = place.y
-        pose.left = lid(at: time) * wide
+        pose.left = lid(at: time) * opening(at: time)
         pose.right = pose.left * wink
+        pose.left *= 1 - Self.doubtShut * doubt
         pose.pupil = pupil
         pose.squint = squint
         pose.brow = brow
+        pose.browLift = doubt
         pose.cross = cross
         pose.isHappy = mood == .happy
         return pose

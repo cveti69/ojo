@@ -40,6 +40,8 @@ paste: готовый текст, если человеку надо его вс
 private: true, если на последнем экране оплата, карта, пароль или код.
 lang: код языка приложения на последнем экране, две буквы. Экрана нет, не пиши lang.
 notes: записи для себя, любой текст. На следующем ходу они вернутся к тебе."""
+FACES = ("думаю", "нашёл", "сомневаюсь", "рад", "стоп")
+FACE_RULE = "\nface: какое у тебя сейчас лицо, одно слово: " + ", ".join(FACES) + "."
 SILENT_TURN = "(молчит, экран обновился)"
 UNSEEN = "(экран не показан)"
 FAILED_LINE = "Не получилось ответить, повтори, пожалуйста."
@@ -122,7 +124,8 @@ def _pictures(chat: List[dict]) -> Set[int]:
 
 def messages_of(session: Session) -> List[dict]:
     """A plain chat. The words stay for the whole call, and a turn that was never answered joins the next one."""
-    messages: List[dict] = [{"role": "system", "content": ROLE + session.character + "\n\n" + RULES}]
+    rules = RULES + FACE_RULE if session.eyes else RULES
+    messages: List[dict] = [{"role": "system", "content": ROLE + session.character + "\n\n" + rules}]
     pictures = _pictures(session.chat)
     for index, turn in enumerate(session.chat):
         if turn["role"] == "assistant":
@@ -261,6 +264,8 @@ class Friend:
         if not _new_screen(session, frame):
             return False, "same"
         self._left(session)
+        if session.eyes:
+            session.publish({"type": "reading", "turn": session.turn})
         if self._busy(session):
             if session.restarts >= MAX_RESTARTS:
                 session.held = True
@@ -286,6 +291,8 @@ class Friend:
                 kept["frame"] = None
         if session.call_log:
             session.call_log.forget(timestamp_ms)
+        if session.eyes:
+            session.publish({"type": "face", "turn": session.turn, "face": None, "calm": True})
 
     def played(self, session: Session, turn: int) -> None:
         if turn == session.turn:
@@ -359,6 +366,8 @@ class Friend:
         if got is None:
             if session.open_words:
                 session.publish({"type": "say", "turn": turn, "text_ru": FAILED_LINE, "paste_text": None, "timings": {"model_ms": _ms(started)}})
+            else:
+                session.publish({"type": "quiet", "turn": turn})
             return
         model, reply, answer = got
         ms = _ms(started)
@@ -388,6 +397,9 @@ class Friend:
             session.publish({"type": "say", "turn": turn, "text_ru": "" if early else said, "paste_text": paste_text or None, "timings": {"model_ms": ms}})
         elif not said:
             session.publish({"type": "quiet", "turn": turn})
+        if session.eyes:
+            face = _text(answer.get("face"))
+            session.publish({"type": "face", "turn": turn, "face": face if face in FACES and not private else None, "calm": private})
         target = _target(answer.get("show"))
         if target and frame:
             await self._show(session, frame, said or target["label"], target, private, ms)

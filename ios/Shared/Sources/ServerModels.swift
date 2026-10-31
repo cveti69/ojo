@@ -120,6 +120,12 @@ public struct SayEvent: Decodable, Sendable {
     enum CodingKeys: String, CodingKey { case turn, textRU = "text_ru", pasteText = "paste_text", timings }
 }
 
+public struct FaceEvent: Decodable, Sendable {
+    public let turn: Int
+    public let face: String?
+    public let calm: Bool
+}
+
 public struct SayTimings: Decodable, Sendable {
     public let modelMS: Int
     enum CodingKeys: String, CodingKey { case modelMS = "model_ms" }
@@ -138,6 +144,8 @@ public enum ServerEvent: Decodable, Sendable {
     case look(TurnEvent)
     case quiet(TurnEvent)
     case left
+    case reading
+    case face(FaceEvent)
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -150,6 +158,8 @@ public enum ServerEvent: Decodable, Sendable {
         case "look": self = .look(try TurnEvent(from: decoder))
         case "quiet": self = .quiet(try TurnEvent(from: decoder))
         case "left": self = .left
+        case "reading": self = .reading
+        case "face": self = .face(try FaceEvent(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(forKey: .type, in: container, debugDescription: "Unknown event type")
         }

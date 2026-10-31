@@ -228,6 +228,17 @@ private enum ProtocolChecks {
         guard case .look(let look) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"look","turn":5}"#.utf8)), look.turn == 5 else {
             throw CheckFailure(description: "look event")
         }
+        guard case .reading = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"reading","turn":6}"#.utf8)) else {
+            throw CheckFailure(description: "the eyes get a new screen to read")
+        }
+        guard case .face(let face) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"face","turn":6,"face":"стоп","calm":false}"#.utf8)),
+              face.face.flatMap(EyesFace.init(rawValue:)) == .stopped, !face.calm else {
+            throw CheckFailure(description: "the eyes get the model's face")
+        }
+        guard case .face(let calm) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"face","turn":6,"face":null,"calm":true}"#.utf8)),
+              calm.face == nil, calm.calm else {
+            throw CheckFailure(description: "a payment screen has no face")
+        }
         guard case .quiet(let quiet) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"quiet","turn":6}"#.utf8)), quiet.turn == 6 else {
             throw CheckFailure(description: "quiet event")
         }
@@ -537,6 +548,55 @@ private enum ProtocolChecks {
         happy.rejoice(at: 1)
         try check(happy.advance(to: 1.5).isHappy && !happy.advance(to: 2.1).isHappy, "arcs for a second")
 
+        var found = EyesDirector(random: sameRandom())
+        _ = found.advance(to: 1)
+        found.isSpeaking = true
+        found.express(.found, at: 1)
+        var flash = found.advance(to: 1)
+        flash = found.advance(to: 1.2)
+        try check(found.mood == .found && flash.left > 1.1 && flash.pupil > 1.3 && flash.x == 0, "found: wide open with a big pupil")
+        try check(found.advance(to: 2).left == 1 && found.mood == .found, "only for a moment, and the face holds a little longer")
+        _ = found.advance(to: 2.7)
+        try check(found.mood == .speaking, "then the eyes go back to speaking")
+
+        var doubt = EyesDirector(random: sameRandom())
+        _ = doubt.advance(to: 1)
+        doubt.express(.doubting, at: 1)
+        let doubts = play(&doubt, from: 1, to: 2.5).filter { $0.time > 1.07 }.map(\.pose)
+        try check(doubts.contains { $0.left < $0.right * 0.7 && $0.brow == 1 && $0.browLift == 1 }, "doubt: one eye narrows and the brow goes up")
+        try check(Set(doubts.map { $0.x > 0 }).count == 2, "and it looks to both sides")
+        try check(doubt.advance(to: 3).browLift < 1, "the doubt passes")
+
+        var stopped = EyesDirector(random: sameRandom())
+        _ = stopped.advance(to: 1)
+        stopped.express(.stopped, at: 1)
+        let stare = play(&stopped, from: 1, to: 2.5).filter { $0.time > 1.3 }.map(\.pose)
+        try check(stare.allSatisfy { $0.left > 1.1 && $0.pupil < 0.7 && $0.x == 0 }, "stop: a wide still stare with no blink")
+
+        var thinks = EyesDirector(random: sameRandom())
+        _ = thinks.advance(to: 1)
+        thinks.express(.thinking, at: 1)
+        _ = thinks.advance(to: 1.2)
+        try check(thinks.mood == .thinking, "thinking is the same face as a long wait")
+
+        var glad = EyesDirector(random: sameRandom())
+        _ = glad.advance(to: 1)
+        glad.express(.happy, at: 1)
+        try check(glad.advance(to: 1.5).isHappy, "glad: arcs")
+
+        var calmFace = EyesDirector(random: sameRandom())
+        _ = calmFace.advance(to: 1)
+        calmFace.isCalm = true
+        for face in EyesFace.allCases { calmFace.express(face, at: 1) }
+        try check(play(&calmFace, from: 1, to: 3).allSatisfy { $0.pose.brow == 0 && !$0.pose.isHappy && $0.pose.pupil == 1 }, "payment: no face at all")
+
+        var hearing = EyesDirector(random: sameRandom())
+        _ = hearing.advance(to: 1)
+        hearing.express(.stopped, at: 1)
+        hearing.hear(level: 1, at: 1.1)
+        _ = hearing.advance(to: 1.2)
+        try check(hearing.mood == .listening, "the person's voice comes before the face")
+
         var jokes = EyesDirector(random: sameRandom())
         var seen: [Int] = []
         var time = 1.0
@@ -573,6 +633,12 @@ private enum ProtocolChecks {
         _ = try inked(EyePose(x: 1))
         let onRight = painted[(480 * 720 + 300) * 4] < 128 && painted[(480 * 720 + 150) * 4] > 128
         try check(onRight, "looking right leaves the left of the eye white")
+        let plainBrow = try inked(EyePose(brow: 1))
+        try check(plainBrow > open, "the brow is drawn")
+        _ = try inked(EyePose(brow: 1, browLift: 1))
+        let raised = (0..<720).contains { painted[(250 * 720 + $0) * 4] > 128 }
+        _ = try inked(EyePose(brow: 1))
+        try check(raised && !(0..<720).contains { painted[(250 * 720 + $0) * 4] > 128 }, "the brow goes up in doubt")
     }
 
     private static func checkShelf() throws {

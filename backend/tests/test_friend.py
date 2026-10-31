@@ -568,7 +568,7 @@ def test_no_answer_on_a_screen_stays_silent(backend):
     backend.meta.replies = [OSError("down"), OSError("down")]
     post_frame(backend.client, session_id)
     idle(backend, session_id)
-    assert seen == []
+    assert kinds(seen) == ["quiet"]
 
 
 @pytest.mark.parametrize("words_in,cut", [
@@ -923,3 +923,90 @@ def test_the_words_on_the_screen_make_it_private_without_the_model(backend, monk
     assert not list((folder / "frames").iterdir())
     answer = next(line for line in lines_of(folder) if line["kind"] == "answer")
     assert answer["private"] is True and "answer" not in answer
+
+
+def test_the_face_is_asked_for_only_with_the_eyes_on(backend):
+    plain = new_session(backend.client)
+    eyes = new_session(backend.client, eyes=True)
+    prompt = lambda session_id: friend.messages_of(backend.store.sessions[session_id])[0]["content"]
+    assert "face" not in prompt(plain) and prompt(eyes) == prompt(plain) + friend.FACE_RULE
+
+
+def test_the_model_chooses_its_face_and_the_eyes_get_it(backend):
+    session_id = new_session(backend.client, eyes=True)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Вот оно.", face="нашёл")]
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    assert [event for event in seen if event["type"] == "face"] == [{"type": "face", "turn": 1, "face": "нашёл", "calm": False}]
+
+
+def test_the_voice_does_not_wait_for_the_face(backend):
+    session_id = new_session(backend.client, eyes=True)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Вот оно.", face="рад")]
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    assert kinds(seen).index("say") < kinds(seen).index("face")
+
+
+def test_an_unknown_face_is_no_face(backend):
+    session_id = new_session(backend.client, eyes=True)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Хм.", face="ого")]
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    assert [event["face"] for event in seen if event["type"] == "face"] == [None]
+
+
+def test_a_payment_screen_has_no_face_and_keeps_the_eyes_calm(backend):
+    session_id = new_session(backend.client, eyes=True)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Проверь сумму.", face="рад", private=True)]
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    assert [(event["face"], event["calm"]) for event in seen if event["type"] == "face"] == [(None, True)]
+
+
+def test_words_of_a_payment_calm_the_eyes_before_the_answer(backend):
+    client = backend.client
+    entered, release = blocked(backend, only=1)
+    session_id = sharing(client, eyes=True)
+    seen = events_of(backend, session_id)
+    try:
+        post_frame(client, session_id, timestamp=7)
+        assert entered.wait(2)
+        assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={"frame_ts": 7, "lines": [{"text": "Bayar Sekarang", "words": []}]}).status_code == 200
+        assert [event["calm"] for event in seen if event["type"] == "face"] == [True]
+    finally:
+        release.set()
+    idle(backend, session_id)
+
+
+def test_the_eyes_read_a_new_screen(backend):
+    client = backend.client
+    session_id = sharing(client, eyes=True)
+    seen = events_of(backend, session_id)
+    post_frame(client, session_id, SCREENS[0])
+    idle(backend, session_id)
+    assert "reading" in kinds(seen)
+
+
+def test_nothing_changes_for_a_call_without_eyes(backend):
+    client = backend.client
+    session_id = sharing(client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Вот оно.", face="рад")]
+    post_frame(client, session_id, SCREENS[0])
+    idle(backend, session_id)
+    assert kinds(seen) == ["say"]
+
+
+def test_a_screen_that_got_no_answer_lets_the_eyes_stop_waiting(backend):
+    client = backend.client
+    session_id = sharing(client, eyes=True)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [OSError("down"), OSError("down")]
+    post_frame(client, session_id, SCREENS[0])
+    idle(backend, session_id)
+    assert kinds(seen) == ["reading", "quiet"]

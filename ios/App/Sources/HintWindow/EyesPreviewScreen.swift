@@ -83,8 +83,14 @@ private final class EyesPreview: ObservableObject, EyesSurface {
         try? stage.show(hint: jpeg, box: [0.0375, 0.8, 0.2736, 0.9771], gaze: [0.8, -0.6], calm: false)
         await step("Подсказка: смотрит на кнопку", 2.5)
         guard !Task.isCancelled else { return }
-        stage.celebrate(words: "Я на связи")
-        await step("Цель достигнута", 1.5)
+        stage.pause(words: nil)
+        for face in EyesFace.allCases {
+            guard !Task.isCancelled else { return }
+            stage.express(face, calm: false)
+            await step("Лицо: \(face.rawValue)", 2.2)
+        }
+        guard !Task.isCancelled else { return }
+        stage.pause(words: "Я на связи")
         await step("Пауза с текстом", 1.5)
         guard !Task.isCancelled else { return }
         stage.pause(words: nil)
