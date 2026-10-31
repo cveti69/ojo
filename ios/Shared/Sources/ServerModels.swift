@@ -128,8 +128,9 @@ public struct SayEvent: Decodable, Sendable {
     public let goal: String?
     public let mode: CallMode?
     public let looks: Bool
+    public let wait: String?
     public let timings: SayTimings
-    enum CodingKeys: String, CodingKey { case turn, layer, textRU = "text_ru", goal, mode, looks, timings }
+    enum CodingKeys: String, CodingKey { case turn, layer, textRU = "text_ru", goal, mode, looks, wait, timings }
 }
 
 public struct SayTimings: Decodable, Sendable {

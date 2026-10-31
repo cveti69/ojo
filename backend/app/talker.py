@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Optional, Sequence, Set, Tuple
+from typing import Coroutine, Optional, Sequence, Set, Tuple
 
 from starlette.concurrency import run_in_threadpool
 
@@ -14,7 +14,9 @@ from .sessions import Frame, Session
 
 log = logging.getLogger(__name__)
 
-FAILED_LINE = {"reply": "Не получилось ответить, повтори, пожалуйста.", "new_goal": None, "mode": None, "show": None, "private": True}
+FAILED_LINE = {"reply": "Не получилось ответить, повтори, пожалуйста.", "new_goal": None, "mode": None, "show": None,
+               "look_again": False, "private": True}
+SETTLES_IN = 2  # Seconds from the start of a move to the frame the phone keeps: it waits 1.5 for a still screen.
 
 
 def _ms(started: float) -> int:
@@ -28,7 +30,10 @@ class Talker:
 
     def heard(self, session: Session, said: str) -> None:
         """A turn from the stream. Answers run side by side, so a new turn never waits for an old one."""
-        task = asyncio.create_task(self.answer(session, *self.take(session, said)))
+        self._run(self.answer(session, *self.take(session, said)))
+
+    def _run(self, work: Coroutine) -> None:
+        task = asyncio.create_task(work)
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
 
@@ -42,6 +47,7 @@ class Talker:
         session.open_mark = len(session.dialog)
         session.turn += 1
         session.heard = ""
+        session.looks_again = ""
         session.note("heard", turn=session.turn, said=said)
         session.publish({"type": "heard", "turn": session.turn})
         return session.turn, said
@@ -81,19 +87,20 @@ class Talker:
         """The head answers from the screens the phone kept, in both modes. A turn that only chats leaves this answer standing:
         only a newer question to the screen replaces it."""
         said, session.heard = session.heard, ""
+        again, session.second_look = session.second_look, False
         turn = session.turn
         session.looking = turn
         try:
-            await self._answer_from(session, turn, said, frames)
+            await self._answer_from(session, turn, said, frames, again)
         finally:
             if session.looking == turn:
                 session.looking = 0
 
-    async def _answer_from(self, session: Session, turn: int, said: str, frames: Sequence[Frame]) -> None:
+    async def _answer_from(self, session: Session, turn: int, said: str, frames: Sequence[Frame], again: bool) -> None:
         started = time.perf_counter()
         newest = frames[-1]
         try:
-            answer = await self._see(session, said, frames)
+            answer = await self._see(session, said, frames, again)
         except Exception as error:
             log.warning("Answer from the screen: %s", type(error).__name__)
             answer = FAILED_LINE
@@ -105,16 +112,37 @@ class Talker:
         if session.looking != turn or session.ended or not answer["reply"]:
             return
         self._change(session, answer, newest)
-        if answer["show"] and session.moved_at < newest.received_at:  # Over a screen they have left it would only send them back.
+        left = session.moved_at > newest.received_at
+        if answer["show"] and not left:  # Over a screen they have left it would only send them back.
             await self.engine.show(session, newest, answer["reply"], answer["show"], answer["private"], timings["screen_ms"])
             if session.looking != turn or session.ended:
                 return
         self._say(session, turn, said, answer, "screen", timings)
+        if answer["look_again"] and not again:
+            session.looks_again = said
+            if left:
+                self.moved(session)
 
-    async def _see(self, session: Session, said: str, frames: Sequence[Frame]) -> dict:
+    def moved(self, session: Session) -> None:
+        """The head said it would look at the screen they were about to open, and it is opening."""
+        said, session.looks_again = session.looks_again, ""
+        if said:
+            self._run(self._look_again(session, session.turn, said))
+
+    async def _look_again(self, session: Session, turn: int, said: str) -> None:
+        await asyncio.sleep(SETTLES_IN)
+        if turn == session.turn and not session.ended:
+            session.heard = said
+            session.second_look = True
+            session.note("look", turn=turn, again=True)
+            session.publish({"type": "look", "turn": turn})
+
+    async def _see(self, session: Session, said: str, frames: Sequence[Frame], again: bool = False) -> dict:
         prompt = self._prompt(session, said, len(frames))
         if frames[-1].window:
             prompt += window.RULE.format(box=[round(value * 1000) for value in frames[-1].window])
+        if again:
+            prompt += talk.AGAIN_RULE
         return await run_in_threadpool(talk.ask, [frame.jpeg for frame in frames], prompt, session.effort)
 
     def _prompt(self, session: Session, said: str, screens: int, quick: bool = False) -> str:
@@ -143,4 +171,4 @@ class Talker:
             session.dialog.append({"who": "person", "text": said})
         session.dialog.append({"who": "agent", "text": answer["reply"]})
         session.publish({"type": "say", "turn": turn, "layer": layer, "text_ru": answer["reply"], "goal": answer["new_goal"],
-                         "mode": answer["mode"], "looks": looks, "timings": timings})
+                         "mode": answer["mode"], "looks": looks, "wait": answer.get("wait"), "timings": timings})

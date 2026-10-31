@@ -39,6 +39,7 @@ struct SpeechDetector {
     static let sampleRate = 16_000
     private static let blockSize = sampleRate / 10  // The level is read every 100 ms.
     private static let speechMargin: Float = 10  // Speech stands this many dB above the room.
+    private static let voiceMargin: Float = 14  // A person on the call stood 16 dB and more above the room, sounds around them 10 to 12.
     private static let quietestSpeech: Float = -50
     private static let floorRise: Float = 0.1  // dB per block, so a long phrase never becomes the new silence.
     private static let leadBlocks = 5  // A word starts before it is loud enough to notice.
@@ -68,6 +69,9 @@ struct SpeechDetector {
 
     /// A phrase is under way, even in the quiet that may yet end it.
     var isHearing: Bool { !blocks.isEmpty }
+
+    /// Loud enough to be the person, so the agent waits for them, and not for a sound in the room.
+    var isSpeaking: Bool { isHearing && loudest > (noiseFloor ?? -160) + Self.voiceMargin }
 
     /// Long enough to be a person and not a click.
     var isTalking: Bool { speechBlocks >= Self.shortestSpeech }

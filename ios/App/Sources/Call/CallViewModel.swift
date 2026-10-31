@@ -54,6 +54,8 @@ final class CallViewModel: ObservableObject {
     private static let streamWait: UInt64 = 2_500_000_000  // Past this the server has not heard the phrase, so it goes as a file.
     private static let warmthGap: UInt64 = 20_000_000_000
     private static let screenWait = 1.0
+    private static let secondWordAfter = 3.5
+    private static let mostWords = 2  // On one turn, however long the wait.
 
     private let audioSession = CallAudioSession()
     private let recorder = GoalAudioRecorder()
@@ -96,6 +98,7 @@ final class CallViewModel: ObservableObject {
     private var droppedSounds = 0
     private var pauseWords = PauseWords()
     private var pause: Task<Void, Never>?
+    private var wordsThisTurn = 0
     private var eyes: EyesStage?
     private var subscriptions = Set<AnyCancellable>()
 
@@ -145,7 +148,7 @@ final class CallViewModel: ObservableObject {
         window.onDiagnostic = { [weak self] in self?.journal?.append($0) }
         recorder.onDiagnostic = { [weak self] in self?.journal?.append($0) }
         self.speaker.onSounding = { [weak self] in self?.soundChanged($0) }
-        self.speaker.mayStart = { [weak self] in self?.microphone?.isHearing != true }
+        self.speaker.mayStart = { [weak self] in self?.microphone?.isSpeaking != true }
         window.onRepeatHint = { [weak self] in self?.repeatHint() }
         audioSession.onActivityChange = { [weak self] active in
             self?.audioIsActive = active
@@ -734,8 +737,8 @@ final class CallViewModel: ObservableObject {
             waitingHint = line
         } else {
             lines.append(line)
-            // What the person asked goes before what has not sounded yet.
-            if line.kind == .reply, !isSounding, let currentLine, currentLine.kind != .reply {
+            // What the person asked goes before what has not sounded yet, and a word on a pause stops for it at once.
+            if line.kind == .reply, let currentLine, currentLine.kind == .filler || (!isSounding && currentLine.kind != .reply) {
                 if currentLine.kind == .hint, waitingHint == nil { waitingHint = currentLine }
                 speaker.stop()
             }
@@ -806,13 +809,16 @@ final class CallViewModel: ObservableObject {
     }
 
     /// A short word while the agent works, so the line never goes dead. It only ever fills silence.
-    private func fillPause(_ kind: PauseWords.Kind, after seconds: Double) {
+    private func fillPause(_ kind: PauseWords.Kind, after seconds: Double, evenSoon: Bool = false) {
         guard speaksRussian else { return }
         pause?.cancel()
         pause = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard let self, !Task.isCancelled, self.isCallActive, self.currentLine == nil, self.lines.isEmpty,
-                  self.waitingHint == nil, !self.isRecording, let words = self.pauseWords.next(kind) else { return }
+                  self.waitingHint == nil, !self.isRecording, self.microphone?.isSpeaking != true,
+                  self.wordsThisTurn < Self.mostWords,
+                  let words = evenSoon ? self.pauseWords.any(kind) : self.pauseWords.next(kind) else { return }
+            self.wordsThisTurn += 1
             self.journal?.append("Фраза на паузе")
             self.enqueue(Line(text: words, kind: .filler))
         }
@@ -911,6 +917,7 @@ final class CallViewModel: ObservableObject {
             journal?.append("Ход \(event.turn): услышан через \(sinceVoiceEnded()) мс после конца речи")
             eyes?.wait(for: .reply)
             dropLines { ($0.kind == .reply && $0.layer == "quick") || $0.kind == .filler }
+            wordsThisTurn = 0
             if callMode == .lead { fillPause(.thinking, after: 2.5) }
         case .say(let say):
             hear(say)
@@ -943,8 +950,16 @@ final class CallViewModel: ObservableObject {
         status = say.textRU
         if !say.looks { eyes?.stopWaiting(for: .reply) }
         if !say.looks, say.textRU.hasSuffix("?") { eyes?.ask(say.textRU) }
-        let promise = say.looks && speaksRussian ? pauseWords.any(.promise) : nil  // Kept phrases sound at once.
-        enqueue(Line(text: promise ?? say.textRU, turn: say.turn, layer: say.layer))
+        guard say.looks, speaksRussian else {
+            enqueue(Line(text: say.textRU, turn: say.turn, layer: say.layer))
+            return
+        }
+        let waiting = PauseWords.waiting(for: say.wait)
+        if wordsThisTurn < Self.mostWords {  // Kept phrases sound at once.
+            wordsThisTurn += 1
+            enqueue(Line(text: pauseWords.any(waiting.first), kind: .filler, turn: say.turn, layer: say.layer))
+        }
+        fillPause(waiting.second, after: Self.secondWordAfter, evenSoon: true)
     }
 
     /// The only way a screen leaves the phone beside the person: the server heard words for the agent and asked.

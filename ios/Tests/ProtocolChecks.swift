@@ -297,6 +297,10 @@ private enum ProtocolChecks {
         try check(streaming.takeFresh().isEmpty && !streaming.isHearing, "a quiet room goes nowhere")
         _ = streaming.add(pcm(voice(0.5)))
         try check(streaming.isHearing && streaming.isTalking, "the detector knows the person is talking")
+        try check(streaming.isSpeaking, "the voice waits for a person")
+        var distant = SpeechDetector()
+        _ = distant.add(pcm(room(1) + sound(seconds: 0.5, level: -48)))
+        try check(distant.isHearing && !distant.isSpeaking, "but not for a sound in the room")
         let opening = streaming.takeFresh()
         try check(opening.count == 16_000 && streaming.takeFresh().isEmpty, "the stream starts with the sound before the first word, got \(opening.count)")
         _ = streaming.add(pcm(voice(0.2)))
@@ -638,16 +642,18 @@ private enum ProtocolChecks {
         var words = PauseWords()
         let start = Date()
         var said: [String] = []
-        for step in 0..<40 {
+        for step in 0..<48 {
             let now = start.addingTimeInterval(Double(step) * 16)
-            guard let word = words.next([.looking, .thinking, .promise][step % 3], now: now) else {
+            guard let word = words.next(PauseWords.Kind.allCases[step % PauseWords.Kind.allCases.count], now: now) else {
                 throw CheckFailure(description: "a word after a long pause")
             }
             try check(word != said.last, "the same pause word twice in a row: \(word)")
             said.append(word)
         }
         try check(Set(said).count == PauseWords.all.count, "every pause word gets its turn")
-        try check(words.next(.thinking, now: start.addingTimeInterval(39 * 16 + 5)) == nil, "pause words stay rare")
+        try check(words.next(.thinking, now: start.addingTimeInterval(47 * 16 + 5)) == nil, "pause words stay rare")
+        try check(words.any(PauseWords.waiting(for: "compare").second, now: start.addingTimeInterval(47 * 16 + 6)).hasSuffix("."), "the second word comes however soon")
+        try check(PauseWords.waiting(for: nil).first == .promise && PauseWords.waiting(for: "read").first == .reading, "the words follow the task")
     }
 
     private static func checkScreenTextGeometry() throws {

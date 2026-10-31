@@ -33,6 +33,7 @@ final class PhraseListener: @unchecked Sendable {
 
     /// The person is talking now. Heard from another thread, so the voice can wait for them to finish.
     var isHearing: Bool { lock.withLock { detector.isHearing } }
+    var isSpeaking: Bool { lock.withLock { detector.isSpeaking } }
     var isTalking: Bool { lock.withLock { detector.isTalking } }
 
     /// When the last loud sound was heard, which is about when the person stopped.

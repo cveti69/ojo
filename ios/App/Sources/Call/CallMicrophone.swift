@@ -12,6 +12,7 @@ final class CallMicrophone {
     var phrases: AsyncStream<Phrase> { listener.phrases }
     var sound: AsyncStream<[Int16]> { listener.sound }
     var isHearing: Bool { listener.isHearing }
+    var isSpeaking: Bool { listener.isSpeaking }
     var isTalking: Bool { listener.isTalking }
     var lastVoice: Date { listener.lastVoice }
     var dropped: (count: Int, loudest: Float) { listener.dropped }

@@ -12,7 +12,7 @@ from PIL import Image
 from starlette.testclient import TestClient, WebSocketDenialResponse
 from starlette.websockets import WebSocketDisconnect
 
-from app import config, grounding, window
+from app import config, grounding, talker, window
 from app.engine import prepare_frame
 from app.server import create_app
 from conftest import (AUTH, TOKEN, FakeEars, answer, idle, jpeg, new_session, post_frame, quick_line, real_locate, receive_type,
@@ -891,6 +891,47 @@ def test_beside_nothing_of_the_shown_screen_stays(backend):
         assert receive_type(websocket, "hint")["instruction_ru"] == "Вот сюда."
     session = backend.store.sessions[session_id]
     assert session.last_hint is None and session.last_step is None and session.last_analyzed_gray is None
+
+
+def test_the_head_looks_again_when_the_screen_they_went_to_opens(backend, monkeypatch):
+    monkeypatch.setattr(talker, "SETTLES_IN", 0)
+    client = backend.client
+    session_id = new_session(client)
+    backend.meta.talk.append(talk_line("Жми на доставку, посмотрим.", show=SHOW, look_again=True))
+    ask_the_screen(backend, session_id)
+    assert backend.store.sessions[session_id].looks_again
+    backend.meta.talk.append(talk_line("Смотри, дешевле всего Reguler.", show=SHOW))
+    with client.websocket_connect("/sessions/" + session_id + "/events", headers=AUTH) as websocket:
+        client.post("/sessions/" + session_id + "/moved", headers=AUTH)
+        assert receive_type(websocket, "look")["turn"] == backend.store.sessions[session_id].turn
+        look(client, session_id, [jpeg((10, 20, 30))])
+        assert receive_type(websocket, "say")["text_ru"] == "Смотри, дешевле всего Reguler."
+    assert "you speak first" in backend.meta.talk_calls[-1][0]["content"][0]["text"]
+    client.post("/sessions/" + session_id + "/moved", headers=AUTH)
+    assert not backend.store.sessions[session_id].heard  # Once.
+
+
+def test_a_new_line_ends_the_wait_for_the_next_screen(backend, monkeypatch):
+    monkeypatch.setattr(talker, "SETTLES_IN", 0)
+    client = backend.client
+    session_id = new_session(client)
+    backend.meta.talk.append(talk_line("Жми на доставку.", look_again=True))
+    ask_the_screen(backend, session_id)
+    backend.meta.quick.append(quick_line("Хорошо.", needs_screen=False))
+    say(client, session_id)
+    client.post("/sessions/" + session_id + "/moved", headers=AUTH)
+    assert not backend.store.sessions[session_id].heard
+
+
+def test_the_phone_is_told_what_the_head_will_do(backend):
+    client = backend.client
+    session_id = new_session(client)
+    backend.meta.quick.append(quick_line(wait="compare"))
+    with client.websocket_connect("/sessions/" + session_id + "/events", headers=AUTH) as websocket:
+        websocket.receive_json()
+        ask_the_screen(backend, session_id)
+        words = receive_type(websocket, "say")
+    assert words["looks"] is True and words["wait"] == "compare"
 
 
 def test_what_was_shown_beside_goes_when_they_leave_the_screen(backend):

@@ -398,6 +398,7 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
         require_active(session)
         session.note("moved")
         processor.moved(session)
+        talker.moved(session)
         return {"ok": True}
 
     @router.post("/speech")

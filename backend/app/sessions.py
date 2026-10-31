@@ -67,6 +67,8 @@ class Session:
     stale: asyncio.Event = field(default_factory=asyncio.Event)
     restarts: int = 0
     shown: bool = False  # Beside the person: what the head showed is still in the window.
+    looks_again: str = ""  # Their words, when the head waits for the screen they are about to open.
+    second_look: bool = False
     moved_at: float = 0
     last_activity: float = field(default_factory=time.monotonic)
     last_frame: Optional[Frame] = None
