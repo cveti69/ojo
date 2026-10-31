@@ -35,12 +35,16 @@ def answer(**changes):
     return result
 
 
-def talk_line(reply="Это кнопка оплаты.", addressed=True, new_goal=None, mode="keep"):
-    return {"addressed": addressed, "reply": reply, "new_goal": new_goal, "mode": mode}
+real_locate = grounding.locate
 
 
 def quick_line(reply="Сейчас гляну.", addressed=True, new_goal=None, mode="keep", needs_screen=True):
-    return {**talk_line(reply, addressed, new_goal, mode), "needs_screen": needs_screen}
+    return {"addressed": addressed, "reply": reply, "new_goal": new_goal, "mode": mode, "needs_screen": needs_screen}
+
+
+def talk_line(reply="Это кнопка оплаты.", addressed=True, new_goal=None, mode="keep", show=None, private=False):
+    return {"addressed": addressed, "reply": reply, "new_goal": new_goal, "mode": mode, "private": private,
+            "show": show or {"label": "", "object": "", "box": []}}
 
 
 class FakeEars:

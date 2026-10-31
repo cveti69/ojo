@@ -22,7 +22,7 @@ from starlette.websockets import WebSocketDisconnect
 from . import config, debug, meta, step
 from .ears import Ears
 from .engine import Engine, prepare_frame
-from .sessions import Session, SessionStore
+from .sessions import Frame, Session, SessionStore
 from .talker import Talker
 from .voice import ElevenLabsSynthesizer, MetaSpeechRecognizer, SpeechRecognizer, SpeechSynthesizer
 
@@ -131,19 +131,25 @@ def goal_reply(text: str) -> tuple:
     return (first.strip().lower(), rest.strip()) if first.strip().lower() in ("lead", "beside") and rest.strip() else (None, text.strip())
 
 
-async def read_pictures(request: Request) -> List[bytes]:
+def picture_time(name: Optional[str]) -> int:
+    """The phone names each picture by when it was taken."""
+    stem = (name or "").split(".", 1)[0]
+    return int(stem) if stem.isdigit() else 0
+
+
+async def read_pictures(request: Request) -> List[Frame]:
     """The screens the phone kept, oldest first. They live only for this reply."""
     if request.headers.get("content-type", "").split(";", 1)[0].lower() != "multipart/form-data":
         raise HTTPException(415, "Нужны кадры multipart/form-data.")
     if int(request.headers.get("content-length") or 0) > MAX_LOOK_FRAMES * config.MAX_FRAME_BYTES:
         raise HTTPException(413, "Слишком большой запрос.")
     async with request.form(max_files=MAX_LOOK_FRAMES, max_fields=0) as form:
-        pictures = [await part.read() for part in form.getlist("frame")]
+        pictures = [(await part.read(), picture_time(part.filename)) for part in form.getlist("frame")]
     if not pictures:
         raise HTTPException(422, "Нужен хотя бы один кадр.")
     started = time.perf_counter()
     try:
-        return [(await run_in_threadpool(prepare_frame, picture, 1, 1, 0, started)).jpeg for picture in pictures]
+        return [await run_in_threadpool(prepare_frame, picture, 1, 1, taken, started) for picture, taken in pictures]
     except ValueError as error:
         raise HTTPException(422, str(error)) from None
 

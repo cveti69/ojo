@@ -7,7 +7,7 @@ import hashlib
 import io
 import re
 import time
-from typing import Optional
+from typing import Optional, Sequence
 
 from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
@@ -109,6 +109,15 @@ async def ready_icons(icons: asyncio.Future) -> list:
         return []
 
 
+def _text_on(session: Session, frame: Frame) -> Optional[list]:
+    """The words read on this frame, or on the last one if the screen is still the same. Our window hides what is under it."""
+    lines = session.frame_text.get(frame.timestamp_ms)
+    last = session.last_frame
+    if lines is None and last and same_frame(frame.gray, last.gray):
+        lines = session.frame_text.get(last.timestamp_ms)
+    return window.outside(lines, frame.window) if lines and frame.window else lines
+
+
 def _detected_language(answer: dict) -> Optional[str]:
     match = _SCREEN_LANGUAGE.match(answer.get("screen", ""))
     candidates = [answer.get("app_lang"), answer.get("screen_lang"), answer.get("target_lang")]
@@ -207,7 +216,7 @@ class Engine:
         prompt = step.build_prompt(
             session.goal, [item["summary"] for item in session.history[-HISTORY_STEPS:]],
             user_lang=session.user_lang, target_lang=session.app_lang or session.target_lang,
-            character=session.character,
+            character=session.character, dialog=session.talk_so_far(),
         )
         if frame.window:
             prompt += window.RULE.format(box=[round(value * 1000) for value in frame.window])
@@ -240,6 +249,56 @@ class Engine:
             stale.cancel()
             model.cancel()
         return model.result() if model.done() else None
+
+    async def show(self, session: Session, frame: Frame, text: str, target: dict, private: bool, model_ms: int) -> None:
+        """What the head chose goes up the way a step does, and it beats the plan: an analysis under way belongs to the old
+        plan, and this screen now counts as seen."""
+        session.revision += 1
+        started = time.perf_counter()
+        location = await run_in_threadpool(grounding.locate, frame.jpeg, frame.width, frame.height,
+                                           {"action": "tap", "target": target}, _text_on(session, frame), [])
+        box_ms = round((time.perf_counter() - started) * 1000)
+        if session.ended or not location["box"]:
+            session.note("show", outcome="not found", target=target, box_ms=box_ms)
+            return
+        image = await run_in_threadpool(hint.render, frame.jpeg, location["box"], text, session.eyes)
+        timings = {"queue_ms": 0, "model_ms": model_ms, "box_ms": box_ms, "box_source": location["source"],
+                   "window": frame.window is not None}
+        step_id = self._put_up(session, frame, image, location, "tap", text, speak=False, calm=private, timings=timings)
+        session.note("show", outcome="shown", step=step_id, target=target, box=location["box"], box_source=location["source"],
+                     box_ms=box_ms)
+
+    def _put_up(self, session: Session, frame: Frame, image: bytes, location: dict, action: str, instruction: str,
+                speak: bool = True, texts: Sequence[str] = (), insert_hint: str = "", paste_text: Optional[str] = None,
+                confirm: bool = False, calm: bool = False, timings: Optional[dict] = None) -> str:
+        """The one way a hint reaches the window. Beside the person nothing of the screen stays here."""
+        session.step_sequence += 1
+        step_id = "s" + str(session.step_sequence)
+        event = {
+            "type": "hint", "step_id": step_id, "instruction_ru": instruction, "speak": speak,
+            "image_jpeg_base64": base64.b64encode(image).decode("ascii"),
+            "insert_texts": list(texts), "insert_hint_ru": insert_hint if texts else "",
+            "paste_text": paste_text, "needs_user_confirm": confirm, "frame_ts": frame.timestamp_ms, "timings": timings,
+        }
+        if session.eyes:
+            event["eyes_box"] = hint.eyes_box(instruction)
+            event["gaze"] = window.gaze(frame.window, location["box"], frame.width, frame.height)
+            event["calm"] = calm
+        session.step_id = step_id
+        session.texts = list(texts)
+        session.insert_hint_ru = event["insert_hint_ru"]
+        session.history.append({
+            "id": step_id, "instruction_ru": instruction, "target": location["box"], "time": time.time(),
+            "summary": remembered_step(instruction, action, list(texts)),
+        })
+        session.publish(event)
+        if session.mode == "beside":
+            session.last_hint = None
+        else:
+            session.last_step = {"action": action, "box": location["box"], "confirm": confirm, "gray": frame.gray}
+            session.last_frame_hash = frame.digest
+            session.last_analyzed_gray = frame.gray
+        return step_id
 
     async def _next_step(self, session: Session, frame: Frame, revision: int, prompt: str, timings: dict,
                          icons: asyncio.Future, seen: dict) -> None:
@@ -280,11 +339,8 @@ class Engine:
             instruction = PASTE_INSTRUCTION.format(text=texts[0])
             paste_text = texts[0]
         stage = time.perf_counter()
-        lines = session.frame_text.get(frame.timestamp_ms)
-        if lines and frame.window:
-            lines = window.outside(lines, frame.window)
-        location = await run_in_threadpool(grounding.locate, frame.jpeg, frame.width, frame.height, answer, lines,
-                                           await ready_icons(icons))
+        location = await run_in_threadpool(grounding.locate, frame.jpeg, frame.width, frame.height, answer,
+                                           _text_on(session, frame), await ready_icons(icons))
         timings["box_ms"] = round((time.perf_counter() - stage) * 1000)
         if outdated(session, revision):
             return
@@ -303,34 +359,12 @@ class Engine:
         timings["image_ms"] = round((time.perf_counter() - stage) * 1000)
         if outdated(session, revision):
             return
-        session.step_sequence += 1
-        step_id = "s" + str(session.step_sequence)
-        event = {
-            "type": "hint", "step_id": step_id, "instruction_ru": instruction, "speak": True,
-            "image_jpeg_base64": base64.b64encode(image).decode("ascii"),
-            "insert_texts": texts, "insert_hint_ru": answer["insert_hint_ru"] if texts else "",
-            "paste_text": paste_text, "needs_user_confirm": needs_confirm, "frame_ts": frame.timestamp_ms,
-            "timings": {"queue_ms": timings["queue_ms"], "model_ms": timings["model_ms"], "box_ms": timings["box_ms"],
-                        "box_source": location["source"], "window": frame.window is not None},
-        }
-        if session.eyes:
-            event["eyes_box"] = hint.eyes_box(instruction)
-            event["gaze"] = window.gaze(frame.window, location["box"], frame.width, frame.height)
-            event["calm"] = private
-        session.step_id = step_id
-        session.texts = texts
-        session.insert_hint_ru = event["insert_hint_ru"]
-        session.last_step = {"action": answer["action"], "box": location["box"], "confirm": needs_confirm,
-                             "gray": frame.gray}
-        session.last_frame_hash = frame.digest
-        session.last_analyzed_gray = frame.gray
-        session.needs_user_confirm = needs_confirm
-        session.history.append({
-            "id": step_id, "instruction_ru": instruction, "target": location["box"], "time": time.time(),
-            "summary": remembered_step(instruction, answer["action"], texts),
-        })
         stage = time.perf_counter()
-        session.publish(event)
+        session.needs_user_confirm = needs_confirm
+        step_id = self._put_up(session, frame, image, location, answer["action"], instruction, texts=texts,
+                               insert_hint=answer["insert_hint_ru"], paste_text=paste_text, confirm=needs_confirm, calm=private,
+                               timings={"queue_ms": timings["queue_ms"], "model_ms": timings["model_ms"], "box_ms": timings["box_ms"],
+                                        "box_source": location["source"], "window": frame.window is not None})
         seen.update(outcome="hint", step=step_id, said=instruction)
         timings["send_ms"] = round((time.perf_counter() - stage) * 1000)
         timings["total_ms"] = round((time.perf_counter() - frame.received_at) * 1000)

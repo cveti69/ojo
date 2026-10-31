@@ -33,10 +33,9 @@ def test_new_goal_clears_payment_and_suggestions(backend):
     response = backend.client.post("/sessions/" + session_id + "/goal", headers=AUTH, json={"goal": "Новая цель"})
     assert response.status_code == 200
     session = backend.store.sessions[session_id]
-    assert not session.needs_user_confirm and not session.history and session.last_hint is None
+    assert not session.needs_user_confirm and session.last_hint is None
     assert post_frame(backend.client, session_id).json()["accepted"] is True
     idle(backend, session_id)
-    assert len(session.history) == 1
     assert session.step_id == "s2"
     assert backend.client.get("/sessions/" + session_id + "/hint?after=s1", headers=AUTH).json()["step_id"] == "s2"
 

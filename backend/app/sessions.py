@@ -88,6 +88,12 @@ class Session:
         if self.call_log:
             self.call_log.write(kind, fields)
 
+    def talk_so_far(self) -> List[dict]:
+        """Everything said on the call, with the line still being answered."""
+        if self.open_words and self.written_turn < self.turn:
+            return self.dialog + [{"who": "person", "text": self.open_words}]
+        return self.dialog
+
     def keep_picture(self, frame: Frame, private: bool) -> Optional[str]:
         """A payment or password screen is never written down."""
         return self.call_log.keep(frame.jpeg, frame.timestamp_ms) if self.call_log and not private else None
@@ -129,10 +135,10 @@ class Session:
         self.subscribers.discard(queue)
 
     def set_goal(self, goal: str) -> None:
+        """A refined goal keeps the steps done so far: the person is still on the same road."""
         self.note("goal", goal=goal)
         self.revision += 1
         self.goal = goal
-        self.history.clear()
         self.texts.clear()
         self.insert_hint_ru = ""
         self.step_id = None

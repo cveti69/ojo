@@ -1,31 +1,24 @@
-"""The two layers of the conversation: a quick line from the words alone, then the answer from the screen."""
+"""The two layers of the conversation: a quick line from the words alone, then the head, which sees the screens."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from typing import List, Optional, Sequence, Set, Tuple
+from typing import Optional, Sequence, Set, Tuple
 
 from starlette.concurrency import run_in_threadpool
 
-from . import config, talk
+from . import config, talk, window
 from .engine import HISTORY_STEPS, Engine
-from .sessions import Session
+from .sessions import Frame, Session
 
 log = logging.getLogger(__name__)
 
-FAILED = "Не получилось ответить, повтори, пожалуйста."
+FAILED_LINE = {"reply": "Не получилось ответить, повтори, пожалуйста.", "new_goal": None, "mode": None, "show": None, "private": True}
 
 
 def _ms(started: float) -> int:
     return round((time.perf_counter() - started) * 1000)
-
-
-def _drop(seeing: Optional[asyncio.Future]) -> None:
-    """The model call itself cannot be stopped: it ends unused."""
-    if seeing:
-        seeing.add_done_callback(lambda task: task.cancelled() or task.exception())
-        seeing.cancel()
 
 
 class Talker:
@@ -59,69 +52,63 @@ class Talker:
 
     async def answer(self, session: Session, turn: int, said: str) -> None:
         started = time.perf_counter()
-        frame = session.last_frame if session.mode == "lead" else None
-        # Leading, the frame is on the server already, so the answer from it gets a head start.
-        seeing = asyncio.ensure_future(self._see(session, said, [frame.jpeg])) if frame else None
         try:
             quick = await run_in_threadpool(talk.check, self._prompt(session, said, 0, quick=True))
         except Exception as error:
             log.warning("Quick line: %s", type(error).__name__)
             session.note("quick", turn=turn, ms=_ms(started), error=type(error).__name__)
-            _drop(seeing)
             if turn == session.turn and session.mode == "lead":  # Beside, this may be talk in the room: better silence.
-                self._say(session, turn, said, {"reply": FAILED, "new_goal": None, "mode": None}, "quick", {})
+                self._say(session, turn, said, FAILED_LINE, "quick", {})
             return
         timings = {"quick_ms": _ms(started)}
         session.note("quick", turn=turn, ms=timings["quick_ms"], **quick)
         if turn != session.turn or session.ended:
-            _drop(seeing)
-        elif quick["needs_screen"]:
-            await self._look_after(session, turn, said, quick, seeing, timings, started)
-        else:
-            _drop(seeing)
-            if quick["reply"]:
-                self._say(session, turn, said, quick, "quick", timings)
-            else:
-                session.open_words = ""
-                session.publish({"type": "quiet", "turn": turn})
-
-    async def _look_after(self, session: Session, turn: int, said: str, quick: dict, seeing: Optional[asyncio.Future],
-                          timings: dict, started: float) -> None:
-        if session.mode == "beside":
+            return
+        self._change(session, quick)
+        if quick["needs_screen"]:
             if quick["reply"]:
                 self._say(session, turn, said, quick, "quick", timings, looks=True)
             session.heard = said
+            session.note("look", turn=turn)
             session.publish({"type": "look", "turn": turn})
-            return
-        seeing = seeing or asyncio.ensure_future(self._see(session, said, []))
-        session.looking = turn
-        if quick["reply"] and not seeing.done():
-            self._say(session, turn, said, quick, "quick", timings, looks=True)
-        await self._from_screen(session, turn, said, seeing, timings, started)
+        elif quick["reply"]:
+            self._say(session, turn, said, quick, "quick", timings)
+        else:
+            session.open_words = ""
+            session.publish({"type": "quiet", "turn": turn})
 
-    async def look(self, session: Session, pictures: Sequence[bytes]) -> None:
-        """The screens the phone kept. They live only for this reply."""
+    async def look(self, session: Session, frames: Sequence[Frame]) -> None:
+        """The head answers from the screens the phone kept, in both modes. A turn that only chats leaves this answer standing:
+        only a newer question to the screen replaces it."""
         said, session.heard = session.heard, ""
-        session.looking = session.turn
-        await self._from_screen(session, session.turn, said, asyncio.ensure_future(self._see(session, said, pictures)),
-                                {}, time.perf_counter())
-
-    async def _from_screen(self, session: Session, turn: int, said: str, seeing: asyncio.Future, timings: dict,
-                           started: float) -> None:
-        """A turn that only chats leaves this answer standing. Only a newer question to the screen replaces it."""
+        turn = session.turn
+        session.looking = turn
+        started = time.perf_counter()
+        newest = frames[-1]
         try:
-            answer = await seeing
+            answer = await self._see(session, said, frames)
         except Exception as error:
             log.warning("Answer from the screen: %s", type(error).__name__)
-            answer = {"reply": FAILED, "new_goal": None, "mode": None}
-        timings["screen_ms"] = _ms(started)
+            answer = FAILED_LINE
+        timings = {"screen_ms": _ms(started)}
+        now = time.time() * 1000
         session.note("head", turn=turn, ms=timings["screen_ms"], effort=session.effort or config.META_TALK_REASONING,
-                     used=session.looking == turn, **answer)
-        if session.looking == turn and not session.ended and answer["reply"]:
-            self._say(session, turn, said, answer, "screen", timings)
+                     frame=session.keep_picture(newest, answer["private"]), frames=[frame.timestamp_ms for frame in frames],
+                     ages_ms=[round(now - frame.timestamp_ms) for frame in frames], used=session.looking == turn, **answer)
+        if session.looking != turn or session.ended or not answer["reply"]:
+            return
+        self._change(session, answer, newest)
+        if answer["show"]:
+            await self.engine.show(session, newest, answer["reply"], answer["show"], answer["private"], timings["screen_ms"])
+            if session.looking != turn or session.ended:
+                return
+        self._say(session, turn, said, answer, "screen", timings)
 
-    async def _see(self, session: Session, said: str, pictures: Sequence[bytes]) -> dict:
-        return await run_in_threadpool(talk.ask, pictures, self._prompt(session, said, len(pictures)), session.effort)
+    async def _see(self, session: Session, said: str, frames: Sequence[Frame]) -> dict:
+        prompt = self._prompt(session, said, len(frames))
+        if frames[-1].window:
+            prompt += window.RULE.format(box=[round(value * 1000) for value in frames[-1].window])
+        return await run_in_threadpool(talk.ask, [frame.jpeg for frame in frames], prompt, session.effort)
 
     def _prompt(self, session: Session, said: str, screens: int, quick: bool = False) -> str:
         last_hint = session.last_hint or {}
@@ -132,17 +119,21 @@ class Talker:
             character=session.character, done=session.completed, quick=quick, mode=session.mode,
         )
 
+    def _change(self, session: Session, answer: dict, frame: Optional[Frame] = None) -> None:
+        """A new goal starts the pointer on the newest screen, unless the head has just chosen what to show on it."""
+        if answer["mode"]:
+            session.set_mode(answer["mode"])
+        if answer["new_goal"]:
+            session.set_goal(answer["new_goal"])
+            frame = frame or session.last_frame
+            if session.broadcasting and frame and not answer["show"]:  # A still screen sends no frames.
+                self.engine.submit(session, frame)
+
     def _say(self, session: Session, turn: int, said: str, answer: dict, layer: str, timings: dict,
              looks: bool = False) -> None:
         if turn > session.written_turn:
             session.written_turn = turn
             session.dialog.append({"who": "person", "text": said})
         session.dialog.append({"who": "agent", "text": answer["reply"]})
-        if answer["mode"]:
-            session.set_mode(answer["mode"])
-        if answer["new_goal"]:
-            session.set_goal(answer["new_goal"])
-            if session.broadcasting and session.last_frame:  # A still screen sends no frames.
-                self.engine.submit(session, session.last_frame)
         session.publish({"type": "say", "turn": turn, "layer": layer, "text_ru": answer["reply"], "goal": answer["new_goal"],
                          "mode": answer["mode"], "looks": looks, "timings": timings})
