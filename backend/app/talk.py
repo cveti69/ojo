@@ -119,9 +119,10 @@ def build_prompt(goal: str, history: list[str], instruction: str, dialog: list[d
 
 
 def _target(show: dict) -> Optional[dict]:
-    """What to outline, in the shape of a step's target. A bad box goes: the label can still find the element."""
+    """What to outline, in the shape of a step's target. A bad box goes: the label can still find the element. The person
+    is waiting for the voice, so the words on the screen are enough even next to a radio button."""
     box = show["box"] if step.good_box(show["box"]) else []
-    return {**show, "box": box, "mark_id": None} if show["label"].strip() or box else None
+    return {**show, "box": box, "mark_id": None, "words_first": True} if show["label"].strip() or box else None
 
 
 def _read(answer: dict) -> dict:

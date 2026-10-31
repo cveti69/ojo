@@ -483,6 +483,8 @@ def test_the_words_say_which_row_a_radio_button_is_in(monkeypatch):
     target = {"label": "Reguler", "object": "radio button", "box": [900, 745, 950, 775], "mark_id": None}  # A row too high.
     found = real_locate(b"", 1000, 1000, {"action": "tap", "target": target}, lines, [])
     assert found["box"] == radios[1] and found["source"] == "sam"
+    head = {**target, "words_first": True}
+    assert real_locate(b"", 1000, 1000, {"action": "tap", "target": head}, lines, [])["source"] == "text"  # No time for SAM.
     monkeypatch.setattr(meta, "sam", lambda image, phrase: {"boxes": [], "ms": 1})
     found = real_locate(b"", 1000, 1000, {"action": "tap", "target": target}, lines, [])
     assert found["box"] == [0.05, 0.82, 0.2, 0.84] and found["source"] == "text"

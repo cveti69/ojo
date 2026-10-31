@@ -129,7 +129,7 @@ def locate(jpeg: bytes, width: int, height: int, answer: dict, lines: list[dict]
     near = [value / 1000 for value in target["box"]] or None
     if marks and target.get("mark_id") in marks:
         return {"box": marks[target["mark_id"]], "source": "mark", "ms": 0}
-    shape = any(word in target["object"].lower() for word in SHAPE_WORDS)
+    shape = not target.get("words_first") and any(word in target["object"].lower() for word in SHAPE_WORDS)
     snapped = snap_to_text(target["label"], near, lines or [])
     if snapped and not shape:
         return {"box": snapped, "source": "text", "ms": 0}
