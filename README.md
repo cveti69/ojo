@@ -77,15 +77,18 @@ screen is private is known only from the whole answer, so nothing about a screen
 looping video reached 37%, the keyboard 33%, and a real new screen 40% or more. Replaying a real call of 14 frames over a looping
 video, the agent spoke 0 times without being asked.
 
-**A wrong circle is worse than no circle.** General vision models name the right element but miss its pixels. So the outline takes the
-words from on-device text recognition first, then SAM by the short name the model gave, closest to the model's rough box, and the
-model's own box last. On an earlier version of the agent, built on Muse Spark 1.3 with SAM looking for icons on every frame, we
-measured this on 40 tasks on 8 real app screens, each run 3 times. A hit means the centre of the box lands inside the correct element.
+**A wrong circle is worse than no circle.** General vision models name the right element but miss its pixels. So the model copies the
+words of the place it means, and the outline finds them with on-device text recognition first, then SAM by the short name the model
+gave, then an icon SAM finds next to the model's rough box, and the model's own box last. We measured this on the current call: 40 tasks
+on 8 real app screens, each run 3 times. A hit means the centre of the box lands inside the correct element.
 
 | Method | All | Scenario steps | Icons |
 |---|---:|---:|---:|
-| Muse Spark 1.3 alone | 68 of 120 | 16 of 24 | 24 of 51 |
-| With text recognition and SAM 3.1 | **111 of 120** | **22 of 24** | **46 of 51** |
+| Muse Wonder 1.0 alone | 78 of 120 | 19 of 24 | 27 of 51 |
+| With text recognition and SAM 3.1 | **109 of 120** | **21 of 24** | **43 of 51** |
+
+Both rows come from the same answers. We chose the search order and the instruction to copy the words on these same 40 tasks, so read
+the second row as the tuned result, not as a score on new screens.
 
 The bench is in [backend/eval](backend/eval). Its screenshots are not in this repository, because they show personal data.
 
