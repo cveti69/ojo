@@ -143,6 +143,7 @@ public enum ServerEvent: Decodable, Sendable {
     case say(SayEvent)
     case heard(TurnEvent)
     case look(TurnEvent)
+    case quiet(TurnEvent)
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -153,6 +154,7 @@ public enum ServerEvent: Decodable, Sendable {
         case "say": self = .say(try SayEvent(from: decoder))
         case "heard": self = .heard(try TurnEvent(from: decoder))
         case "look": self = .look(try TurnEvent(from: decoder))
+        case "quiet": self = .quiet(try TurnEvent(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(forKey: .type, in: container, debugDescription: "Unknown event type")
         }

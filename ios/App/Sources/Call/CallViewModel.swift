@@ -887,6 +887,10 @@ final class CallViewModel: ObservableObject {
             hear(say)
         case .look(let event):
             look(turn: event.turn)
+        case .quiet(let event):
+            guard event.turn == heardTurn else { break }
+            keepQuiet()
+            dropLines { $0.kind == .filler }
         }
     }
 

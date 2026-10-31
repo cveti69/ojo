@@ -610,8 +610,7 @@ def test_beside_stays_silent_on_words_for_someone_else(backend):
         websocket.receive_json()
         say(client, session_id)
         assert receive_type(websocket, "heard")["turn"] == 1
-        client.post("/sessions/" + session_id + "/broadcast", headers=AUTH, json={"state": "started"})
-        assert websocket.receive_json()["type"] == "status"
+        assert websocket.receive_json() == {"type": "quiet", "turn": 1}
     assert backend.store.sessions[session_id].heard == "" and backend.meta.talk_calls == []
 
 

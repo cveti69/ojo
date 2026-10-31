@@ -230,6 +230,9 @@ private enum ProtocolChecks {
         guard case .look(let look) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"look","turn":5}"#.utf8)), look.turn == 5 else {
             throw CheckFailure(description: "look event")
         }
+        guard case .quiet(let quiet) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"quiet","turn":6}"#.utf8)), quiet.turn == 6 else {
+            throw CheckFailure(description: "quiet event")
+        }
         try checkSpeechDetector()
         try await checkPhraseListener()
         try checkStillness()

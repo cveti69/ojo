@@ -80,6 +80,7 @@ class Talker:
                 self._say(session, turn, said, quick, "quick", timings)
             else:
                 session.open_words = ""
+                session.publish({"type": "quiet", "turn": turn})
 
     async def _look_after(self, session: Session, turn: int, said: str, quick: dict, seeing: Optional[asyncio.Future],
                           timings: dict, started: float) -> None:
