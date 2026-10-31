@@ -1,296 +1,95 @@
-Клиент iOS, этапы 2–5 и текст экрана через Vision
+# iPhone client
 
-Проект генерируется из `project.yml`: `App`, `BroadcastExtension`,
-`KeyboardExtension`, `Shared`. iOS 17+, Swift 5, только системные фреймворки.
-Контракт сети — `../docs/protocol.md`; при расхождении с ТЗ он главнее.
-`backend/` не менялся. Сгенерированный `App.xcodeproj` исключён из git.
+The app, the broadcast extension and the keyboard. iOS 17 or later, Swift 5, system frameworks only. The project is generated from
+`project.yml` with XcodeGen: targets `App`, `BroadcastExtension`, `KeyboardExtension` and the framework `Shared`. The generated
+`App.xcodeproj` stays out of git. The network contract is [docs/protocol.md](../docs/protocol.md).
 
-Параметры проекта и подписи находятся в `Config/Project.xcconfig`.
-Значения существующих параметров не менялись; добавлено только необязательное
-`#include? "Local.xcconfig"`. Имя интерфейса берётся из
-`APP_DISPLAY_NAME`, идентификаторы — из `BUNDLE_IDENTIFIER_PREFIX`, общая группа —
-из `APP_GROUP_IDENTIFIER`, исходный адрес — из `DEFAULT_SERVER_URL`.
-Для URL в xcconfig сохраняйте запись `https:/$()/…`: `//` начинает комментарий.
+## Setup
 
-`Config/Local.xcconfig` исключён из git и не нужен для сборки. Из него Xcode берёт
-`DEFAULT_SERVER_TOKEN` в ключ `DefaultServerToken` Info.plist приложения.
-При запуске приложение переносит этот токен в App Group, если общего токена нет
-или он пустой; непустой пользовательский токен сохраняется. Без локального файла
-токен пустой и вводится вручную. Экран настроек использует SecureField, открытого
-показа токена нет. Сам локальный файл при этой работе не открывался и не менялся.
+Project and signing settings are in `Config/Project.xcconfig`: `APP_DISPLAY_NAME`, `BUNDLE_IDENTIFIER_PREFIX`,
+`APP_GROUP_IDENTIFIER`, `DEFAULT_SERVER_URL`. Write a URL there as `https:/$()/…`, because `//` starts a comment.
 
-Запуск сценария
+`Config/Local.xcconfig` is optional and stays out of git. Its `DEFAULT_SERVER_TOKEN` goes to `DefaultServerToken` in the app's
+Info.plist, and on launch the app moves it to the App Group if no token is there yet. Without the file, enter the token in settings.
 
-1. Главный экран устроен как звонок: «Позвонить» и «Завершить». Всё остальное лежит за «⋯»:
-   цель текстом, повтор цели, кнопка трансляции, окно, «Настройки» и «Проверка». В «Настройках»
-   указать адрес и токен сервера. Адрес сначала заполнен из `DEFAULT_SERVER_URL`. Выбрать код
-   языка приложения-цели (`id`, `auto`, `en` или другой) и способ ввода: по умолчанию буфер
-   обмена, наша клавиатура выбирается там же. Сохранить.
-2. Нажать «Позвонить». Приложение создаёт сессию, активирует `.playAndRecord`,
-   произносит «Привет, чем помочь?» и включает микрофон после приветствия.
-   Разрешения микрофона и резервного распознавания имеют русские объяснения.
-3. Произнести цель и помолчать секунду. WAV: 16 кГц, моно, PCM signed 16 bit, little endian.
-   Речью считается звук на 10 dB выше фона комнаты, но не тише −50 dB. Запись идёт до 30
-   секунд. Если речи не слышно 8 секунд, запись всё равно идёт на распознавание: тихий голос
-   решает оно, а не порог. На пустой ответ агент один раз переспрашивает голосом, потом экран
-   предлагает сказать ещё раз или написать текстом. «Закончить запись» лежит за «⋯».
-   WAV отправляется на `/transcribe`, распознанный текст передаётся в `/goal`.
-   `GoalTranscribing` отделяет серверное распознавание от `SpeechGoalTranscriber`
-   (`ru-RU`, на устройстве): резерв включается при ошибке/пустом ответе сервера.
-   Если нужное распознавание недоступно, остаются повтор записи и текстовое поле.
-   Временная запись удаляется после распознавания; цель записывается только пока
-   приложение на экране.
-4. Ответ `reply_ru` звучит вслух, и приложение само просит у iOS системное окно трансляции.
-   Если окно не открылось, остаётся кнопка «Покажи экран»: поверх неё лежит настоящая кнопка
-   системы. Нажать «Начать трансляцию». Если трансляция остановилась, кнопка возвращается.
-5. Перейти в нужное приложение. Подсказка с сервера появляется в PiP и звучит через
-   `ServerSpeaker`: `POST /speech` отдаёт звук Eleven Labs по мере готовности, `AVAudioEngine`
-   играет его сразу. Текст фраз пишут модели Meta, Eleven Labs только читает их вслух. Если
-   первого звука нет 2,5 секунды, фразу читает `SystemSpeaker` (`AVSpeechSynthesizer`, `ru-RU`).
-   Голосовой движок выключен на время записи цели. Звонок держит активный аудиовыход
-   между фразами; голос Eleven Labs в фоне требует проверки на iPhone.
-6. При `clipboard` текст `paste_text` записывается в `UIPasteboard.general` сразу при
-   получении hint, включая фон. Подсказка ведёт к обычной вставке: зажать поле, выбрать
-   «Вставить», либо набрать текст. Над клавиатурой его показывает сам iOS: так было и после
-   удаления нашей клавиатуры, но в Tokopedia этот путь не работает, поэтому подсказка на него
-   не опирается. iOS пускает к буферу из фона только при открытом окне, поэтому текст есть ещё в
-   трёх местах: в подсказке, в буфере заранее (`ready_text` из ответа на цель) и повторная запись
-   при возвращении в приложение, если запись из фона не прошла. При `keyboard` выбрать нашу
-   клавиатуру глобусом и нажать чип.
-7. `needs_user_confirm` явно показан и произнесён, даже если `speak=false`.
-   Действие подтверждает сам пользователь в приложении-цели.
-8. После принятой цели `CallMicrophone` слушает человека до конца звонка, в том числе из
-   другого приложения: iOS пускает к микрофону в фоне, только если он включён на переднем
-   плане. У него свой движок, поэтому сбой микрофона не трогает голос агента. `SpeechDetector`
-   находит фразу по паузе 0,8 секунды относительно шума комнаты, `POST /sessions/{id}/say`
-   отвечает голосом или меняет цель; чужая речь остаётся без ответа. Пока агент говорит и ещё
-   0,3 секунды, вход не слушается: подавления эха и перебивания нет. Подсказка ждёт конца
-   ответа. Выключается в настройках. На симуляторе микрофон заменяет файл `tmp/heard.wav`.
-9. «Завершить» останавливает голос, запись, события и окно, выключает аудиосессию,
-   очищает `sessionId` и отправляет `/end` под `beginBackgroundTask`. Защита фоновым
-   временем применяется также к закрытию сессии после отмены соединения.
-   Расширение замечает закрытие сессии
-   через App Group не позднее следующей проверки (каждые 0,5 секунды) и вызывает
-   `finishBroadcastWithError:` с пустой ошибкой: так iOS не показывает окно, но Apple этого не
-   описывает. Если через 2 секунды трансляция ещё жива, тот же вызов идёт с текстом
-   «Звонок завершён», его iOS показывает в своём окне.
+```sh
+cd ios
+xcodegen generate
+open App.xcodeproj
+```
 
-Сеть и общие данные
+## The call
 
-`Shared.ServerClient` использует URLSession, JSON-модели из `ServerModels.swift`,
-`X-Token` на каждом HTTP-запросе и на подключении WebSocket. URL сохраняет
-необязательный префикс пути. В Info.plist разрешён HTTP для настраиваемого сервера,
-включая локальный; HTTPS также поддержан. Значения токена в журнал не пишутся.
+1. The main screen works like a phone: "Позвонить" to call and "Завершить" to end. Everything else is behind "⋯": a typed line, the
+   broadcast button, the window, settings and the checks.
+2. A call creates a session, turns on `.playAndRecord`, says hello and opens the microphone. Right after the greeting the app asks
+   iOS for the system broadcast sheet. If it does not open, the "Покажи экран" button stays, with the real system button under it.
+3. `CallMicrophone` listens until the end of the call, also from another app: iOS gives a background app the microphone only if it
+   was turned on in the foreground. `SpeechDetector` tells speech from the noise of the room and ends a phrase after a 0.8 second
+   pause. `SpeechStream` sends the sound to `/listen` while a voice is heard, and the server's stream finds the end of the phrase. If
+   the server does not confirm it with `heard`, the phrase goes to `/say` as a file.
+4. `ServerSpeaker` plays each line as it arrives from `POST /speech`, on `AVAudioEngine`. With no sound in time, `SystemSpeaker` reads
+   the line in the system voice. The agent does not hear the person while it speaks and for 0.3 seconds after. The voice setting
+   behind "⋯" lists the voices from `/voices` and works from the next line.
+5. With no answer 1.5 seconds after a phrase, the phone says a short waiting phrase from `PauseWords`, in Russian calls only.
+6. A `hint` event carries a 720×960 picture for the floating window: a zoomed part of the screen with the target outlined.
+   `PictureInPictureHintWindow` draws it through `AVSampleBufferDisplayLayer`. A second window source, based on a video call, is a
+   switch on the checks screen.
+7. `paste_text` goes to `UIPasteboard` as soon as it arrives. iOS lets a background app reach the clipboard only while the window is
+   open, so if the write fails, it is repeated when the person comes back. With the keyboard chosen in settings, the keyboard takes
+   the text from `/suggestions` instead.
+8. "Завершить" stops the voice, the microphone, the events and the window, turns off the audio session and sends `/end` under
+   `beginBackgroundTask`. The extension notices the end through the App Group within 0.5 seconds and finishes the broadcast.
 
-`SharedStore` читает/пишет UserDefaults App Group: `serverURL`, `token`, `sessionId`,
-`userLang`, `targetLang`; дополнительно `textEntry`, `useVideoCallFallback`
-и `screenTextMode` (`app` по умолчанию, `extension`, `extensionFast`, `off`).
-Каждый процесс получает имя группы и исходный URL из своего Info.plist.
-Параметры сессии фиксируются при «Позвонить»; настройки удобнее менять между
-звонками. Клавиатура перечитывает общий адрес, токен и языки при работе.
+`HintEventConnection` keeps the WebSocket to `/events` with a ping every 10 seconds, and reconnects with a delay of 1 to 10 seconds.
+While the socket is down it asks `/hint` once a second. A repeated `step_id` does not show the hint again.
 
-`HintEventConnection`: WebSocket `/sessions/{id}/events`, ping каждые 10 секунд,
-при молчании к следующему ping переподключение с задержкой 1–10 секунд. Ответ на
-ping приходит только при ожидающем `receive`, поэтому ping идёт рядом с циклом
-чтения. Соединение считается рабочим после первого ответа. Пока WebSocket недоступен, работает
-последовательный опрос `/hint?after=…` с интервалом в секунду. `204` означает
-отсутствие нового hint. Повторный `step_id` не повторяет голос и вставку в буфер.
-`status` обновляет экран, `done` произносится; звонок закрывается кнопкой владельца.
-При получении нового hint с `frame_ts` в журнал один раз попадает
-«Подсказка sN через X,X с после кадра». Время считается от Unix-миллисекунд кадра
-до получения подсказки, включая уменьшение/JPEG, сеть и обработку сервера.
-Статистика на экране звонка не добавлялась. Старые hint без `frame_ts` читаются
-для совместимости, но время для них неизвестно.
+## Broadcast extension
 
-Расширение записи
+Video only, no sound. The settings are in `SampleHandler.Capture`: a look every 0.5 seconds, a long side of 1000 pixels, JPEG quality
+0.6, and a 256×256 grey copy for comparing frames. Our own window is left out of the comparison: `WindowFinder` finds it by its
+coloured border, so its changing picture does not count as a change. Comparison is in `ScreenStillness`. A frame goes to the server
+when the screen has stopped changing, and it counts as a small change below 30% of the picture.
 
-Только `.video`, без звука. В `SampleHandler.Capture` собраны параметры:
-700 мс; длинная сторона до 1000 px; JPEG 0,6; серая копия 64×64; порог средней
-абсолютной разницы 0,025 по шкале 0…1. Сравнение идёт с последним доставленным кадром. Ответы `accepted=false` с
-`busy`, `unchanged`, `user_confirm`, `done` тоже подтверждают доставку и обновляют
-миниатюру. Повтор неизменившегося кадра допускается только при сетевой ошибке;
-ошибки HTTP/декодирования ответа журналируются без такого повтора. 401/404
-останавливают трансляцию.
-`RPVideoSampleOrientationKey` применяется перед сравнением и уменьшением.
-`X-Frame-Width/Height` содержат исходные размеры после учёта ориентации,
-`X-Frame-Ts` — время получения кадра в Unix-миллисекундах.
+When the person speaks, the extension puts the screen as it is on `FrameShelf` in the App Group, however little it changed, and the
+app sends it to `/look`.
 
-Нет очереди и хранения полноразмерных кадров: sample обрабатывается синхронно
-в `autoreleasepool`; в кадровом канале остаются маленькая серая копия и JPEG
-одного запроса. Чтение текста отдельно удерживает один уменьшенный JPEG на задание.
-Один переиспользуемый CIContext с отключённым кэшем промежуточных изображений.
-Одновременно выполняется один запрос кадрового канала, включая started/finished.
-Чтение текста и `/text` выполняются отдельно: один такой процесс на расширение,
-без задержки ReplayKit и загрузки JPEG. Lock защищает только поля состояния;
-сравнение, JPEG, файловая запись и журнал выполняются вне него. Каждый
-broadcastStarted сбрасывает счётчики, флаги, миниатюру, размеры и время под lock;
-UUID запуска защищает новый запуск от старых сетевых/текстовых завершений.
-При остановке текущая загрузка отменяется, затем отправляется состояние finished.
-При предупреждении о памяти кэш очищается; если до лимита процесса осталось менее
-8 МБ, кадр пропускается. Соблюдение лимита около 50 МБ подтверждается на iPhone,
-сборка его не измеряет. Статистика отправленных/пропущенных кадров и доступная
-память пишутся в общий журнал каждые 5 секунд, предупреждения — сразу.
+There is no queue and no stored full frame: a sample is handled in place in an `autoreleasepool`. One frame request runs at a time. A
+memory warning clears the cache, and a frame is skipped when less than 8 MB is left before the process limit.
 
-При старте/финише идут POST `/sessions/{id}/broadcast`. Если активной сессии нет,
-расширение завершается с русской инструкцией сначала позвонить. Ошибки 401/404
-останавливают трансляцию. Финальное сетевое уведомление остаётся best effort,
-если iOS принудительно завершает процесс расширения или сеть пропала.
+## Screen text
 
-Текст экрана
+`Shared.ScreenTextReader` reads words and their boxes with Apple Vision, and the server uses them to pick the exact box. Vision makes
+no decisions. The checks screen picks where it runs:
 
-`Shared.ScreenTextReader` принимает CGImage и `targetLang`, возвращает
-`lines[{text, words[{text, box}]}]`. Apple Vision: VNRecognizeTextRequest,
-основной уровень `.accurate`, запасной `.fast` для расширения,
-`usesLanguageCorrection=false`, базовый `recognitionLanguages=["en-US"]`.
-Для китайского, тайского, японского, корейского, вьетнамского, русского и арабского
-язык приложения идёт первым: на Mac с английским первым китайский, тайский, японский
-и корейский не читались совсем. При `auto` включён `automaticallyDetectsLanguage`.
-Уровень `.fast` всегда читает как `en-US`.
-Строки и слова берутся из `candidate.string`, рамка каждого слова — через
-`candidate.boundingBox(for:)`. Если рамка слова не получена, слово сохраняется
-с рамкой всей строки. Координаты `[left, top, right, bottom]` нормированы
-в 0…1 от левого верхнего угла. Vision не принимает решения агента: сервер
-использует слова для выбора точной рамки.
+- `extension`, the default: `.accurate` Vision on the same small JPEG, in the extension, in a queue of its own. It is skipped when less
+  than 16 MB of memory is available.
+- `app`: the extension hands the frame over through `ScreenTextMailbox` in the App Group, and the app reads it and sends `/text`.
+- `extensionFast`: the same as `extension` at the `.fast` level.
+- `off`: no reading.
 
-Режим задаётся на экране «Проверка» и сохраняется как `screenTextMode`:
+If a read fails, `ScreenTextWorker` repeats it once on the CPU. The shared frame is deleted at the start and the end of a call.
 
-- `app` (по умолчанию): расширение в отдельной очереди атомарно заменяет
-  `screen-text-frame.plist` в App Group. Один бинарный plist содержит JPEG,
-  `frameTS` и id сессии; затем идёт Darwin-уведомление. Пара JPEG/ts не может
-  разойтись между двумя отдельными записями. Хранится только последний кадр.
-  Приложение читает файл и выполняет Vision в последовательной utility-очереди,
-  затем POST `/sessions/{id}/text` с тем же `frame_ts`, что в `X-Frame-Ts`.
-  Пока оно занято, новые уведомления не создают очередь кадров; после завершения
-  читается последнее состояние файла. Чужая сессия и уже прочитанный ts игнорируются.
-- `extension`: Vision уровня `.accurate` читает тот же уменьшенный JPEG в отдельной очереди
-  расширения. Одновременно разрешено одно чтение вместе с его POST `/text`.
-  До первого чтения за трансляцию пишется отдельная строка с phys_footprint:
-  при убийстве процесса по памяти останется последняя точка. После каждого
-  чтения — миллисекунды, число слов, phys_footprint в МБ; затем `/text`.
-  Прямо перед Vision проверяется `os_proc_available_memory()`: при доступных
-  менее 16 МБ чтение пропускается, об этом пишется одна строка. Та же проверка
-  применяется перед запасной попыткой с CPU. JPEG и ReplayKit не ждут Vision.
-- `extensionFast`: «В расширении, быстро» — тот же путь и лимит памяти,
-  но уровень `.fast`. Это явный запасной режим; автоматически `.accurate`
-  на `.fast` не заменяется.
-- `off`: новые задания текста не выполняются. Перед отправкой результата
-  ещё раз проверяются режим, сессия и актуальность запуска.
+## Keyboard
 
-В приложении после каждого чтения тоже пишутся время, слова и phys_footprint,
-а также состояние фона перед запросом чтения и после него. Ошибка декодирования
-или Vision превращается в запись журнала, не завершает звонок и не останавливает
-получение подсказок. Для сериализации использован общий ScreenTextWorker;
-полноразмерные ReplayKit sample не передаются в его очередь.
+Settings have a page that explains how to turn it on, with a test field. The keyboard shows a hint, up to three chips with ready text,
+"Перевести" (translate), the globe and delete. It has no full layout and no microphone. It polls `/suggestions` once a second, only
+while it is on screen. Without full access it uses neither the network nor the App Group and asks for that access. Some apps do not
+allow third-party keyboards, and there the clipboard does the job.
 
-Перед новым звонком общий кадр удаляется. В режиме `app`, пока приложение
-на экране, на том же ScreenTextWorker запускается одно чтение тестового JPEG
-из TestFrameFactory для прогрева модели. Соединение и приветствие его не ждут;
-в журнале есть «Прогрев текста: …» с временем, словами, памятью и состоянием
-фона. Прогрев не отправляет текст серверу. Очередь общая с настоящими кадрами
-и тестом, поэтому одновременно Vision в приложении выполняет одно чтение.
+## Eyes
 
-`cpuOnly` в ScreenTextReader выбирает `.cpu` из `supportedComputeStageDevices`
-для стадии `.main` и вызывает `setComputeDevice(_:for:)` (CoreML MLComputeDevice,
-iOS 17+). Устаревший `usesCPUOnly` не используется. При ошибке обычного чтения
-ScreenTextWorker повторяет его один раз с CPU. Если повтор успешен, все работники
-в этом процессе до его завершения используют CPU; отдельная строка об этом
-пишется в журнал один раз. Неуспешный повтор не закрепляет CPU. Принудительный
-CPU в тесте сам по себе не меняет этот выбор. Диагностика каждого чтения содержит
-уровень, выбор устройства и отметку повтора; время включает обе попытки.
+An experiment, off by default: a switch in settings, and "Показать глазки" shows every expression. In a call, the window shows two
+eyes drawn in code between hints. `EyesDirector` decides how they move and `EyesStage` draws, up to 30 pictures a second in motion and
+none at rest. The model picks the expression in its answer. On a payment, card or password screen the eyes only rest.
 
-`ScreenTextMailbox.clear()` удаляет JPEG вместе с ts/id; отсутствие файла
-не считается ошибкой. Очистка вызывается при старте звонка и в
-ScreenTextCoordinator.stop(). Перед остановкой приложения `sessionId` убирается
-из App Group. Расширение перед публикацией в mailboxQueue проверяет активность
-своего запуска и совпадение общей сессии. markFinished помечает запуск завершённым,
-а затем через ту же очередь дожидается более ранних записей и удаляет файл.
-Завершившийся запуск не может восстановить файл после этой очистки. Ошибки
-удаления попадают в журнал; фоновые результаты после остановки не отправляются.
+## Checks
 
-Измерения владельца на Mac вне песочницы и на стенде (не измерения iPhone):
+The "Проверка" screen behind "⋯" works without Xcode: a window test with no server, a clipboard test, a text-reading test, the screen
+text mode and "Скопировать журнал". The log is `events.log` in the App Group, limited to about 256 KB. It holds facts and timings,
+not what was said.
 
-| Показатель | `.accurate` | `.fast` |
-|---|---:|---:|
-| Первое чтение в новом процессе | 23 с | без задержки первого чтения |
-| Время `.fast` | — | 9–34 мс |
-| phys_footprint первого `.accurate` | 102 МБ | не измерен в этих данных |
-| Попадания по заданиям с подписью | 59 из 69 | 39 из 69 |
-| Попадания с рамкой модели как запасом | 66 из 69 | 59 из 69 |
-
-По этим данным `.accurate` остаётся главным в приложении, `.fast` — запасным
-для расширения с его лимитом памяти. Прогрев переносит загрузку модели на начало
-звонка, но фактическое время и расход памяти на iPhone ещё нужно измерить.
-
-Клавиатура
-
-«Настройки → Подключить и проверить клавиатуру»: инструкция системного подключения,
-полный доступ и тестовое поле. В самой клавиатуре — пояснение, до трёх чипов,
-«Перевести», глобус и стереть. Полной раскладки и микрофона нет.
-Опрос `/suggestions` идёт только между появлением и скрытием клавиатуры,
-последовательно, с интервалом в секунду. Без полного доступа сеть и App Group
-не используются, показана просьба включить доступ. Языки перевода читаются
-из App Group; код языка приложения-цели не зашит в клавиатуру.
-
-«Перевести» берёт `documentContextBeforeInput`, отправляет `/translate`, удаляет
-исходный контекст и вставляет ответ. Если за время запроса поменялись поле,
-курсор, текст или сессия, замена не выполняется и предлагается повторить.
-Для Tokopedia выбран путь буфера; клавиатуру проверить в Gojek/Grab либо
-в тестовом поле приложения.
-
-Проверка владельцем на iPhone, без Xcode и Mac
-
-Открыть экран «Проверка». Превью источника остаётся на экране при переходах
-по настройкам и диагностике — это нужно для готовности PiP.
-
-1. Нажать «Тест окна»: сервер не нужен. Тест завершает текущий сетевой звонок,
-   если он был. В превью меняются номер и время каждые 3 секунды; нечётные кадры
-   проходят через UIImage, чётные через JPEG.
-2. Дождаться «Окно готово», уйти на домашний экран и в другое приложение.
-   Проверить автопоявление, портретные пропорции 3:4 и обновления хотя бы минуту.
-   Если автооткрытие отключено в настройках iOS, использовать «Открыть окно».
-   После ошибки старта эта кнопка тоже доступна: источник заново подготавливается,
-   последнее изображение восстанавливается, старт запрашивается после готовности.
-3. Системные пауза/плей должны повторять текущий номер голосом; картинки
-   продолжают меняться. Вернуться и нажать «Завершить»: окно и звук прекращаются.
-4. Переключить «Запасной путь окна (видеозвонок)» и повторить тест без пересборки.
-   Настройка сохраняется в App Group. Источник —
-   AVPictureInPictureVideoCallViewController; у него нет системных паузы/плей
-   sample-buffer источника, поэтому эти кнопки проверяются в основном пути.
-5. Нажать «Тест буфера» и сразу уйти в другое приложение. Через 8 секунд вставить
-   в поле строку «Тест буфера …» с временем. Для этих 8 секунд запрашивается
-   фоновое время iOS. Вернуться: журнал должен показывать «приложение в фоне»,
-   возврат записи без ошибки, проверку содержимого и изменение changeCount.
-   Затем отдельно проверить `paste_text` от настоящего сервера в фоне.
-6. Выбрать режим текста `app`, начать обычный звонок и трансляцию, сменить экран
-   в другом приложении. В журнале должны появиться чтения «Текст в приложении»
-   с ненулевым числом слов, временем, состоянием фона и памятью. В начале
-   звонка проверить отдельную диагностику «Прогрев текста». Повторить
-   с `extension`; перед самым первым чтением будет отдельная строка старта.
-   `extensionFast` проверяет быстрый уровень с тем же ограничением памяти.
-   `off` прекращает новые чтения. Проверить подсказку на словах настоящего экрана
-   и строку полного времени от `frame_ts`.
-7. «Тест текста» работает без сервера: TestFrameFactory рисует четыре строки,
-   приложение распознаёт их сразу, через 8 секунд от нажатия и сразу после
-   второго чтения принудительно на CPU. Третья подпись —
-   «Тест текста, через 8 секунд, только CPU». Для `zh…`
-   есть китайский текст. Нажать и уйти в другое приложение; вернуться и сравнить
-   время, слова, фон до/после, phys_footprint и возможную ошибку Vision. Для фоновой
-   части запрашивается время iOS так же, как для теста буфера. Тестовые
-   результаты не отправляются серверу. Если очередь занята, чтение идёт после
-   текущего: метки времени журнала показывают фактическое время.
-8. «Скопировать журнал» копирует все доступные записи. Журнал с временем лежит
-   в App Group (`events.log`, ограничен примерно 256 КБ, запись защищена flock).
-   Видны готовность/старт/стоп/ошибка PiP, сцены, каждый тестовый кадр, активность
-   аудиосессии, пауза/плей, тест буфера, строки расширений и сетевые ошибки.
-
-`HintWindowPresenting` сохраняет API `display(image:)` / `display(jpegData:)`
-на MainActor. Картинка выводится через IOSurface-backed CVPixelBuffer,
-CMSampleBuffer и AVSampleBufferDisplayLayer; входные пропорции сохраняются,
-выходной кадр 720×960. Автостарт PiP включён.
-
-Проверки разработки
-
-Из корня репозитория:
+From the repository root:
 
 ```sh
 (cd ios && xcodegen generate)
@@ -300,52 +99,9 @@ xcodebuild -project ios/App.xcodeproj -scheme App \
 sh ios/scripts/check-protocol.sh
 ```
 
-`check-protocol.sh` не обращается к настоящему серверу: URLProtocol подменяет
-сеть. Проверяются HTTP-заголовки и JSON, загрузка WAV, метаданные кадров,
-языки/способ ввода, состояния broadcast, hint/204, события, ошибки 401/404/503
-и запрос подключения WebSocket. Добавлены JSON `/text`, совпадение `frame_ts`
-с заголовком кадра, декодирование `frame_ts` hint, координаты слов, выбор языков,
-атомарная замена/очистка общего кадра (в том числе повторная очистка), сохранение
-`extensionFast` в SharedStore, рамка строки для слова без рамки, пропуск Vision
-при закрытом допуске памяти и начальное заполнение токена без перезаписи своего.
-Код Shared проверяется со строгим анализом
-параллелизма и warnings-as-errors; файлы проверки создаются во временном каталоге.
+`check-protocol.sh` needs no server: `URLProtocol` stands in for the network. It checks requests and events against the protocol, the
+settings, frame comparison, phrase detection and the movements of the eyes, with strict concurrency and warnings as errors.
+`--vision` also runs text reading on a drawn picture.
 
-Генерация и Debug-сборка generic iOS Simulator проверены 31.10.2026,
-Xcode 27.1: arm64 и x86_64, приложение, Shared и оба встроенных расширения.
-Предупреждений Swift о параллелизме нет.
-App, KeyboardExtension и BroadcastExtension дополнительно прошли typecheck
-с `strict-concurrency=complete` и `warnings-as-errors`.
-Xcode сообщает об отсутствии
-AppIntents.framework при необязательном извлечении метаданных; настроек проекта
-для подавления этой диагностики не добавляли. CoreSimulatorService недоступен
-в песочнице: приложение не запускалось, поведение UI не проверено симулятором.
-Отдельная копия проекта без Local.xcconfig также прошла xcodegen и сборку:
-DefaultServerToken в её Info.plist пустой. Настоящий локальный файл не удалялся,
-не переименовывался и не копировался.
-
-Дополнительно `sh ios/scripts/check-protocol.sh --vision` запускает на одном
-JPEG, нарисованном CoreText в памяти, три варианта: `.accurate`, `.fast`,
-`.accurate` с принудительным CPU. Все три выполняются даже при ошибке одного;
-в конце выводится общий результат. Проверяются слова, допустимость рамок,
-уровень и выбор CPU. Рамка строки вместо отдельной рамки слова допустима.
-Никакие личные кадры для этого теста не используются.
-
-В песочнице Mac Vision ранее возвращал `_GenericObjCError.nilError`;
-владелец подтвердил успешный запуск вне песочницы. Это ограничение не считается
-ошибкой кода. В текущем запуске `--vision` все три варианта были выполнены:
-`.accurate` и принудительный CPU вернули `_GenericObjCError`, `.fast` —
-`Failed to create CVPixelBuffer`; автоматические повторы на CPU тоже отражены
-в диагностике. Обновлённые `.fast` и CPU-пути владелец повторно проверяет вне
-песочницы; сборка и обычные ProtocolChecks сами распознавание не подтверждают.
-
-На iPhone ещё обязательны: оба источника PiP и автостарт, непрерывность окна,
-голоса и событий в фоне, микрофон/конец речи/фактический WAV, Speech ru-RU,
-повороты ReplayKit и реальный расход памяти, старт/стоп трансляции,
-Vision в приложении/обоих режимах расширения, прогрев, автоматический запас CPU,
-Darwin-доставка в фоне, все три чтения «Теста текста», очистка кадра при завершении,
-соответствие слов и указки реальному кадру и полное время подсказки,
-полный доступ клавиатуры/вставка/перевод, вставка буфера в фоне. Сквозное
-взаимодействие с настоящим сервером и переподключение на реальной сети
-сборкой и подменой URLProtocol не подтверждены. Подпись, TestFlight, настоящий
-телефон и настройки Mac в этой работе не трогались.
+In the Simulator a file, `tmp/heard.wav` in the app's data folder, stands in for the microphone. The broadcast, the floating window
+and the keyboard flow need a real iPhone.
