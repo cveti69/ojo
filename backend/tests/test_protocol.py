@@ -291,3 +291,86 @@ def test_speech_streams_the_agents_words(backend, fail, status):
     if not fail:
         assert reply.content == b"abcd" and reply.headers["content-type"] == "audio/pcm"
         assert voice.texts == ["Нажми"]
+
+
+def say(client, session_id, audio=None):
+    return client.post("/sessions/" + session_id + "/say", content=wav() if audio is None else audio,
+                       headers={**AUTH, "Content-Type": "audio/wav"})
+
+
+def spoken(reply="Это кнопка оплаты.", addressed=True, new_goal=None):
+    return {"addressed": addressed, "reply": reply, "new_goal": new_goal}
+
+
+def test_spoken_line_is_answered_from_the_screen(backend):
+    session_id = new_session(backend.client)
+    assert post_frame(backend.client, session_id).json()["accepted"] is True
+    idle(backend, session_id)
+    backend.meta.answers.append(spoken())
+    reply = say(backend.client, session_id)
+    assert reply.status_code == 200
+    body = reply.json()
+    assert body["reply_ru"] == "Это кнопка оплаты." and body["goal"] is None
+    assert set(body["timings"]) == {"speech_ms", "model_ms"}
+    content = backend.meta.vision_calls[-1][0]["content"]
+    assert content[1]["image_url"]["url"].startswith("data:image/jpeg")
+    assert "Купить шампунь" in content[0]["text"] and "Нажми на поиск" in content[0]["text"]
+    session = backend.store.sessions[session_id]
+    assert session.goal == "Купить шампунь" and len(session.history) == 1
+    assert session.dialog == [{"who": "person", "text": "Купить шампунь"}, {"who": "agent", "text": "Это кнопка оплаты."}]
+
+
+def test_spoken_line_before_any_frame_has_no_image(backend):
+    session_id = new_session(backend.client)
+    backend.meta.answers.append(spoken("Пока не вижу экран."))
+    assert say(backend.client, session_id).json()["reply_ru"] == "Пока не вижу экран."
+    assert len(backend.meta.vision_calls[-1][0]["content"]) == 1
+
+
+def test_silence_costs_no_model_call(backend):
+    session_id = new_session(backend.client)
+    backend.meta.asr_reply = {"transcript": "", "audioDurationMs": 100, "turns": []}
+    assert say(backend.client, session_id).json()["reply_ru"] is None
+    assert backend.meta.vision_calls == []
+
+
+def test_words_for_someone_else_stay_unanswered(backend):
+    session_id = new_session(backend.client)
+    backend.meta.answers.append(spoken("", addressed=False))
+    body = say(backend.client, session_id).json()
+    assert body["reply_ru"] is None and body["goal"] is None
+    assert backend.store.sessions[session_id].dialog == []
+
+
+def test_a_new_goal_restarts_the_guide_on_the_same_screen(backend):
+    session_id = new_session(backend.client)
+    client = backend.client
+    assert client.post("/sessions/" + session_id + "/broadcast", headers=AUTH, json={"state": "started"}).status_code == 200
+    assert post_frame(client, session_id).json()["accepted"] is True
+    idle(backend, session_id)
+    backend.meta.answers += [spoken("Хорошо, ищем кондиционер.", new_goal="Купить кондиционер"), answer(instruction="Открой поиск")]
+    body = say(client, session_id).json()
+    assert body == {**body, "reply_ru": "Хорошо, ищем кондиционер.", "goal": "Купить кондиционер"}
+    idle(backend, session_id)
+    session = backend.store.sessions[session_id]
+    assert session.goal == "Купить кондиционер"
+    assert session.last_hint["instruction_ru"] == "Открой поиск"
+    assert "Купить кондиционер" in backend.meta.vision_calls[-1][0]["content"][0]["text"]
+
+
+@pytest.mark.parametrize("problem,status", [("type", 415), ("wav", 422), ("model", 502), ("ended", 409)])
+def test_spoken_line_failures(backend, problem, status):
+    client = backend.client
+    session_id = new_session(client)
+    if problem == "type":
+        reply = client.post("/sessions/" + session_id + "/say", content=wav(), headers={**AUTH, "Content-Type": "audio/mp4"})
+    elif problem == "wav":
+        reply = say(client, session_id, b"not a wav")
+    elif problem == "model":
+        backend.meta.answers.append(OSError("down"))
+        reply = say(client, session_id)
+    else:
+        client.post("/sessions/" + session_id + "/end", headers=AUTH)
+        reply = say(client, session_id)
+    assert reply.status_code == status
+    assert backend.store.sessions[session_id].dialog == []

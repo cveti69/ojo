@@ -35,6 +35,7 @@ class Session:
     text_entry: str
     app_lang: Optional[str] = None
     history: List[dict] = field(default_factory=list)
+    dialog: List[dict] = field(default_factory=list)
     last_frame_hash: Optional[str] = None
     last_analyzed_gray: Optional[bytes] = None
     last_step: Optional[dict] = None

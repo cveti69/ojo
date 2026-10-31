@@ -19,8 +19,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.websockets import WebSocketDisconnect
 
-from . import config, debug, meta, step
-from .engine import Engine, prepare_frame
+from . import config, debug, meta, step, talk
+from .engine import HISTORY_STEPS, Engine, prepare_frame
 from .sessions import Session, SessionStore
 from .voice import ElevenLabsSynthesizer, MetaSpeechRecognizer, SpeechRecognizer, SpeechSynthesizer
 
@@ -294,6 +294,46 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
         except Exception:
             raise HTTPException(502, "Не удалось распознать речь. Попробуй ещё раз.") from None
         return {"text": text}
+
+    @router.post("/sessions/{session_id}/say")
+    async def spoken_line(session_id: str, request: Request):
+        session = session_or_404(session_id)
+        require_active(session)
+        if request.headers.get("content-type", "").split(";", 1)[0].lower() != "audio/wav":
+            raise HTTPException(415, "Нужен звук audio/wav.")
+        audio = await read_body(request, config.MAX_AUDIO_BYTES)
+        started = time.perf_counter()
+        try:
+            said = (await run_in_threadpool(speech.transcribe, audio)).strip()
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        except Exception:
+            raise HTTPException(502, "Не удалось распознать речь. Попробуй ещё раз.") from None
+        heard = time.perf_counter()
+        timings = {"speech_ms": round((heard - started) * 1000), "model_ms": 0}
+        if not said:
+            return {"reply_ru": None, "goal": None, "timings": timings}
+        frame = session.last_frame
+        last_hint = session.last_hint or {}
+        prompt = talk.build_prompt(
+            session.goal, [item["summary"] for item in session.history[-HISTORY_STEPS:]],
+            last_hint.get("instruction_ru", ""), session.dialog, said, frame is not None,
+            user_lang=session.user_lang, target_lang=session.app_lang or session.target_lang,
+        )
+        try:
+            answer = await run_in_threadpool(talk.ask, frame.jpeg if frame else None, prompt)
+        except Exception:
+            raise HTTPException(502, "Не удалось получить ответ Meta. Попробуй ещё раз.") from None
+        timings["model_ms"] = round((time.perf_counter() - heard) * 1000)
+        require_active(session)
+        if not answer["reply"]:
+            return {"reply_ru": None, "goal": None, "timings": timings}
+        session.dialog += [{"who": "person", "text": said}, {"who": "agent", "text": answer["reply"]}]
+        if answer["new_goal"]:
+            session.set_goal(answer["new_goal"])
+            if session.broadcasting and session.last_frame:  # A still screen sends no frames.
+                processor.submit(session, session.last_frame)
+        return {"reply_ru": answer["reply"], "goal": answer["new_goal"], "timings": timings}
 
     @router.post("/speech")
     async def say(body: Speech):
