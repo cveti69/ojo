@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
+import time
 
 import pytest
 from PIL import Image
 from starlette.testclient import TestClient, WebSocketDenialResponse
 from starlette.websockets import WebSocketDisconnect
 
-from app import config
+from app import config, window
 from app.server import create_app
-from conftest import AUTH, TOKEN, answer, idle, jpeg, new_session, post_frame, receive_type, wav
+from conftest import (AUTH, TOKEN, FakeEars, answer, idle, jpeg, new_session, post_frame, quick_line, receive_type,
+                      talk_line, wav)
 
 
 def test_health_and_session_defaults(backend):
@@ -298,59 +301,97 @@ def say(client, session_id, audio=None):
                        headers={**AUTH, "Content-Type": "audio/wav"})
 
 
-def spoken(reply="Это кнопка оплаты.", addressed=True, new_goal=None, mode="keep", **changes):
-    return {"addressed": addressed, "reply": reply, "new_goal": new_goal, "mode": mode, **changes}
+def agent_words(backend, session_id):
+    return [turn["text"] for turn in backend.store.sessions[session_id].dialog if turn["who"] == "agent"]
 
 
-def test_spoken_line_is_answered_from_the_screen(backend):
-    session_id = new_session(backend.client)
+def wait_for_answers(backend):
+    async def wait():
+        for task in tuple(backend.app.state.talker.tasks):
+            await task
+    backend.client.portal.call(wait)
+
+
+def seen_frame(backend, session_id):
     assert post_frame(backend.client, session_id).json()["accepted"] is True
     idle(backend, session_id)
-    backend.meta.answers.append(spoken())
-    reply = say(backend.client, session_id)
-    assert reply.status_code == 200
-    body = reply.json()
-    assert body["reply_ru"] == "Это кнопка оплаты." and body["goal"] is None
-    assert set(body["timings"]) == {"speech_ms", "model_ms"}
-    content = backend.meta.vision_calls[-1][0]["content"]
+
+
+def test_a_quick_line_comes_first_and_the_screen_answers_after_it(backend):
+    client = backend.client
+    session_id = new_session(client)
+    seen_frame(backend, session_id)
+    backend.meta.talk_seconds = 0.05
+    with client.websocket_connect("/sessions/" + session_id + "/events", headers=AUTH) as websocket:
+        websocket.receive_json()
+        reply = say(client, session_id)
+        assert reply.status_code == 200 and reply.json()["heard"] is True
+        assert receive_type(websocket, "heard") == {"type": "heard", "turn": 1}
+        first = receive_type(websocket, "say")
+        second = receive_type(websocket, "say")
+    assert (first["layer"], first["text_ru"], first["turn"]) == ("quick", "Сейчас гляну.", 1)
+    assert (second["layer"], second["text_ru"], second["turn"]) == ("screen", "Это кнопка оплаты.", 1)
+    assert set(second["timings"]) == {"quick_ms", "screen_ms"}
+    assert len(backend.meta.quick_calls[-1][0]["content"]) == 1
+    content = backend.meta.talk_calls[-1][0]["content"]
     assert content[1]["image_url"]["url"].startswith("data:image/jpeg")
     assert "Купить шампунь" in content[0]["text"] and "Нажми на поиск" in content[0]["text"]
     session = backend.store.sessions[session_id]
     assert session.goal == "Купить шампунь" and len(session.history) == 1
-    assert session.dialog == [{"who": "person", "text": "Купить шампунь"}, {"who": "agent", "text": "Это кнопка оплаты."}]
+    assert session.dialog == [{"who": "person", "text": "Купить шампунь"}, {"who": "agent", "text": "Сейчас гляну."},
+                              {"who": "agent", "text": "Это кнопка оплаты."}]
 
 
-def test_spoken_line_before_any_frame_has_no_image(backend):
+def test_a_ready_answer_needs_no_quick_line(backend):
     session_id = new_session(backend.client)
-    backend.meta.answers.append(spoken("Пока не вижу экран."))
-    assert say(backend.client, session_id).json()["reply_ru"] == "Пока не вижу экран."
-    assert len(backend.meta.vision_calls[-1][0]["content"]) == 1
+    seen_frame(backend, session_id)
+    backend.meta.quick_hook = lambda: time.sleep(0.05)
+    say(backend.client, session_id)
+    assert agent_words(backend, session_id) == ["Это кнопка оплаты."]
+
+
+def test_a_line_before_any_frame_has_no_image(backend):
+    session_id = new_session(backend.client)
+    backend.meta.talk.append(talk_line("Пока не вижу экран."))
+    say(backend.client, session_id)
+    assert agent_words(backend, session_id)[-1] == "Пока не вижу экран."
+    assert len(backend.meta.talk_calls[-1][0]["content"]) == 1
+
+
+def test_small_talk_never_waits_for_the_screen(backend):
+    session_id = new_session(backend.client)
+    seen_frame(backend, session_id)
+    backend.meta.quick.append(quick_line("Да не за что.", needs_screen=False))
+    say(backend.client, session_id)
+    assert agent_words(backend, session_id) == ["Да не за что."]
 
 
 def test_silence_costs_no_model_call(backend):
     session_id = new_session(backend.client)
     backend.meta.asr_reply = {"transcript": "", "audioDurationMs": 100, "turns": []}
-    assert say(backend.client, session_id).json()["reply_ru"] is None
-    assert backend.meta.vision_calls == []
+    assert say(backend.client, session_id).json()["heard"] is False
+    assert backend.meta.quick_calls == [] and backend.meta.talk_calls == []
 
 
 def test_words_for_someone_else_stay_unanswered(backend):
     session_id = new_session(backend.client)
-    backend.meta.answers.append(spoken("", addressed=False))
-    body = say(backend.client, session_id).json()
-    assert body["reply_ru"] is None and body["goal"] is None
-    assert backend.store.sessions[session_id].dialog == []
+    backend.meta.quick.append(quick_line("", addressed=False))
+    assert say(backend.client, session_id).json()["heard"] is True
+    assert backend.store.sessions[session_id].dialog == [] and backend.meta.talk_calls == []
 
 
 def test_a_new_goal_restarts_the_guide_on_the_same_screen(backend):
     session_id = new_session(backend.client)
     client = backend.client
     assert client.post("/sessions/" + session_id + "/broadcast", headers=AUTH, json={"state": "started"}).status_code == 200
-    assert post_frame(client, session_id).json()["accepted"] is True
-    idle(backend, session_id)
-    backend.meta.answers += [spoken("Хорошо, ищем кондиционер.", new_goal="Купить кондиционер"), answer(instruction="Открой поиск")]
-    body = say(client, session_id).json()
-    assert body == {**body, "reply_ru": "Хорошо, ищем кондиционер.", "goal": "Купить кондиционер"}
+    seen_frame(backend, session_id)
+    backend.meta.quick.append(quick_line("Хорошо, ищем кондиционер.", new_goal="Купить кондиционер", needs_screen=False))
+    backend.meta.answers.append(answer(instruction="Открой поиск"))
+    with client.websocket_connect("/sessions/" + session_id + "/events", headers=AUTH) as websocket:
+        websocket.receive_json()
+        say(client, session_id)
+        event = receive_type(websocket, "say")
+    assert event["goal"] == "Купить кондиционер" and event["text_ru"] == "Хорошо, ищем кондиционер."
     idle(backend, session_id)
     session = backend.store.sessions[session_id]
     assert session.goal == "Купить кондиционер"
@@ -358,17 +399,14 @@ def test_a_new_goal_restarts_the_guide_on_the_same_screen(backend):
     assert "Купить кондиционер" in backend.meta.vision_calls[-1][0]["content"][0]["text"]
 
 
-@pytest.mark.parametrize("problem,status", [("type", 415), ("wav", 422), ("model", 502), ("ended", 409)])
-def test_spoken_line_failures(backend, problem, status):
+@pytest.mark.parametrize("problem,status", [("type", 415), ("wav", 422), ("ended", 409)])
+def test_spoken_line_refusals(backend, problem, status):
     client = backend.client
     session_id = new_session(client)
     if problem == "type":
         reply = client.post("/sessions/" + session_id + "/say", content=wav(), headers={**AUTH, "Content-Type": "audio/mp4"})
     elif problem == "wav":
         reply = say(client, session_id, b"not a wav")
-    elif problem == "model":
-        backend.meta.answers.append(OSError("down"))
-        reply = say(client, session_id)
     else:
         client.post("/sessions/" + session_id + "/end", headers=AUTH)
         reply = say(client, session_id)
@@ -376,21 +414,111 @@ def test_spoken_line_failures(backend, problem, status):
     assert backend.store.sessions[session_id].dialog == []
 
 
+@pytest.mark.parametrize("broken", ["quick", "talk"])
+def test_a_failed_model_says_so(backend, broken):
+    session_id = new_session(backend.client)
+    getattr(backend.meta, broken).append(OSError("down"))
+    assert say(backend.client, session_id).status_code == 200
+    assert agent_words(backend, session_id)[-1] == "Не получилось ответить, повтори, пожалуйста."
+
+
+def test_words_after_an_unspoken_answer_join_it(backend):
+    session_id = new_session(backend.client)
+    talker = backend.app.state.talker
+    session = backend.store.sessions[session_id]
+    backend.meta.quick.append(quick_line("Да.", needs_screen=False))
+    backend.client.portal.call(talker.answer, session, *talker.take(session, "Слушай, подожди."))
+    backend.meta.quick.append(quick_line("Вторая лучше.", needs_screen=False))
+    assert talker.take(session, "А какая лучше?") == (2, "Слушай, подожди. А какая лучше?")
+    assert session.dialog == []
+
+
+def test_words_after_a_spoken_answer_stand_alone(backend):
+    client = backend.client
+    session_id = new_session(client)
+    talker = backend.app.state.talker
+    session = backend.store.sessions[session_id]
+    backend.meta.quick.append(quick_line("Да.", needs_screen=False))
+    backend.client.portal.call(talker.answer, session, *talker.take(session, "Спасибо."))
+    assert client.post("/sessions/" + session_id + "/played", headers=AUTH, json={"turn": 1}).status_code == 200
+    assert talker.take(session, "А какая лучше?") == (2, "А какая лучше?")
+    assert len(session.dialog) == 2
+
+
+def test_an_old_turn_stays_silent_once_a_new_one_came(backend):
+    session_id = new_session(backend.client)
+    talker = backend.app.state.talker
+    session = backend.store.sessions[session_id]
+    backend.meta.quick_hook = lambda: setattr(session, "turn", 2)
+    backend.client.portal.call(talker.answer, session, *talker.take(session, "Что это?"))
+    assert session.dialog == []
+
+
+def test_a_chat_turn_leaves_the_screen_answer_standing(backend):
+    session_id = new_session(backend.client)
+    seen_frame(backend, session_id)
+    talker = backend.app.state.talker
+    session = backend.store.sessions[session_id]
+    backend.meta.talk_seconds = 0.1
+
+    async def both():
+        first = asyncio.ensure_future(talker.answer(session, *talker.take(session, "Что это?")))
+        await asyncio.sleep(0.05)
+        talker.played(session, 1)
+        backend.meta.quick.append(quick_line("", addressed=False))
+        await talker.answer(session, *talker.take(session, "Мам, подожди."))
+        await first
+    backend.client.portal.call(both)
+    assert agent_words(backend, session_id) == ["Сейчас гляну.", "Это кнопка оплаты."]
+
+
+def test_the_stream_of_sound_reaches_the_ears_and_turns_come_back(backend):
+    client = backend.client
+    session_id = new_session(client)
+    with client.websocket_connect("/sessions/" + session_id + "/listen", headers=AUTH) as socket:
+        socket.send_bytes(b"\1" * 3200)
+        socket.send_text("not sound")
+        socket.send_bytes(b"\2" * 3200)
+        with client.websocket_connect("/sessions/" + session_id + "/listen", headers=AUTH) as again:
+            again.send_bytes(b"\3" * 3200)
+    assert len(FakeEars.made) == 1 and [frame[0] for frame in FakeEars.made[0].frames[:2]] == [1, 2]
+    backend.meta.quick.append(quick_line("Да.", needs_screen=False))
+
+    async def turn():
+        FakeEars.made[0].on_turn("Спасибо.")
+        await asyncio.sleep(0)
+    backend.client.portal.call(turn)
+    wait_for_answers(backend)
+    assert agent_words(backend, session_id) == ["Да."]
+    client.post("/sessions/" + session_id + "/end", headers=AUTH)
+    assert FakeEars.made[0].closed
+
+
+def test_the_stream_needs_the_token_and_a_session(backend):
+    with pytest.raises(WebSocketDenialResponse):
+        with backend.client.websocket_connect("/sessions/s_none/listen", headers=AUTH):
+            pass
+    session_id = new_session(backend.client)
+    with pytest.raises(WebSocketDenialResponse):
+        with backend.client.websocket_connect("/sessions/" + session_id + "/listen", headers={"X-Token": "wrong"}):
+            pass
+
+
 @pytest.mark.parametrize("character,own,words", [
     ("strict", "", "short plain commands"), ("warm", "", "calm and warm"), ("brief", "", "as few words"),
     ("patient", "", "patient teacher"),
     ("own", "Говори как пират", "Говори как пират"), ("own", " ", None),
 ])
-def test_chosen_level_and_character_reach_both_prompts(backend, character, own, words):
+def test_chosen_level_and_character_reach_every_prompt(backend, character, own, words):
     client = backend.client
     session_id = new_session(client, effort="high", character=character, own_character=own)
-    assert post_frame(client, session_id).json()["accepted"] is True
-    idle(backend, session_id)
-    backend.meta.answers.append(spoken())
+    seen_frame(backend, session_id)
     assert say(client, session_id).status_code == 200
-    prompts = [call[0]["content"][0]["text"] for call in backend.meta.vision_calls]
-    assert len(prompts) == 2 and backend.meta.efforts == ["high", "high"]
-    for prompt in prompts:
+    calls = backend.meta.vision_calls + backend.meta.talk_calls + backend.meta.quick_calls
+    assert len(calls) == 3 and backend.meta.efforts == ["high"] and backend.meta.talk_efforts == ["high"]
+    assert backend.meta.quick_efforts == ["minimal"]
+    for call in calls:
+        prompt = call[0]["content"][0]["text"]
         assert "Never ask for passwords" in prompt
         assert "Your manner" not in prompt if words is None else prompt.index(words) < prompt.index("Never ask for passwords")
 
@@ -412,21 +540,23 @@ def test_unknown_level_or_character_is_refused(backend, changes):
 
 def test_default_levels_stay_the_servers(backend):
     session_id = new_session(backend.client)
-    post_frame(backend.client, session_id)
-    idle(backend, session_id)
-    backend.meta.answers.append(spoken())
+    seen_frame(backend, session_id)
     assert say(backend.client, session_id).status_code == 200
-    assert backend.meta.efforts == [config.META_REASONING, config.META_TALK_REASONING]
+    assert backend.meta.efforts == [config.META_REASONING]
+    assert backend.meta.talk_efforts == [config.META_TALK_REASONING]
 
 
 def test_talk_goes_on_after_the_goal(backend):
     session_id = new_session(backend.client)
-    backend.meta.answers = [answer(done=True, instruction="Готово, вот список. Что дальше?"), spoken("Вторая дешевле.")]
+    backend.meta.answers = [answer(done=True, instruction="Готово, вот список. Что дальше?")]
+    backend.meta.talk.append(talk_line("Вторая дешевле."))
     post_frame(backend.client, session_id)
     idle(backend, session_id)
     assert backend.store.sessions[session_id].completed
-    assert say(backend.client, session_id).json()["reply_ru"] == "Вторая дешевле."
-    assert "stay on the call" in backend.meta.vision_calls[-1][0]["content"][0]["text"]
+    say(backend.client, session_id)
+    assert agent_words(backend, session_id)[-1] == "Вторая дешевле."
+    assert "stay on the call" in backend.meta.quick_calls[-1][0]["content"][0]["text"]
+    assert "stay on the call" in backend.meta.talk_calls[-1][0]["content"][0]["text"]
 
 
 def look(client, session_id, pictures):
@@ -441,45 +571,63 @@ def test_beside_keeps_every_frame_on_the_phone(backend):
     assert backend.store.sessions[session_id].last_frame is None and backend.meta.vision_calls == []
 
 
-def test_beside_answers_small_talk_from_the_words_alone(backend):
+def test_beside_is_strict_about_who_is_spoken_to(backend):
     session_id = new_session(backend.client, mode="beside")
-    backend.meta.answers.append(spoken("Пожалуйста.", needs_screen=False))
-    assert say(backend.client, session_id).json()["reply_ru"] == "Пожалуйста."
-    call = backend.meta.vision_calls[-1][0]["content"]
-    assert len(call) == 1 and "you do not see the screen" in call[0]["text"] and backend.meta.efforts == ["minimal"]
+    backend.meta.quick.append(quick_line("Пожалуйста.", needs_screen=False))
+    say(backend.client, session_id)
+    assert agent_words(backend, session_id) == ["Пожалуйста."]
+    prompt = backend.meta.quick_calls[-1][0]["content"][0]["text"]
+    assert "plainly speak to you" in prompt and "do not see the screen" in prompt
+    assert backend.meta.talk_calls == []
+
+
+def test_leading_gives_a_short_word_the_benefit_of_the_doubt(backend):
+    session_id = new_session(backend.client)
+    backend.meta.quick.append(quick_line("Да.", needs_screen=False))
+    say(backend.client, session_id)
+    assert "short words and unclear remarks are for you" in backend.meta.quick_calls[-1][0]["content"][0]["text"]
 
 
 def test_beside_stays_silent_on_words_for_someone_else(backend):
-    session_id = new_session(backend.client, mode="beside")
-    backend.meta.answers.append(spoken("", addressed=False, needs_screen=False))
-    body = say(backend.client, session_id).json()
-    assert body["reply_ru"] is None and "needs_screen" not in body
-    assert len(backend.meta.vision_calls[-1][0]["content"]) == 1
+    client = backend.client
+    session_id = new_session(client, mode="beside")
+    backend.meta.quick.append(quick_line("", addressed=False))
+    with client.websocket_connect("/sessions/" + session_id + "/events", headers=AUTH) as websocket:
+        websocket.receive_json()
+        say(client, session_id)
+        assert receive_type(websocket, "heard")["turn"] == 1
+        client.post("/sessions/" + session_id + "/broadcast", headers=AUTH, json={"state": "started"})
+        assert websocket.receive_json()["type"] == "status"
+    assert backend.store.sessions[session_id].heard == "" and backend.meta.talk_calls == []
 
 
 def test_beside_sees_the_kept_screens_only_after_being_called(backend):
     client = backend.client
     session_id = new_session(client, mode="beside")
-    backend.meta.answers += [spoken("", needs_screen=True), spoken("Вторая дешевле первой.")]
-    body = say(client, session_id).json()
-    assert body["needs_screen"] is True and body["reply_ru"] is None
-    assert len(backend.meta.vision_calls) == 1
-    reply = look(client, session_id, [jpeg((10, 20, 30)), jpeg((40, 50, 60)), jpeg((70, 80, 90))])
-    assert reply.status_code == 200 and reply.json()["reply_ru"] == "Вторая дешевле первой."
-    content = backend.meta.vision_calls[-1][0]["content"]
+    backend.meta.talk.append(talk_line("Вторая дешевле первой."))
+    with client.websocket_connect("/sessions/" + session_id + "/events", headers=AUTH) as websocket:
+        websocket.receive_json()
+        say(client, session_id)
+        assert receive_type(websocket, "say")["text_ru"] == "Сейчас гляну."
+        assert receive_type(websocket, "look") == {"type": "look", "turn": 1}
+        assert backend.meta.talk_calls == []
+        reply = look(client, session_id, [jpeg((10, 20, 30)), jpeg((40, 50, 60)), jpeg((70, 80, 90))])
+        assert reply.status_code == 200
+        event = receive_type(websocket, "say")
+    assert (event["layer"], event["text_ru"]) == ("screen", "Вторая дешевле первой.")
+    content = backend.meta.talk_calls[-1][0]["content"]
     assert len(content) == 4 and "3 screenshots" in content[0]["text"]
     session = backend.store.sessions[session_id]
-    assert session.dialog[-1] == {"who": "agent", "text": "Вторая дешевле первой."}
     assert session.last_frame is None and session.heard == ""
+    assert "addressed=true" in content[0]["text"]
 
 
-@pytest.mark.parametrize("pictures,status", [([b"not a picture"], 422), ([jpeg()] * 5, 400)])
+@pytest.mark.parametrize("pictures,status", [([b"not a picture"], 422), ([jpeg()] * 5, 400), ([], 415)])
 def test_look_refuses_bad_pictures(backend, pictures, status):
     session_id = new_session(backend.client, mode="beside")
-    backend.meta.answers.append(spoken("", needs_screen=True))
     say(backend.client, session_id)
     assert look(backend.client, session_id, pictures).status_code == status
-    assert backend.store.sessions[session_id].dialog == []
+    assert backend.meta.talk_calls == []
 
 
 def test_look_needs_a_line_waiting_for_the_screen(backend):
@@ -490,12 +638,14 @@ def test_look_needs_a_line_waiting_for_the_screen(backend):
 def test_voice_switches_the_mode_and_drops_the_screen(backend):
     client = backend.client
     session_id = new_session(client)
-    post_frame(client, session_id)
-    idle(backend, session_id)
+    seen_frame(backend, session_id)
     session = backend.store.sessions[session_id]
     assert session.last_frame is not None
-    backend.meta.answers.append(spoken("Хорошо, просто смотрю.", mode="beside"))
-    assert say(client, session_id).json()["mode"] == "beside"
+    backend.meta.quick.append(quick_line("Хорошо, просто смотрю.", mode="beside", needs_screen=False))
+    with client.websocket_connect("/sessions/" + session_id + "/events", headers=AUTH) as websocket:
+        websocket.receive_json()
+        say(client, session_id)
+        assert receive_type(websocket, "say")["mode"] == "beside"
     assert session.mode == "beside" and session.last_frame is None and session.last_step is None
     assert post_frame(client, session_id).json()["reason"] == "beside"
 
@@ -504,8 +654,7 @@ def test_the_mode_can_be_set_directly(backend):
     client = backend.client
     session_id = new_session(client, mode="beside")
     assert client.post("/sessions/" + session_id + "/mode", headers=AUTH, json={"mode": "lead"}).json() == {"ok": True}
-    assert post_frame(client, session_id).json()["accepted"] is True
-    idle(backend, session_id)
+    seen_frame(backend, session_id)
     assert backend.store.sessions[session_id].mode == "lead"
     assert client.post("/sessions/" + session_id + "/mode", headers=AUTH, json={"mode": "other"}).status_code == 422
 
@@ -522,8 +671,7 @@ def test_a_goal_can_ask_only_to_watch(backend):
 def test_the_moved_signal_drops_the_step_under_way(backend):
     client = backend.client
     session_id = new_session(client)
-    post_frame(client, session_id)
-    idle(backend, session_id)
+    seen_frame(backend, session_id)
     with client.websocket_connect("/sessions/" + session_id + "/events", headers=AUTH) as websocket:
         websocket.receive_json()
         assert client.post("/sessions/" + session_id + "/moved", headers=AUTH).json() == {"ok": True}
@@ -531,3 +679,35 @@ def test_the_moved_signal_drops_the_step_under_way(backend):
     assert status["state"] == "analyzing" and status["new_screen"] is True
     assert post_frame(client, session_id).json()["reason"] == "unchanged"
     assert backend.store.sessions[session_id].last_status["state"] == "broadcasting"
+
+
+def windowed(picture_color):
+    screen = Image.open(io.BytesIO(jpeg())).convert("RGB")
+    inner = window.add_border(Image.new("RGB", (120, 160), picture_color))
+    screen.paste(inner, (30, 300))
+    output = io.BytesIO()
+    screen.save(output, format="JPEG", quality=85)
+    return output.getvalue()
+
+
+def test_our_window_is_grey_for_the_model_and_changes_nothing(backend):
+    client = backend.client
+    session_id = new_session(client)
+    assert post_frame(client, session_id, windowed((200, 40, 40))).json()["accepted"] is True
+    idle(backend, session_id)
+    session = backend.store.sessions[session_id]
+    assert session.last_frame.window is not None
+    prompt = backend.meta.vision_calls[-1][0]["content"][0]["text"]
+    assert "grey rectangle" in prompt
+    grey = Image.open(io.BytesIO(session.last_frame.jpeg)).convert("RGB")
+    assert all(abs(value - 128) < 12 for value in grey.getpixel((90, 380)))
+    assert post_frame(client, session_id, windowed((40, 200, 40))).json()["reason"] == "unchanged"
+
+
+def test_words_under_our_window_do_not_count(backend):
+    lines = [{"text": "Beli sekarang", "words": [{"text": "Beli", "box": [0.1, 0.5, 0.2, 0.55]},
+                                                 {"text": "sekarang", "box": [0.6, 0.5, 0.8, 0.55]}]},
+             {"text": "Keranjang", "words": [{"text": "Keranjang", "box": [0.1, 0.2, 0.3, 0.25]}]}]
+    kept = window.outside(lines, [0.5, 0.4, 0.9, 0.7])
+    assert kept == [{"text": "Beli sekarang", "words": [lines[0]["words"][0]]}, lines[1]]
+    assert window.outside(lines, [0.0, 0.0, 1.0, 1.0]) == []

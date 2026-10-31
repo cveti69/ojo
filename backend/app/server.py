@@ -9,7 +9,7 @@ import re
 import secrets
 import time
 from contextlib import asynccontextmanager
-from typing import List, Literal, Optional
+from typing import Callable, List, Literal, Optional
 from urllib.parse import unquote_plus
 
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, WebSocket
@@ -19,9 +19,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.websockets import WebSocketDisconnect
 
-from . import config, debug, meta, step, talk
-from .engine import HISTORY_STEPS, Engine, prepare_frame
+from . import config, debug, meta, step
+from .ears import Ears
+from .engine import Engine, prepare_frame
 from .sessions import Session, SessionStore
+from .talker import Talker
 from .voice import ElevenLabsSynthesizer, MetaSpeechRecognizer, SpeechRecognizer, SpeechSynthesizer
 
 
@@ -66,6 +68,10 @@ class CreateSession(Payload):
 
 class CallMode(Payload):
     mode: Literal["lead", "beside"]
+
+
+class Played(Payload):
+    turn: int = Field(ge=1)
 
 
 class Goal(Payload):
@@ -136,11 +142,9 @@ async def read_pictures(request: Request) -> List[bytes]:
         raise HTTPException(422, "Нужен хотя бы один кадр.")
     started = time.perf_counter()
     try:
-        for picture in pictures:
-            await run_in_threadpool(prepare_frame, picture, 1, 1, 0, started)
+        return [(await run_in_threadpool(prepare_frame, picture, 1, 1, 0, started)).jpeg for picture in pictures]
     except ValueError as error:
         raise HTTPException(422, str(error)) from None
-    return pictures
 
 
 async def read_body(request: Request, limit: int) -> bytes:
@@ -177,11 +181,12 @@ async def ready_text(session: Session) -> Optional[str]:
 
 def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = None,
                recognizer: Optional[SpeechRecognizer] = None,
-               synthesizer: Optional[SpeechSynthesizer] = None) -> FastAPI:
+               synthesizer: Optional[SpeechSynthesizer] = None, ears: Callable = Ears) -> FastAPI:
     sessions = store if store is not None else SessionStore()
     processor = engine if engine is not None else Engine()
     speech = recognizer if recognizer is not None else MetaSpeechRecognizer()
     speaker = synthesizer if synthesizer is not None else ElevenLabsSynthesizer()
+    talker = Talker(processor)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -198,6 +203,7 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
     application.state.sessions = sessions
     application.state.engine = processor
     application.state.speech = speech
+    application.state.talker = talker
 
     @application.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, error: RequestValidationError):
@@ -231,27 +237,6 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
         return {"ok": True}
 
     router = APIRouter()
-
-    def talk_prompt(session: Session, said: str, screens: int) -> str:
-        last_hint = session.last_hint or {}
-        return talk.build_prompt(
-            session.goal, [item["summary"] for item in session.history[-HISTORY_STEPS:]],
-            last_hint.get("instruction_ru", ""), session.dialog, said, screens,
-            user_lang=session.user_lang, target_lang=session.app_lang or session.target_lang,
-            character=session.character, done=session.completed,
-        )
-
-    def spoken_reply(session: Session, said: str, answer: dict, timings: dict) -> dict:
-        if not answer["reply"]:
-            return {"reply_ru": None, "goal": None, "mode": None, "timings": timings}
-        session.dialog += [{"who": "person", "text": said}, {"who": "agent", "text": answer["reply"]}]
-        if answer["mode"]:
-            session.set_mode(answer["mode"])
-        if answer["new_goal"]:
-            session.set_goal(answer["new_goal"])
-            if session.broadcasting and session.last_frame:  # A still screen sends no frames.
-                processor.submit(session, session.last_frame)
-        return {"reply_ru": answer["reply"], "goal": answer["new_goal"], "mode": answer["mode"], "timings": timings}
 
     @router.post("/sessions", status_code=201)
     async def create_session(body: CreateSession):
@@ -370,41 +355,24 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
             raise HTTPException(422, str(error)) from None
         except Exception:
             raise HTTPException(502, "Не удалось распознать речь. Попробуй ещё раз.") from None
-        heard = time.perf_counter()
-        timings = {"speech_ms": round((heard - started) * 1000), "model_ms": 0}
-        if not said:
-            return {"reply_ru": None, "goal": None, "timings": timings}
-        frame = session.last_frame
-        try:
-            if session.mode == "beside":
-                answer = await run_in_threadpool(talk.check, talk_prompt(session, said, 0))
-            else:
-                answer = await run_in_threadpool(talk.ask, [frame.jpeg] if frame else [],
-                                                 talk_prompt(session, said, 1 if frame else 0), session.effort)
-        except Exception:
-            raise HTTPException(502, "Не удалось получить ответ Meta. Попробуй ещё раз.") from None
-        timings["model_ms"] = round((time.perf_counter() - heard) * 1000)
-        require_active(session)
-        if answer["needs_screen"]:
-            session.heard = said
-            return {"reply_ru": None, "goal": None, "mode": None, "needs_screen": True, "timings": timings}
-        return spoken_reply(session, said, answer, timings)
+        speech_ms = round((time.perf_counter() - started) * 1000)
+        if said:
+            await talker.answer(session, *talker.take(session, said))
+        return {"heard": bool(said), "speech_ms": speech_ms}
 
     @router.post("/sessions/{session_id}/look")
     async def look(session_id: str, request: Request):
         session = session_or_404(session_id)
         require_active(session)
-        said, session.heard = session.heard, ""
-        if not said:
+        if not session.heard:
             raise HTTPException(409, "Нет реплики, которой нужен экран.")
-        pictures = await read_pictures(request)
-        started = time.perf_counter()
-        try:
-            answer = await run_in_threadpool(talk.ask, pictures, talk_prompt(session, said, len(pictures)), session.effort)
-        except Exception:
-            raise HTTPException(502, "Не удалось получить ответ Meta. Попробуй ещё раз.") from None
-        require_active(session)
-        return spoken_reply(session, said, answer, {"speech_ms": 0, "model_ms": round((time.perf_counter() - started) * 1000)})
+        await talker.look(session, await read_pictures(request))
+        return {"ok": True}
+
+    @router.post("/sessions/{session_id}/played")
+    async def played(session_id: str, body: Played):
+        talker.played(session_or_404(session_id), body.turn)
+        return {"ok": True}
 
     @router.post("/sessions/{session_id}/mode")
     async def call_mode(session_id: str, body: CallMode):
@@ -458,16 +426,42 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
             raise HTTPException(401, "Неверный токен.")
         return HTMLResponse(debug.render(session_or_404(session_id)))
 
-    @application.websocket("/sessions/{session_id}/events")
-    async def events(websocket: WebSocket, session_id: str):
+    async def open_socket(websocket: WebSocket, session_id: str) -> Optional[Session]:
         if not valid_token(websocket.headers.get("x-token")):
             await websocket.send_denial_response(JSONResponse({"detail": "Неверный токен."}, status_code=401))
-            return
+            return None
         session = sessions.get(session_id)
         if session is None:
             await websocket.send_denial_response(JSONResponse({"detail": "Сессия не найдена."}, status_code=404))
-            return
+            return None
         await websocket.accept()
+        return session
+
+    @application.websocket("/sessions/{session_id}/listen")
+    async def listen(websocket: WebSocket, session_id: str):
+        """The phone sends sound while it hears a voice. A dropped socket leaves the recognition session open."""
+        session = await open_socket(websocket, session_id)
+        if session is None:
+            return
+        if session.ended:
+            await websocket.close()
+            return
+        if session.ears is None:
+            session.ears = ears(lambda said: talker.heard(session, said))
+        with contextlib.suppress(WebSocketDisconnect, RuntimeError):
+            while True:
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    break
+                if message.get("bytes"):
+                    session.ears.hear(message["bytes"])
+                session.touch()
+
+    @application.websocket("/sessions/{session_id}/events")
+    async def events(websocket: WebSocket, session_id: str):
+        session = await open_socket(websocket, session_id)
+        if session is None:
+            return
         queue = session.subscribe()
         reader = asyncio.create_task(websocket.receive())
         next_event: Optional[asyncio.Task] = None

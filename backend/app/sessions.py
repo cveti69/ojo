@@ -24,6 +24,7 @@ class Frame:
     digest: str
     received_at: float
     receive_ms: int
+    window: Optional[List[float]] = None
 
 
 @dataclass
@@ -37,6 +38,12 @@ class Session:
     character: str = ""
     mode: str = "lead"
     heard: str = ""
+    turn: int = 0
+    open_words: str = ""
+    open_mark: int = 0
+    looking: int = 0
+    written_turn: int = 0
+    ears: Any = None
     app_lang: Optional[str] = None
     history: List[dict] = field(default_factory=list)
     dialog: List[dict] = field(default_factory=list)
@@ -162,6 +169,8 @@ class Session:
             self._put(queue, None)
         if self.task and not self.task.done():
             self.task.cancel()
+        if self.ears:
+            self.ears.close()
 
 
 class SessionStore:

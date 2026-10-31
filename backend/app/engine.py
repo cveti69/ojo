@@ -14,7 +14,7 @@ from typing import Optional
 from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 
-from . import config, grounding, hint, step
+from . import config, grounding, hint, step, window
 from .sessions import Frame, Session
 
 GRAY_SIZE = (64, 96)
@@ -35,6 +35,7 @@ _SCREEN_LANGUAGE = re.compile(r"^\s*\[lang=([^\]]+)\]", re.I)
 
 def prepare_frame(jpeg: bytes, source_width: int, source_height: int, timestamp_ms: int,
                   received_at: float) -> Frame:
+    """From here on our own window is a grey patch, so its changing picture never counts as a new screen."""
     try:
         with Image.open(io.BytesIO(jpeg)) as image:
             if image.format != "JPEG":
@@ -42,14 +43,17 @@ def prepare_frame(jpeg: bytes, source_width: int, source_height: int, timestamp_
             width, height = image.size
             if width * height > config.MAX_FRAME_PIXELS:
                 raise ValueError("Слишком большой размер кадра.")
-            image.load()
+        found = window.find(jpeg)
+        if found:
+            jpeg = window.hide(jpeg, found)
+        with Image.open(io.BytesIO(jpeg)) as image:
             gray = image.convert("L").resize(GRAY_SIZE, Image.Resampling.BILINEAR).tobytes()
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
         raise ValueError("Не удалось прочитать JPEG.") from None
     return Frame(
         jpeg=jpeg, width=width, height=height, source_width=source_width, source_height=source_height,
         timestamp_ms=timestamp_ms, gray=gray, digest=hashlib.sha256(gray).hexdigest(),
-        received_at=received_at, receive_ms=round((time.perf_counter() - received_at) * 1000),
+        received_at=received_at, receive_ms=round((time.perf_counter() - received_at) * 1000), window=found,
     )
 
 
@@ -217,6 +221,8 @@ class Engine:
             user_lang=session.user_lang, target_lang=session.app_lang or session.target_lang,
             character=session.character,
         )
+        if frame.window:
+            prompt += window.RULE.format(box=[round(value * 1000) for value in frame.window])
         if session.target_lang == "auto":
             prompt += (
                 "\nDetect the app language from the visible interface. Prefix the screen field with "
@@ -275,8 +281,11 @@ class Engine:
             instruction = PASTE_INSTRUCTION.format(text=texts[0])
             paste_text = texts[0]
         stage = time.perf_counter()
-        location = await run_in_threadpool(grounding.locate, frame.jpeg, frame.width, frame.height, answer,
-                                           session.frame_text.get(frame.timestamp_ms), await ready_icons(icons))
+        lines = session.frame_text.get(frame.timestamp_ms)
+        if lines and frame.window:
+            lines = window.outside(lines, frame.window)
+        location = await run_in_threadpool(grounding.locate, frame.jpeg, frame.width, frame.height, answer, lines,
+                                           await ready_icons(icons))
         timings["box_ms"] = round((time.perf_counter() - stage) * 1000)
         if outdated(session, revision):
             return

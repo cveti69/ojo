@@ -35,6 +35,30 @@ def answer(**changes):
     return result
 
 
+def talk_line(reply="Это кнопка оплаты.", addressed=True, new_goal=None, mode="keep"):
+    return {"addressed": addressed, "reply": reply, "new_goal": new_goal, "mode": mode}
+
+
+def quick_line(reply="Сейчас гляну.", addressed=True, new_goal=None, mode="keep", needs_screen=True):
+    return {**talk_line(reply, addressed, new_goal, mode), "needs_screen": needs_screen}
+
+
+class FakeEars:
+    made = []
+
+    def __init__(self, on_turn):
+        self.on_turn = on_turn
+        self.frames = []
+        self.closed = False
+        FakeEars.made.append(self)
+
+    def hear(self, frame):
+        self.frames.append(frame)
+
+    def close(self):
+        self.closed = True
+
+
 def jpeg(color=(230, 235, 240), size=(390, 844)):
     image = Image.new("RGB", size, color)
     draw = ImageDraw.Draw(image)
@@ -99,12 +123,39 @@ class FakeMeta:
         self.asr_reply = {"transcript": "Купить шампунь", "audioDurationMs": 100, "turns": []}
         self.ready_text = "sampo anti ketombe"
         self.text_reply = "Хорошо, помогу. Включи демонстрацию экрана."
+        self.quick = []
+        self.quick_calls = []
+        self.quick_efforts = []
+        self.quick_hook = None
+        self.talk = []
+        self.talk_calls = []
+        self.talk_efforts = []
+        self.talk_seconds = 0
         self.hook = None
         self.active = 0
         self.max_active = 0
         self.lock = threading.Lock()
 
     def chat(self, model, messages, effort=None, schema=None, timeout=60):
+        if model == "test-quick":
+            with self.lock:
+                self.quick_calls.append(messages)
+                self.quick_efforts.append(effort)
+                response = self.quick.pop(0) if self.quick else quick_line()
+            if self.quick_hook:
+                self.quick_hook()
+            if isinstance(response, Exception):
+                raise response
+            return {"text": json.dumps(response, ensure_ascii=False), "usage": {}, "ms": 1}
+        if model == "test-talk":
+            with self.lock:
+                self.talk_calls.append(messages)
+                self.talk_efforts.append(effort)
+                response = self.talk.pop(0) if self.talk else talk_line()
+            time.sleep(self.talk_seconds)
+            if isinstance(response, Exception):
+                raise response
+            return {"text": json.dumps(response, ensure_ascii=False), "usage": {}, "ms": 1}
         if model == "test-text":
             self.text_calls.append(messages)
             payload = json.loads(messages[-1]["content"])
@@ -153,6 +204,8 @@ def backend(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "META_API_KEY", "test-key")
     monkeypatch.setattr(config, "META_TEXT_MODEL", "test-text")
     monkeypatch.setattr(config, "META_VISION_MODEL", "test-vision")
+    monkeypatch.setattr(config, "META_TALK_MODEL", "test-talk")
+    monkeypatch.setattr(config, "META_QUICK_MODEL", "test-quick")
     monkeypatch.setattr(config, "META_TRANSCRIBE_MODEL", "test-asr")
     monkeypatch.setattr(config, "SAVE_FRAMES", False)
     monkeypatch.setattr(config, "FRAMES_DIR", tmp_path / "frames")
@@ -167,6 +220,7 @@ def backend(monkeypatch, tmp_path):
         return {"box": [value / 1000 for value in raw] if raw else None, "source": "test", "ms": 1}
     monkeypatch.setattr(grounding, "locate", locate)
     monkeypatch.setattr(grounding, "find_icons", lambda image, width, height: [])
-    application = create_app()
+    FakeEars.made = []
+    application = create_app(ears=FakeEars)
     with TestClient(application) as client:
         yield SimpleNamespace(client=client, app=application, store=application.state.sessions, meta=fake)

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import io
 from itertools import combinations
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from PIL import Image, ImageChops, ImageDraw, ImageStat
 
@@ -17,6 +17,8 @@ MAX_INSIDE = 0.25  # A window is hollow: a solid colour block is not one.
 RATIO = (0.6, 0.9)  # Width over height; the window is 3:4.
 GREY = (128, 128, 128)
 QUALITY = 70
+RULE = ("\nThe grey rectangle {box} on the image, in the same 0-1000 coordinates, is our floating window. "
+        "It hides that part of the app, and nothing there can be tapped.")
 
 
 def add_border(picture: Image.Image) -> Image.Image:
@@ -74,6 +76,15 @@ def find(jpeg: bytes) -> Optional[List[float]]:
             if _is_window(mask, left, right, top, bottom):
                 return [left[0] / width, top[0] / height, right[1] / width, bottom[1] / height]
     return None
+
+
+def outside(lines: Sequence[dict], box: List[float]) -> List[dict]:
+    """The words read off the frame, without the ones that sit under the window."""
+    def under(word: dict) -> bool:
+        x, y = (word["box"][0] + word["box"][2]) / 2, (word["box"][1] + word["box"][3]) / 2
+        return box[0] <= x <= box[2] and box[1] <= y <= box[3]
+    kept = [dict(line, words=[word for word in line["words"] if not under(word)]) for line in lines]
+    return [line for line in kept if line["words"]]
 
 
 def hide(jpeg: bytes, box: List[float]) -> bytes:

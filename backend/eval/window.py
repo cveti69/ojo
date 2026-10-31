@@ -40,8 +40,6 @@ SPOTS = {"left-middle": (0, 0.5), "right-middle": (1, 0.5), "left-top": (0, 0.2)
 MOVE_WORDS = re.compile(r"сдвин|подвин|передвин|отодвин|перетащ|перемест|убери|отведи|оттащи")
 WINDOW_WORDS = re.compile(r"окн|окош|подсказк|картинк")
 BORDER_RULE = "\nOur floating window is the one with a thick magenta border: everything inside the border is ours."
-HIDDEN_RULE = ("\nThe grey rectangle {box} on the image, in the same 0-1000 coordinates, is our floating window. "
-               "It hides that part of the app, and nothing there can be tapped.")
 PICTURE_SCALE = 0.25
 PICTURE_STEP = 2
 PICTURE_TOLERANCE = 30
@@ -281,7 +279,7 @@ def run_one(job: dict, mode: str, args) -> dict:
             lines = [dict(line, words=[word for word in line["words"] if not center_inside(word["box"], found)])
                      for line in lines]
             icons = [icon for icon in icons if not center_inside(icon, found)]
-            prompt += HIDDEN_RULE.format(box=[round(value * 1000) for value in found])
+            prompt += window.RULE.format(box=[round(value * 1000) for value in found])
         else:
             jpeg = shot["marked"]
     try:
