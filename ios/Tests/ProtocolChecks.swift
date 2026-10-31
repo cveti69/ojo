@@ -383,7 +383,7 @@ private enum ProtocolChecks {
         var said: [String] = []
         for step in 0..<40 {
             let now = start.addingTimeInterval(Double(step) * 16)
-            guard let word = words.next(step % 3 == 0 ? .looking : .thinking, now: now) else {
+            guard let word = words.next([.looking, .thinking, .promise][step % 3], now: now) else {
                 throw CheckFailure(description: "a word after a long pause")
             }
             try check(word != said.last, "the same pause word twice in a row: \(word)")
