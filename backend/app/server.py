@@ -64,6 +64,7 @@ class CreateSession(Payload):
     character: Literal["warm", "strict", "brief", "patient", "own"] = "warm"
     own_character: str = Field(default="", max_length=500)
     mode: Literal["lead", "beside"] = "lead"
+    eyes: bool = False
 
 
 class CallMode(Payload):
@@ -241,7 +242,7 @@ def create_app(store: Optional[SessionStore] = None, engine: Optional[Engine] = 
     @router.post("/sessions", status_code=201)
     async def create_session(body: CreateSession):
         session = sessions.create(body.goal.strip(), body.user_lang, body.target_lang, body.text_entry, body.effort,
-                                  step.manner(body.character, body.own_character), body.mode)
+                                  step.manner(body.character, body.own_character), body.mode, body.eyes)
         return {"session_id": session.id}
 
     @router.post("/sessions/{session_id}/goal")

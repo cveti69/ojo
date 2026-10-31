@@ -162,6 +162,37 @@ def test_hint_says_where_its_time_went(backend):
     assert set(timings) == {"queue_ms", "model_ms", "box_ms", "box_source", "window"}
 
 
+def test_the_eyes_look_from_the_window_to_the_target():
+    assert window.gaze([0.1, 0.4, 0.3, 0.5], [0.8, 0.4, 0.9, 0.5], 1000, 2000) == [1.0, 0.0]
+    x, y = window.gaze([0.0, 0.0, 0.2, 0.1], [0.3, 0.3, 0.5, 0.4], 1000, 1000)
+    assert x > 0 and y > 0 and abs(x * x + y * y - 1) < 0.01
+    assert window.gaze(None, [0.1, 0.1, 0.2, 0.2], 1000, 1000) is None
+    assert window.gaze([0.1, 0.1, 0.2, 0.2], None, 1000, 1000) is None
+    assert window.gaze([0.1, 0.1, 0.2, 0.2], [0.1, 0.1, 0.2, 0.2], 1000, 1000) is None
+
+
+def test_hint_for_the_eyes(backend):
+    plain = new_session(backend.client)
+    post_frame(backend.client, plain)
+    idle(backend, plain)
+    assert not {"eyes_box", "gaze", "calm"} & set(backend.store.sessions[plain].last_hint)
+    session_id = new_session(backend.client, eyes=True)
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    event = backend.store.sessions[session_id].last_hint
+    assert len(event["eyes_box"]) == 4 and event["gaze"] is None and event["calm"] is False
+
+
+@pytest.mark.parametrize("fields,calm", [({"needs_user_confirm": True}, True), ({"screen": "Login, password field"}, True),
+                                         ({"instruction": "Введи номер карты сам"}, True), ({"screen": "Search results"}, False)])
+def test_a_private_screen_keeps_the_eyes_calm(backend, fields, calm):
+    session_id = new_session(backend.client, eyes=True)
+    backend.meta.answers = [answer(**fields)]
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    assert backend.store.sessions[session_id].last_hint["calm"] is calm
+
+
 def test_model_done_event(backend):
     session_id = new_session(backend.client)
     backend.meta.answers = [answer(done=True, instruction="Готово, заказ оформлен. Что дальше?")]

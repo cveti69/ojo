@@ -37,6 +37,7 @@ class Session:
     effort: Optional[str] = None
     character: str = ""
     mode: str = "lead"
+    eyes: bool = False
     heard: str = ""
     turn: int = 0
     open_words: str = ""
@@ -179,10 +180,10 @@ class SessionStore:
         self.sessions: Dict[str, Session] = {}
 
     def create(self, goal: str, user_lang: str, target_lang: str, text_entry: str, effort: Optional[str] = None,
-               character: str = "", mode: str = "lead") -> Session:
+               character: str = "", mode: str = "lead", eyes: bool = False) -> Session:
         session = Session(
             id="s_" + uuid.uuid4().hex[:16], goal=goal, user_lang=user_lang,
-            target_lang=target_lang, text_entry=text_entry, effort=effort, character=character, mode=mode,
+            target_lang=target_lang, text_entry=text_entry, effort=effort, character=character, mode=mode, eyes=eyes,
             app_lang=None if target_lang == "auto" else target_lang,
         )
         self.sessions[session.id] = session

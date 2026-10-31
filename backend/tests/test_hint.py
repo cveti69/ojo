@@ -54,3 +54,22 @@ def test_long_instruction_wraps_and_keeps_target_visible():
                 rows_with_text.append(y)
         assert rows_with_text and max(rows_with_text) < 925
         assert len(rows_with_text) > 70
+
+
+@pytest.mark.parametrize("instruction", ["Нажми на поиск", "Проверь выбранный адрес доставки, затем нажми на зелёную кнопку внизу экрана"])
+def test_room_for_the_eyes_stays_empty(instruction):
+    result = hint.render(source_image(), [0.01, 0.81, 0.99, 0.89], instruction, eyes=True)
+    left, top, right, bottom = hint.eyes_box(instruction)
+    box = (round(left * 720), round(top * 960), round(right * 720), round(bottom * 960))
+    assert box[2] - box[0] == box[3] - box[1] == hint.EYES_SIDE
+    with Image.open(io.BytesIO(result)) as image:
+        assert max(max(pixel) for pixel in image.crop(box).getdata()) < 40
+        strip = image.crop((box[2], box[1], 708, box[3]))
+        assert sum(1 for pixel in strip.getdata() if min(pixel) > 200) > 300
+        yellow = [y for y in range(image.height) for x in range(0, image.width, 3)
+                  if (lambda c: c[0] > 190 and c[1] > 160 and c[2] < 80)(image.getpixel((x, y)))]
+        assert yellow and max(yellow) < box[1]
+
+
+def test_without_the_eyes_the_picture_stays_the_same():
+    assert hint.render(source_image(), [0.1, 0.1, 0.5, 0.2], "Нажми") == hint.render(source_image(), [0.1, 0.1, 0.5, 0.2], "Нажми", False)

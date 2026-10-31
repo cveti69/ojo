@@ -27,10 +27,12 @@ HISTORY_STEPS = 12
 PIXEL_CHANGED = 12  # A thumbnail pixel counts as changed above this difference.
 NEW_SCREEN_SHARE = 0.4  # Our own floating window covers less of the frame than this, a new screen covers more.
 MOVED_ON_SHARE = 0.25  # Our window never changes this much of the frame, the keyboard or a new screen does.
+MOVED_ON_SHARE_WITH_EYES = 0.3  # Measured on public pages: a banner or a video reaches 0.29, the keyboard 0.33, a new screen 0.63.
 SAME_TARGET_DISTANCE = 0.03
 MAX_RESTARTS = 4  # A screen that never stops moving still gets a hint.
 _LANGUAGE = re.compile(r"^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$", re.I)
 _SCREEN_LANGUAGE = re.compile(r"^\s*\[lang=([^\]]+)\]", re.I)
+_PRIVATE_SCREEN = re.compile(r"парол|\bкарт[аыуеой]|пин-код|password|\bpin\b|cvv|cvc|card number|credit card|kata sandi|nomor kartu", re.I)
 
 
 def prepare_frame(jpeg: bytes, source_width: int, source_height: int, timestamp_ms: int,
@@ -210,7 +212,8 @@ class Engine:
         session.stale.clear()
         session.publish({
             "type": "status", "state": "analyzing", "text_ru": "Агент думает",
-            "new_screen": bool(session.last_step) and changed_share(frame.gray, session.last_step["gray"]) >= MOVED_ON_SHARE,
+            "new_screen": bool(session.last_step) and changed_share(frame.gray, session.last_step["gray"]) >= (
+                MOVED_ON_SHARE_WITH_EYES if session.eyes else MOVED_ON_SHARE),
         })
         if config.SAVE_FRAMES:
             await run_in_threadpool(_save_frame, frame, session.id)
@@ -298,7 +301,7 @@ class Engine:
             timings["total_ms"] = round((time.perf_counter() - frame.received_at) * 1000)
             return
         stage = time.perf_counter()
-        image = await run_in_threadpool(hint.render, frame.jpeg, location["box"], instruction)
+        image = await run_in_threadpool(hint.render, frame.jpeg, location["box"], instruction, session.eyes)
         timings["image_ms"] = round((time.perf_counter() - stage) * 1000)
         if outdated(session, revision):
             return
@@ -312,6 +315,10 @@ class Engine:
             "timings": {"queue_ms": timings["queue_ms"], "model_ms": timings["model_ms"], "box_ms": timings["box_ms"],
                         "box_source": location["source"], "window": frame.window is not None},
         }
+        if session.eyes:
+            event["eyes_box"] = hint.eyes_box(instruction)
+            event["gaze"] = window.gaze(frame.window, location["box"], frame.width, frame.height)
+            event["calm"] = needs_confirm or bool(_PRIVATE_SCREEN.search(answer["screen"] + " " + instruction))
         session.step_id = step_id
         session.texts = texts
         session.insert_hint_ru = event["insert_hint_ru"]

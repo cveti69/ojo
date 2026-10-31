@@ -224,6 +224,23 @@ def test_our_own_window_does_not_repeat_the_step(backend):
     assert backend.client.get("/sessions/" + session_id + "/hint?after=s1", headers=AUTH).status_code == 204
 
 
+@pytest.mark.parametrize("eyes,removed", [(False, True), (True, False)])
+def test_a_video_on_the_page_keeps_the_hint_with_the_eyes(backend, monkeypatch, eyes, removed):
+    monkeypatch.setattr(engine, "changed_share", lambda gray, previous: 0.28)
+    session_id = new_session(backend.client, eyes=eyes)
+    moved = {"label": "Beli", "object": "green button", "box": [30, 500, 970, 570], "mark_id": None}
+    backend.meta.answers = [answer(), answer(target=moved)]
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    session = backend.store.sessions[session_id]
+    published = []
+    publish = session.publish
+    monkeypatch.setattr(session, "publish", lambda event: (published.append(event), publish(event))[1])
+    post_frame(backend.client, session_id, jpeg((30, 60, 90)))
+    idle(backend, session_id)
+    assert [event["new_screen"] for event in published if event.get("state") == "analyzing"][0] is removed
+
+
 def test_same_step_on_a_new_screen_gets_a_new_hint(backend):
     session_id = new_session(backend.client)
     post_frame(backend.client, session_id)

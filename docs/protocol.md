@@ -9,7 +9,7 @@
 
 | Метод и путь | Кто вызывает | Тело | Ответ |
 |---|---|---|---|
-| `POST /sessions` | приложение | `{"goal": "", "user_lang": "ru", "target_lang": "id", "text_entry": "clipboard", "effort": "minimal", "character": "warm", "own_character": "", "mode": "lead"}` | `201 {"session_id": "s_ab12cd34"}` |
+| `POST /sessions` | приложение | `{"goal": "", "user_lang": "ru", "target_lang": "id", "text_entry": "clipboard", "effort": "minimal", "character": "warm", "own_character": "", "mode": "lead", "eyes": true}`, поле `eyes` только при включённых глазах | `201 {"session_id": "s_ab12cd34"}` |
 | `POST /sessions/{id}/goal` | приложение | `{"goal": "Заказать шампунь от перхоти"}` | `200 {"reply_ru": "Хорошо. Включи демонстрацию экрана.", "ready_text": "sampo anti ketombe", "mode": null}`. Если трансляция уже идёт, сервер сразу разбирает последний кадр. `mode` равен `"beside"`, если человек просит только смотреть: сервер уже переключился |
 | `POST /transcribe` | приложение | `audio/wav`: моно, 16 бит, 16 кГц | `200 {"text": "..."}` |
 | `POST /sessions/{id}/frames` | расширение записи | `image/jpeg` | `202 {"accepted": true}` или `202 {"accepted": false, "reason": "busy"}`. В режиме «Рядом» `reason` равен `beside`, кадр не хранится |
@@ -83,6 +83,10 @@
 `status.state`: `waiting_frames`, `broadcasting`, `analyzing`, `broadcast_stopped`, `error`. `new_screen` есть только при `analyzing`:
 экран уже не тот, что на последней подсказке, поэтому приложение убирает её из окна, пока агент смотрит. `timings` нужны для журнала,
 `window` говорит, нашёл ли сервер наше окно на кадре.
+
+В звонке с `eyes` картинка подсказки оставляет в нижней полосе место, и в событии есть ещё три поля. `eyes_box`: где телефон
+рисует маленькие глаза, `[x1, y1, x2, y2]` в долях картинки. `gaze`: куда смотреть, единичный шаг `[x, y]` от центра нашего
+окна к центру цели, `null`, если окна нет на кадре или цели нет. `calm`: экран оплаты, карты или пароля, глаза только в покое.
 
 Если `text_entry` равен `clipboard`, в подсказке есть `paste_text`: приложение кладёт его в буфер обмена сразу при получении
 события, а `instruction_ru` просит зажать поле и выбрать «Вставить» или набрать текст. При `keyboard` поле `paste_text`
