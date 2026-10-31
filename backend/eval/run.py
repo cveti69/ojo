@@ -89,7 +89,7 @@ def iou(box: list[float] | None, truth: list[float]) -> float:
 
 
 def run_direct(case: dict, frame: dict, args) -> dict:
-    prompt = step.build_prompt(case["goal"], case["history"])
+    prompt = step.build_prompt(case["goal"], case["history"], character=step.manner(args.character))
     reply = step.ask(frame["jpeg"], prompt, args.model, args.effort)
     answer = reply["answer"]
     box = None
@@ -226,6 +226,7 @@ def main() -> None:
     parser.add_argument("--model", required=True)
     parser.add_argument("--effort", default="minimal")
     parser.add_argument("--repeat", type=int, default=1)
+    parser.add_argument("--character", default="", help="warm, strict, brief or patient")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--long-side", type=int, default=1000)
     parser.add_argument("--only", default="", help="comma-separated case ids")
