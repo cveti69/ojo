@@ -197,6 +197,11 @@ final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
         UIGraphicsPushContext(context)
         defer { UIGraphicsPopContext() }
         image.draw(in: rect)
+        // This colour tells the server which part of a screenshot is our own window.
+        let thickness = (Self.frameSize.width * 0.035).rounded()
+        context.setStrokeColor(UIColor(red: 1, green: 0, blue: 170.0 / 255, alpha: 1).cgColor)
+        context.setLineWidth(thickness)
+        context.stroke(CGRect(origin: .zero, size: Self.frameSize).insetBy(dx: thickness / 2, dy: thickness / 2))
     }
 
     private enum FrameError: LocalizedError {

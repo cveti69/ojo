@@ -1,4 +1,5 @@
 import ReplayKit
+import Shared
 import SwiftUI
 
 struct CallScreen: View {
@@ -144,6 +145,19 @@ private struct MoreScreen: View {
                     if model.isRecording {
                         Button("Закончить запись") { model.finishRecording() }
                     }
+                }
+                Section {
+                    Picker("Режим", selection: Binding(get: { model.callMode }, set: { model.setCallMode($0) })) {
+                        Text("Ведёт").tag(CallMode.lead)
+                        Text("Рядом").tag(CallMode.beside)
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Режим агента")
+                } footer: {
+                    Text(model.callMode == .lead
+                         ? "Агент сам ведёт по шагам. Можно сказать ему: «просто смотри»."
+                         : "Агент молчит, пока ты к нему не обратишься. До этого экран не уходит с телефона. Можно сказать: «веди».")
                 }
                 Section {
                     HStack {

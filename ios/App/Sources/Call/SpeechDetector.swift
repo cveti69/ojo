@@ -54,6 +54,29 @@ struct SpeechDetector {
     private var quietBlocks = 0
     private var noiseFloor: Float?
     private var loudest: Float = -160
+    private var fresh: [Int16] = []
+    private(set) var droppedSounds = 0
+    private(set) var loudestDropped: Float = -160
+    private(set) var lastLoud = Date.distantPast
+    private(set) var lastLevel: Float = -160
+
+    /// The count goes on when the microphone restarts.
+    mutating func keepDropped(_ count: Int, loudest: Float) {
+        droppedSounds = count
+        loudestDropped = loudest
+    }
+
+    /// A phrase is under way, even in the quiet that may yet end it.
+    var isHearing: Bool { !blocks.isEmpty }
+
+    /// Long enough to be a person and not a click.
+    var isTalking: Bool { speechBlocks >= Self.shortestSpeech }
+
+    /// The sound of the phrase under way since the last call, ready to stream.
+    mutating func takeFresh() -> [Int16] {
+        defer { fresh = [] }
+        return fresh
+    }
 
     mutating func add(_ samples: [Int16]) -> [Phrase] {
         pending += samples
@@ -76,13 +99,20 @@ struct SpeechDetector {
             quietBlocks = 0
             loudest = -160
         }
-        guard speechBlocks >= Self.shortestSpeech else { return nil }
+        guard speechBlocks >= Self.shortestSpeech else {
+            if speechBlocks > 0 {
+                droppedSounds += 1
+                loudestDropped = max(loudestDropped, loudest)
+            }
+            return nil
+        }
         let kept = blocks.dropLast(max(quietBlocks - Self.tailBlocks, 0))
         return Phrase(samples: Array(kept.joined()), noiseFloor: noiseFloor ?? -160, loudest: loudest)
     }
 
     private mutating func take(_ block: [Int16]) -> Phrase? {
         let level = Self.level(of: block)
+        lastLevel = level
         var isLoud = false
         if level > -120 {  // Lower means the voice filter muted the sound, which says nothing about the room.
             let floor = noiseFloor ?? level
@@ -94,12 +124,17 @@ struct SpeechDetector {
             if lead.count > Self.leadBlocks { lead.removeFirst() }
             return nil
         }
-        if blocks.isEmpty { swap(&blocks, &lead) }
+        if blocks.isEmpty {
+            swap(&blocks, &lead)
+            fresh += blocks.joined()
+        }
         blocks.append(block)
+        fresh += block
         if isLoud {
             speechBlocks += 1
             quietBlocks = 0
             loudest = max(loudest, level)
+            lastLoud = Date()
         } else {
             quietBlocks += 1
         }

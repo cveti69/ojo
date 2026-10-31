@@ -10,13 +10,24 @@ final class CallMicrophone {
     var onDiagnostic: ((String) -> Void)?
     var onLost: (() -> Void)?
     var phrases: AsyncStream<Phrase> { listener.phrases }
+    var sound: AsyncStream<[Int16]> { listener.sound }
+    var isHearing: Bool { listener.isHearing }
+    var isTalking: Bool { listener.isTalking }
+    var lastVoice: Date { listener.lastVoice }
+    var dropped: (count: Int, loudest: Float) { listener.dropped }
     private(set) var isOn = false
 
     private let listener = PhraseListener()
     private var engine: AVAudioEngine?
+    private var sharedEngine: AVAudioEngine?
     private var configurationChange: AnyCancellable?
     private var restarts = 0
     private var lastRestart = Date.distantPast
+
+    /// Hearing over the agent's voice takes the voice's own engine: only then can iOS take the voice out of what it hears.
+    init(sharedEngine: AVAudioEngine? = nil) {
+        self.sharedEngine = sharedEngine
+    }
 
     /// iOS lets the microphone start only while the app is on screen.
     @discardableResult
@@ -34,14 +45,22 @@ final class CallMicrophone {
     func stop() {
         configurationChange = nil
         engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
+        if sharedEngine == nil { engine?.stop() }
         engine = nil
         isOn = false
         listener.forget()
     }
 
+    func measure(with probe: AppleSpeechProbe) {
+        listener.measure { [probe] buffer, isSpeech in probe.hear(buffer, isSpeech: isSpeech) }
+    }
+
     func agentSpeaks(_ isSpeaking: Bool) {
-        listener.deafen(until: isSpeaking ? .distantFuture : Date().addingTimeInterval(Self.ringing))
+        if sharedEngine != nil {  // With iOS filtering the voice out, the question is what the filter lets through.
+            if let echo = listener.watchEcho(isSpeaking) { onDiagnostic?("Перебивание: эхо голоса, пик \(Int(echo)) дБ") }
+        } else {
+            listener.deafen(until: isSpeaking ? .distantFuture : Date().addingTimeInterval(Self.ringing))
+        }
     }
 
     private func startEngine() {
@@ -49,7 +68,7 @@ final class CallMicrophone {
             onDiagnostic?("Микрофон: нет разрешения")
             return
         }
-        let engine = AVAudioEngine()
+        let engine = sharedEngine ?? AVAudioEngine()
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
@@ -57,7 +76,7 @@ final class CallMicrophone {
             return
         }
         Self.tap(input, size: AVAudioFrameCount(format.sampleRate / 10), into: listener)
-        do { try engine.start() } catch {
+        do { if !engine.isRunning { try engine.start() } } catch {
             input.removeTap(onBus: 0)
             onDiagnostic?("Микрофон не запустился: \(error.localizedDescription)")
             return

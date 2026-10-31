@@ -12,6 +12,8 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -warnings-as-errors \
   "$protocol_ios_dir/Shared/Sources/SharedJournal.swift" \
   "$protocol_ios_dir/Shared/Sources/ScreenTextReader.swift" \
   "$protocol_ios_dir/Shared/Sources/ScreenTextMailbox.swift" \
+  "$protocol_ios_dir/Shared/Sources/ScreenStillness.swift" \
+  "$protocol_ios_dir/Shared/Sources/FrameShelf.swift" \
   "$protocol_ios_dir/App/Sources/Call/SpeechDetector.swift" \
   "$protocol_ios_dir/App/Sources/Call/PhraseListener.swift" \
   "$protocol_ios_dir/App/Sources/Call/PauseWords.swift" \

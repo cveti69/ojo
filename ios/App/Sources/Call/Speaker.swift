@@ -4,6 +4,8 @@ import Shared
 @MainActor
 protocol Speaker: AnyObject {
     var onSpeaking: ((Bool) -> Void)? { get set }
+    var onSounding: ((Bool) -> Void)? { get set }
+    var mayStart: (() -> Bool)? { get set }
     func prepare(client: ServerClient, journal: SharedJournal?)
     func speak(_ text: String)
     func speakAndWait(_ text: String) async
@@ -15,6 +17,8 @@ protocol Speaker: AnyObject {
 
 extension Speaker {
     var onSpeaking: ((Bool) -> Void)? { get { nil } set {} }
+    var onSounding: ((Bool) -> Void)? { get { nil } set {} }
+    var mayStart: (() -> Bool)? { get { nil } set {} }
     func prepare(client: ServerClient, journal: SharedJournal?) {}
     func waitUntilQuiet() async {}
     func keep(_ texts: [String]) {}
@@ -26,15 +30,21 @@ extension Speaker {
 final class ServerSpeaker: Speaker {
     private static let sampleRate = 24_000.0
     private static let bufferBytes = 4800  // 100 ms of 16-bit mono.
+    private static let longestWait: TimeInterval = 6  // A loud room must not keep the agent silent.
     var onSpeaking: ((Bool) -> Void)?
+    var onSounding: ((Bool) -> Void)?
+    var mayStart: (() -> Bool)?
+    let engine = AVAudioEngine()
+    private var isSounding = false
     private let fallback: any Speaker
-    private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private let format = AVAudioFormat(standardFormatWithSampleRate: ServerSpeaker.sampleRate, channels: 1)!
     private var client: ServerClient?
     private var journal: SharedJournal?
     private var playback: Task<Void, Never>?
     private var kept: [String: Data] = [:]
+    var hearsOverVoice = false
+    private var filtersVoice = false
 
     init(fallback: any Speaker) {
         self.fallback = fallback
@@ -45,6 +55,12 @@ final class ServerSpeaker: Speaker {
     func prepare(client: ServerClient, journal: SharedJournal?) {
         self.client = client
         self.journal = journal
+        if hearsOverVoice != filtersVoice, !engine.isRunning {
+            do {
+                try engine.inputNode.setVoiceProcessingEnabled(hearsOverVoice)
+                filtersVoice = hearsOverVoice
+            } catch { journal?.append("Перебивание: фильтр голоса не переключился: \(error.localizedDescription)") }
+        }
         // iOS can refuse this start from the background, so it happens while the app is on screen.
         do { try engine.start() }
         catch { journal?.append("Голос сервера: движок не запустился: \(error.localizedDescription)") }
@@ -87,6 +103,7 @@ final class ServerSpeaker: Speaker {
         playback = nil
         player.stop()
         fallback.stop()
+        sounds(false)
         onSpeaking?(false)
     }
 
@@ -107,6 +124,9 @@ final class ServerSpeaker: Speaker {
         do {
             if !engine.isRunning { try engine.start() }
             if let sound = kept[text] {
+                await waitForThePerson()
+                try Task.checkCancellation()
+                sounds(true)
                 frames = schedule(sound)
             } else {
                 var pending = Data(capacity: Self.bufferBytes)
@@ -114,21 +134,47 @@ final class ServerSpeaker: Speaker {
                     pending.append(byte)
                     guard pending.count == Self.bufferBytes else { continue }
                     if frames == 0 {
-                        journal?.append("Голос сервера: первый звук через \(Int(Date().timeIntervalSince(started) * 1000)) мс")
+                        journal?.append("Голос сервера: первый звук готов через \(Int(Date().timeIntervalSince(started) * 1000)) мс")
+                        await waitForThePerson()
+                        try Task.checkCancellation()
+                        sounds(true)
                     }
                     frames += schedule(pending)
                     pending.removeAll(keepingCapacity: true)
                 }
+                if frames == 0 { await waitForThePerson() }
+                try Task.checkCancellation()
+                sounds(true)
                 frames += schedule(pending)
             }
             try Task.checkCancellation()
             guard frames > 0 else { throw ClientError.invalidResponse }
             await finishPlaying(seconds: Double(frames) / Self.sampleRate)
+            if !Task.isCancelled { sounds(false) }
         } catch {
             guard !Task.isCancelled else { return }
             journal?.append("Голос сервера: \(error.localizedDescription)")
-            if frames == 0 { await fallback.speakAndWait(text) }
+            if frames == 0 {
+                await waitForThePerson()
+                sounds(true)
+                await fallback.speakAndWait(text)
+            }
+            if !Task.isCancelled { sounds(false) }
         }
+    }
+
+    /// The answer may be ready before the person has finished. It holds its first sound until they have.
+    private func waitForThePerson() async {
+        let started = Date()
+        while let mayStart, !mayStart(), !Task.isCancelled, Date().timeIntervalSince(started) < Self.longestWait {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    private func sounds(_ value: Bool) {
+        guard value != isSounding else { return }
+        isSounding = value
+        onSounding?(value)
     }
 
     private func schedule(_ data: Data) -> Int {

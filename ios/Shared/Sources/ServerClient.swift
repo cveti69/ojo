@@ -79,13 +79,50 @@ public final class ServerClient: Sendable {
         return try JSONDecoder().decode(ServerEvent.self, from: data)
     }
 
-    /// A phrase the person said during the call. The reply is empty when the words were not meant for the agent.
+    /// A phrase the stream missed. The agent's reply comes as an event, like any other.
     public func say(_ wav: Data, sessionID: String) async throws -> SpokenReply {
         var request = try request("POST", ["sessions", sessionID, "say"])
         request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
         let (data, response) = try await session.upload(for: request, from: wav)
         try validate(response)
         return try JSONDecoder().decode(SpokenReply.self, from: data)
+    }
+
+    /// The screens the phone kept, oldest first. Only a line that needs them may send them.
+    public func look(_ frames: [Data], sessionID: String) async throws -> OKResponse {
+        let boundary = "ojo-" + UUID().uuidString
+        var body = Data()
+        for (index, frame) in frames.enumerated() {
+            body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"frame\"; filename=\"\(index).jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".utf8))
+            body.append(frame)
+            body.append(Data("\r\n".utf8))
+        }
+        body.append(Data("--\(boundary)--\r\n".utf8))
+        var request = try request("POST", ["sessions", sessionID, "look"])
+        request.setValue("multipart/form-data; boundary=" + boundary, forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await session.upload(for: request, from: body)
+        try validate(response)
+        return try JSONDecoder().decode(OKResponse.self, from: data)
+    }
+
+    public func setMode(_ mode: CallMode, sessionID: String) async throws -> OKResponse {
+        try await json("POST", ["sessions", sessionID, "mode"], body: ModeRequest(mode: mode))
+    }
+
+    /// The screen started to change, so a hint for the old one is no use.
+    public func moved(sessionID: String) async throws -> OKResponse {
+        try await getJSON(request("POST", ["sessions", sessionID, "moved"]))
+    }
+
+    /// The first sound of a reply: from here on, new words are a new line, not the end of the old one.
+    public func played(turn: Int, sessionID: String) async throws -> OKResponse {
+        try await json("POST", ["sessions", sessionID, "played"], body: PlayedRequest(turn: turn))
+    }
+
+    /// Keeps the connection warm, so the voice's first request does not pay for opening it.
+    public func health() async throws {
+        let (_, response) = try await session.data(for: request("GET", ["health"]))
+        try validate(response)
     }
 
     /// The agent's words as raw 24 kHz, 16-bit mono audio, while it is being made.
@@ -100,7 +137,16 @@ public final class ServerClient: Sendable {
     }
 
     public func eventSocket(sessionID: String) throws -> URLSessionWebSocketTask {
-        var request = try request("GET", ["sessions", sessionID, "events"])
+        try socket(["sessions", sessionID, "events"])
+    }
+
+    /// Carries the person's voice to the server while it sounds.
+    public func listenSocket(sessionID: String) throws -> URLSessionWebSocketTask {
+        try socket(["sessions", sessionID, "listen"])
+    }
+
+    private func socket(_ path: [String]) throws -> URLSessionWebSocketTask {
+        var request = try request("GET", path)
         guard let url = request.url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             throw ClientError.invalidAddress
         }

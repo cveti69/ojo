@@ -47,11 +47,11 @@ private final class StubState: @unchecked Sendable {
         let path = request.url!.path
         if path.hasSuffix("/hint"), noHint { noHint = false; return (204, "") }
         if path == "/api/sessions" { return (201, #"{"session_id":"session-test"}"#) }
-        if path.hasSuffix("/goal") { return (200, #"{"reply_ru":"Включите трансляцию","ready_text":"sampo"}"#) }
+        if path.hasSuffix("/goal") { return (200, #"{"reply_ru":"Включите трансляцию","ready_text":"sampo","mode":"beside"}"#) }
         if path.hasSuffix("/frames") { return (202, #"{"accepted":false,"reason":"busy"}"#) }
         if path.hasSuffix("/speech") { return (200, "abcd") }
         if path.hasSuffix("/say") {
-            return (200, #"{"reply_ru":"Там написано Войти","goal":"Купи кондиционер","timings":{"speech_ms":1200,"model_ms":2100}}"#)
+            return (200, #"{"heard":true,"speech_ms":1200}"#)
         }
         if path.hasSuffix("/suggestions") { return (200, #"{"step_id":"s3","texts":["hello"],"hint_ru":"запрос"}"#) }
         if path.hasSuffix("/transcribe") || path.hasSuffix("/translate") { return (200, #"{"text":"Результат"}"#) }
@@ -111,13 +111,18 @@ private enum ProtocolChecks {
         let created = try await client.createSession()
         try check(created.sessionID == "session-test", "session_id decoding")
         let reply = try await client.setGoal("Цель", sessionID: created.sessionID)
-        try check(reply.replyRU == "Включите трансляцию" && reply.readyText == "sampo", "goal response decoding")
+        try check(reply.replyRU == "Включите трансляцию" && reply.readyText == "sampo" && reply.mode == .beside, "goal response decoding")
         var spoken = 0
         for try await _ in try await client.speech("Привет") { spoken += 1 }
         try check(spoken == 4, "speech bytes")
         let said = try await client.say(Data("RIFFtestWAVE".utf8), sessionID: created.sessionID)
-        try check(said.replyRU == "Там написано Войти" && said.goal == "Купи кондиционер" && said.timings.modelMS == 2100,
-                  "spoken line response decoding")
+        try check(said.heard && said.speechMS == 1200, "spoken line response decoding")
+        let looked = try await client.look([Data([1, 2]), Data([3, 4])], sessionID: created.sessionID)
+        try check(looked.ok, "look response")
+        _ = try await client.setMode(.beside, sessionID: created.sessionID)
+        _ = try await client.moved(sessionID: created.sessionID)
+        _ = try await client.played(turn: 3, sessionID: created.sessionID)
+        try await client.health()
         let frame = try await client.sendFrame(Data([0xff, 0xd8, 0xff, 0xd9]), sessionID: created.sessionID,
                                                width: 1170, height: 2532, timestampMS: 123456789)
         try check(!frame.accepted && frame.reason == "busy", "busy frame response")
@@ -154,6 +159,11 @@ private enum ProtocolChecks {
         try check(socket.originalRequest?.url?.path == "/api/sessions/session-test/events", "WebSocket path")
         try check(socket.originalRequest?.value(forHTTPHeaderField: "X-Token") == "test-token", "WebSocket token")
         socket.cancel(with: .goingAway, reason: nil)
+        let listening = try client.listenSocket(sessionID: created.sessionID)
+        try check(listening.originalRequest?.url?.scheme == "wss", "speech stream scheme")
+        try check(listening.originalRequest?.url?.path == "/api/sessions/session-test/listen", "speech stream path")
+        try check(listening.originalRequest?.value(forHTTPHeaderField: "X-Token") == "test-token", "speech stream token")
+        listening.cancel(with: .goingAway, reason: nil)
 
         let requests = ProtocolStub.state.captured()
         try check(requests.allSatisfy { $0.value(forHTTPHeaderField: "X-Token") == "test-token" }, "X-Token on every HTTP request")
@@ -165,7 +175,24 @@ private enum ProtocolChecks {
         let create = requests.first { $0.url!.path == "/api/sessions" }!
         let createBody = try JSONSerialization.jsonObject(with: body(of: create)) as! [String: String]
         try check(createBody == ["goal": "", "user_lang": "ru", "target_lang": "auto", "text_entry": "clipboard",
-                                 "effort": "minimal", "character": "strict", "own_character": ""], "create-session body")
+                                 "character": "warm", "own_character": "", "mode": "lead"], "create-session body leaves the level to the server")
+        var chosen = settings
+        chosen.thinking = .high
+        chosen.mode = .beside
+        let chosenBody = try JSONSerialization.jsonObject(with: JSONEncoder().encode(CreateSessionRequest(settings: chosen))) as! [String: String]
+        try check(chosenBody["effort"] == "high" && chosenBody["mode"] == "beside", "a chosen level and mode reach the server")
+        let lookRequest = requests.first { $0.url!.path.hasSuffix("/look") }!
+        let lookType = lookRequest.value(forHTTPHeaderField: "Content-Type") ?? ""
+        try check(lookType.hasPrefix("multipart/form-data; boundary="), "look format")
+        let lookBody = String(decoding: try body(of: lookRequest), as: UTF8.self)
+        try check(lookBody.components(separatedBy: #"name="frame""#).count == 3 && lookBody.hasSuffix("--\r\n"), "look sends every frame")
+        let modeRequest = requests.first { $0.url!.path.hasSuffix("/mode") }!
+        let modeBody = try JSONSerialization.jsonObject(with: body(of: modeRequest)) as! [String: String]
+        try check(modeBody == ["mode": "beside"], "mode body")
+        let playedRequest = requests.first { $0.url!.path.hasSuffix("/played") }!
+        let playedBody = try JSONSerialization.jsonObject(with: body(of: playedRequest)) as! [String: Int]
+        try check(playedBody == ["turn": 3], "played body")
+        try check(requests.contains { $0.url!.path.hasSuffix("/moved") && $0.httpMethod == "POST" }, "moved signal")
         let translate = requests.first { $0.url!.path.hasSuffix("/translate") }!
         let translateBody = try JSONSerialization.jsonObject(with: body(of: translate)) as! [String: String]
         try check(translateBody["from"] == "ru" && translateBody["to"] == "auto" && translateBody["session_id"] == created.sessionID,
@@ -193,8 +220,20 @@ private enum ProtocolChecks {
         try check(message.state == "analyzing", "status state")
         let done = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"done","text_ru":"Готово"}"#.utf8))
         guard case .done = done else { throw CheckFailure(description: "done event") }
+        let sayEvent = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"say","turn":3,"layer":"quick","text_ru":"Сейчас гляну.","goal":null,"mode":"beside","looks":true,"timings":{"quick_ms":900}}"#.utf8))
+        guard case .say(let say) = sayEvent else { throw CheckFailure(description: "say event") }
+        try check(say.turn == 3 && say.layer == "quick" && say.mode == .beside && say.looks && say.goal == nil
+                  && say.timings.quickMS == 900 && say.timings.screenMS == nil, "say event fields")
+        guard case .heard(let heard) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"heard","turn":4}"#.utf8)), heard.turn == 4 else {
+            throw CheckFailure(description: "heard event")
+        }
+        guard case .look(let look) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"look","turn":5}"#.utf8)), look.turn == 5 else {
+            throw CheckFailure(description: "look event")
+        }
         try checkSpeechDetector()
         try await checkPhraseListener()
+        try checkStillness()
+        try checkShelf()
         try checkPauseWords()
         try checkScreenTextGeometry()
         try checkSettingsAndMailbox()
@@ -243,11 +282,62 @@ private enum ProtocolChecks {
         var short = SpeechDetector()
         _ = short.add(pcm(room(1) + voice(0.15)))
         try check(short.finish() == nil, "finishing drops a click")
+        try check(short.droppedSounds == 1 && short.loudestDropped > -30, "a dropped click is counted")
+        var streaming = SpeechDetector()
+        _ = streaming.add(pcm(room(1)))
+        try check(streaming.takeFresh().isEmpty && !streaming.isHearing, "a quiet room goes nowhere")
+        _ = streaming.add(pcm(voice(0.5)))
+        try check(streaming.isHearing && streaming.isTalking, "the detector knows the person is talking")
+        let opening = streaming.takeFresh()
+        try check(opening.count == 16_000 && streaming.takeFresh().isEmpty, "the stream starts with the sound before the first word, got \(opening.count)")
+        _ = streaming.add(pcm(voice(0.2)))
+        try check(streaming.takeFresh().count == 3_200, "each new block follows")
+        try check(Date().timeIntervalSince(streaming.lastLoud) < 1, "the last loud sound has a time")
+        let ended = streaming.add(pcm(room(1)))
+        try check(ended.count == 1 && !streaming.isHearing, "the phrase ends for the voice to start")
+        var tailing = SpeechDetector()
+        _ = tailing.add(pcm(room(1) + voice(1)))
+        _ = tailing.takeFresh()
+        _ = tailing.add(pcm(room(0.3)))
+        try check(tailing.isHearing, "the quiet inside a phrase is still the phrase")
         let file = one[0].wav
         try check(file.count == 44 + one[0].samples.count * 2 && file.prefix(4) == Data("RIFF".utf8), "WAV size")
         let header = file.withUnsafeBytes { (rate: $0.loadUnaligned(fromByteOffset: 24, as: UInt32.self),
                                              size: $0.loadUnaligned(fromByteOffset: 40, as: UInt32.self)) }
         try check(header.rate == 16_000 && Int(header.size) == one[0].samples.count * 2, "WAV header")
+    }
+
+    private static func checkStillness() throws {
+        let side = [UInt8](repeating: 100, count: 16)
+        var other = side
+        for index in 0..<8 { other[index] = 200 }
+        var eyes = ScreenStillness()
+        try check(!eyes.see(side, at: 0), "the first look decides nothing")
+        try check(!eyes.see(side, at: 1), "a second is not still enough")
+        try check(eyes.see(side, at: 1.6), "a screen that stopped is worth a look")
+        try check(!eyes.see(other, at: 2), "a change starts the count again")
+        try check(!eyes.see(side, at: 2.5) && !eyes.see(other, at: 3) && !eyes.see(side, at: 4), "a moving screen is not worth a look")
+        try check(eyes.see(other, at: 7.01), "a screen that never stops gets a look after all")
+        var cursor = other
+        cursor[15] &+= 3
+        var calm = ScreenStillness()
+        _ = calm.see(other, at: 0)
+        try check(calm.see(cursor, at: 2), "a blinking cursor is no change")
+        try check(ScreenStillness.difference(side, other) > 0.1 && ScreenStillness.difference(side, side) == 0, "difference")
+        try check(ScreenStillness.difference(side, []) == 1, "different sizes count as a new screen")
+    }
+
+    private static func checkShelf() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("shelf-check-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let shelf = FrameShelf(directory: directory)
+        try check(shelf.recent().isEmpty, "an empty shelf")
+        for number in [9, 10, 11, 100, 101, 102] { try shelf.put(Data([UInt8(number)]), timestampMS: Int64(number)) }
+        try check(shelf.recent() == [Data([11]), Data([100]), Data([101]), Data([102])], "the newest four, oldest first")
+        shelf.clear()
+        shelf.clear()
+        try check(shelf.recent().isEmpty, "clearing leaves nothing, and twice is harmless")
     }
 
     private static func checkPhraseListener() async throws {
@@ -337,6 +427,14 @@ private enum ProtocolChecks {
         let defaults = MemoryDefaults()
         let store = try SharedStore(configuration: configuration, defaults: defaults)
         try check(store.screenTextMode == .extension, "default screenTextMode")
+        try check(store.callMode == .lead && store.settings.mode == .lead, "the agent leads by default")
+        store.callMode = .beside
+        try check(defaults.string(forKey: "callMode") == "beside" && store.settings.mode == .beside, "mode reaches the settings and the broadcast")
+        store.callMode = .lead
+        try check(store.settings.thinking == .auto && store.settings.character == .warm, "default level and manner")
+        try store.save(serverAddress: "https://example.invalid", token: "", userLang: "ru", targetLang: "id", textEntry: .clipboard,
+                       thinking: .medium, character: .brief, ownCharacter: "")
+        try check(store.settings.thinking == .medium && store.settings.character == .brief, "saved level and manner")
         store.screenTextMode = .extension
         try check(defaults.string(forKey: "screenReading") == "extension", "persisted screenTextMode")
         store.screenTextMode = .extensionFast

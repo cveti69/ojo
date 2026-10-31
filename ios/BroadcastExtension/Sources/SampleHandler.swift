@@ -7,11 +7,12 @@ import UniformTypeIdentifiers
 
 final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private enum Capture {
-        static let interval: TimeInterval = 0.7
+        static let interval: TimeInterval = 0.5
         static let maximumDimension: CGFloat = 1000
         static let jpegQuality = 0.6
         static let thumbnailSide = 64
         static let changeThreshold = 0.025
+        static let movedThreshold = 0.08  // New screens change a frame by 0.17 and more, a new picture in our window by 0.06 at most.
         static let memoryReserve = 8 * 1024 * 1024
         static let textMemoryReserve = 16 * 1024 * 1024
     }
@@ -23,6 +24,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         let journal: SharedJournal
         let client: ServerClient
         let mailbox: ScreenTextMailbox?
+        let shelf: FrameShelf?
     }
 
     private struct FrameCheck {
@@ -35,6 +37,13 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         let buffer: CVPixelBuffer
         let orientation: CGImagePropertyOrientation?
         let capturedAt: Date
+    }
+
+    private struct KeptFrame {
+        let jpeg: Data
+        let thumbnail: [UInt8]
+        let size: CGSize
+        let timestamp: Int64
     }
 
     private let lock = NSLock()
@@ -57,6 +66,11 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private var firstTextReadLogged = false
     private var textPaused = false
     private var heldSample: Sample?
+    private var stillness = ScreenStillness()
+    private var movedSent = false
+    private var keptFrame: KeptFrame?
+    private var owesFrame = false
+    private var seenMode = CallMode.lead
     private var finished = true
     private var finishReported = false
     private var lastCheck: TimeInterval = -.infinity
@@ -77,14 +91,16 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             let settings = store.settings
             guard !settings.token.isEmpty else { throw ClientError.missingToken }
             let run = Run(id: id, sessionID: sessionID, store: store, journal: journal,
-                          client: ServerClient(settings: settings), mailbox: try? ScreenTextMailbox(configuration: configuration))
+                          client: ServerClient(settings: settings), mailbox: try? ScreenTextMailbox(configuration: configuration),
+                          shelf: try? FrameShelf(configuration: configuration))
             let ticket = UUID()
             lock.withLock {
                 self.run = run
+                seenMode = settings.mode
                 requestInFlight = true
                 requestID = ticket
             }
-            journal.append("Старт; только видео, 700 мс, JPEG 0,6, длинная сторона \(Int(Capture.maximumDimension)) px; текст: \(store.screenTextMode.rawValue)")
+            journal.append("Старт; только видео, 500 мс, JPEG 0,6, длинная сторона \(Int(Capture.maximumDimension)) px; текст: \(store.screenTextMode.rawValue); режим: \(settings.mode.rawValue)")
             startMonitoring(run: run)
             let task = Task { [self] in
                 do {
@@ -159,8 +175,18 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             let size = image.extent.size
             guard size.width > 0, size.height > 0 else { return }
             let thumbnail = makeThumbnail(image)
-            if size == check.previousSize, let previous = check.previousThumbnail,
-               difference(thumbnail, previous) < Capture.changeThreshold {
+            let previous = size == check.previousSize ? check.previousThumbnail : nil
+            let change = previous.map { ScreenStillness.difference(thumbnail, $0) }
+            let now = ProcessInfo.processInfo.systemUptime
+            let (settled, afterMove) = lock.withLock { (stillness.see(thumbnail, at: now), movedSent) }
+            guard (change ?? 1) >= Capture.changeThreshold || afterMove else {
+                skipFrame(runID: check.run.id)
+                return
+            }
+            let mode = check.run.store.callMode
+            guard settled else {
+                hold(sample, runID: check.run.id)  // Frames stop with the screen, so the monitor looks at this one again.
+                if mode == .lead, let change, change >= Capture.movedThreshold { signalMoved(check.run) }
                 skipFrame(runID: check.run.id)
                 return
             }
@@ -172,14 +198,42 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 check.run.journal.append("Не удалось сжать кадр")
                 return
             }
-            upload(jpeg, sample: sample, thumbnail: thumbnail, size: size, timestamp: timestamp, run: check.run)
+            keep(KeptFrame(jpeg: jpeg, thumbnail: thumbnail, size: size, timestamp: timestamp), run: check.run)
+            if mode == .lead {
+                _ = upload(jpeg, sample: sample, thumbnail: thumbnail, size: size, timestamp: timestamp, run: check.run)
+            } else {
+                frameCompleted(delivered: true, thumbnail: thumbnail, size: size, runID: check.run.id)
+            }
         }
+    }
+
+    private func hold(_ sample: Sample, runID id: UUID) {
+        lock.withLock { if runID == id, !finished, heldSample == nil { heldSample = sample } }
+    }
+
+    private func signalMoved(_ run: Run) {
+        let first = lock.withLock { () -> Bool in
+            guard runID == run.id, !finished, !movedSent else { return false }
+            movedSent = true
+            return true
+        }
+        guard first else { return }
+        Task { _ = try? await run.client.moved(sessionID: run.sessionID) }
+    }
+
+    private func keep(_ frame: KeptFrame, run: Run) {
+        lock.withLock { if runID == run.id { keptFrame = frame } }
+        do { try run.shelf?.put(frame.jpeg, timestampMS: frame.timestamp) }
+        catch { run.journal.append("Не удалось сохранить кадр: \(error.localizedDescription)") }
     }
 
     override func broadcastPaused() { currentJournal?.append("Трансляция приостановлена системой") }
 
     override func broadcastResumed() {
-        lock.withLock { previousThumbnail = nil }
+        lock.withLock {
+            previousThumbnail = nil
+            stillness.forget()
+        }
         currentJournal?.append("Трансляция возобновлена")
     }
 
@@ -214,6 +268,11 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             firstTextReadLogged = false
             textPaused = false
             heldSample = nil
+            stillness = ScreenStillness()
+            movedSent = false
+            keptFrame = nil
+            owesFrame = false
+            seenMode = .lead
             heartbeat = nil
             memoryPressure = nil
             return old
@@ -225,7 +284,8 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         return id
     }
 
-    private func upload(_ jpeg: Data, sample: Sample, thumbnail: [UInt8], size: CGSize, timestamp: Int64, run: Run) {
+    @discardableResult
+    private func upload(_ jpeg: Data, sample: Sample?, thumbnail: [UInt8], size: CGSize, timestamp: Int64, run: Run) -> Bool {
         let ticket = UUID()
         let reserved = lock.withLock { () -> Bool in
             guard runID == run.id, !finished, !requestInFlight else { return false }
@@ -233,7 +293,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             requestID = ticket
             return true
         }
-        guard reserved else { return }
+        guard reserved else { return false }
         let task = Task { [self] in
             do {
                 let reply = try await run.client.sendFrame(jpeg, sessionID: run.sessionID, width: Int(size.width), height: Int(size.height), timestampMS: timestamp)
@@ -244,7 +304,10 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             } catch {
                 // A refused frame goes out again, or a still screen would stay unseen after the goal arrives.
                 frameCompleted(delivered: false, thumbnail: thumbnail, size: size, runID: run.id)
-                lock.withLock { if runID == run.id, !finished, heldSample == nil { heldSample = sample } }
+                lock.withLock {
+                    guard runID == run.id, !finished else { return }
+                    if sample == nil { owesFrame = true } else if heldSample == nil { heldSample = sample }
+                }
                 if !Task.isCancelled { run.journal.append("Ошибка отправки кадра: \(error.localizedDescription)") }
                 if error as? ClientError == .http(404) || error as? ClientError == .http(401) {
                     stopForError(error, runID: run.id)
@@ -254,6 +317,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         }
         installRequest(task, runID: run.id, ticket: ticket)
         scheduleScreenText(jpeg: jpeg, timestamp: timestamp, run: run)
+        return true
     }
 
     private func installRequest(_ task: Task<Void, Never>, runID id: UUID, ticket: UUID) {
@@ -342,11 +406,6 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         return bytes
     }
 
-    private func difference(_ left: [UInt8], _ right: [UInt8]) -> Double {
-        let sum = zip(left, right).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) }
-        return Double(sum) / Double(left.count * 255)
-    }
-
     private func makeJPEG(_ image: CIImage) -> Data? {
         guard let cgImage = context.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: colorSpace) else { return nil }
         let data = NSMutableData()
@@ -371,6 +430,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 sent += 1
                 previousThumbnail = thumbnail
                 previousSize = size
+                movedSent = false
             } else { skipped += 1 }
         }
     }
@@ -393,6 +453,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             finished = true
             previousThumbnail = nil
             heldSample = nil
+            keptFrame = nil
             let state = (true, !requestInFlight, requestTask, textTask, heartbeat, memoryPressure, journal, sent, skipped)
             heartbeat = nil
             memoryPressure = nil
@@ -411,6 +472,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 guard lock.withLock({ runID == id && finished }) else { return }
                 do { try stoppingRun.mailbox?.clear() }
                 catch { stoppingRun.journal.append("Не удалось удалить общий кадр: \(error.localizedDescription)") }
+                stoppingRun.shelf?.clear()
             }
         }
         return true
@@ -434,19 +496,6 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
 
     private func stopForError(_ error: Error, runID: UUID) {
         if markFinished(runID: runID) { finishBroadcastWithError(Self.shown(error)) }
-    }
-
-    /// A finished call is no error, yet Apple offers only a stop with an alert. An empty error stops with none. That is
-    /// not documented, so the alert stays as the way out if the broadcast is still alive a moment later.
-    private func stopQuietly(run: Run) {
-        guard markFinished(runID: run.id) else { return }
-        run.journal.append("Трансляция: стоп без окна iOS")
-        _ = perform(NSSelectorFromString("finishBroadcastWithError:"), with: nil)
-        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [self] in
-            guard lock.withLock({ runID == run.id }) else { return }
-            run.journal.append("Трансляция: ещё жива, стоп с окном «Звонок завершён»")
-            finishBroadcastWithError(Self.shown(BroadcastError.ended))
-        }
     }
 
     // iOS puts this into its own alert, and only a plain NSError brings its text across to the system.
@@ -492,13 +541,31 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         }
         guard let statistics else { return }
         sendHeldSample()
+        sendOwedFrame(run: run)
         if run.store.sessionID != run.sessionID {
             run.journal.append("Сессия закрыта приложением, останавливаем трансляцию")
-            stopQuietly(run: run)
+            stopForError(BroadcastError.ended, runID: run.id)  // Apple has no stop without this system alert.
         } else if statistics.0 {
             let availableMB = os_proc_available_memory() / 1_048_576
             run.journal.append("Кадров доставлено: \(statistics.1), пропущено: \(statistics.2); запрос кадра в полёте: \(statistics.3 ? "да" : "нет"); доступно памяти: \(availableMB) МБ")
         }
+    }
+
+    /// Beside the person the server holds no screen, and a still screen sends no frames. So when the agent starts to lead,
+    /// it gets the newest kept one.
+    private func sendOwedFrame(run: Run) {
+        let mode = run.store.callMode
+        let frame = lock.withLock { () -> KeptFrame? in
+            guard runID == run.id, !finished else { return nil }
+            if seenMode == .beside, mode == .lead { owesFrame = true }
+            seenMode = mode
+            guard owesFrame, mode == .lead, !requestInFlight else { return nil }
+            if keptFrame == nil { owesFrame = false }
+            return keptFrame
+        }
+        guard let frame else { return }
+        let sent = upload(frame.jpeg, sample: nil, thumbnail: frame.thumbnail, size: frame.size, timestamp: frame.timestamp, run: run)
+        if sent { lock.withLock { owesFrame = false } }
     }
 
     private enum BroadcastError: LocalizedError {

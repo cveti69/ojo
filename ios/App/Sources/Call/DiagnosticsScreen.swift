@@ -41,6 +41,18 @@ struct DiagnosticsScreen: View {
                 }
                 .disabled(model.isClipboardTestPending)
             }
+            Section {
+                Toggle("Замеры Apple Speech", isOn: Binding(
+                    get: { model.measuresAppleSpeech }, set: { model.setMeasuresAppleSpeech($0) }
+                ))
+                Toggle("Перебивание", isOn: Binding(
+                    get: { model.hearsOverVoice }, set: { model.setHearsOverVoice($0) }
+                ))
+            } header: {
+                Text("Проверки звука")
+            } footer: {
+                Text("Включаются со следующего звонка. Замеры пишут в журнал только время, слов там нет. При перебивании голос агента может стать тише, а журнал пишет уровень эха.")
+            }
             Section("Текст экрана") {
                 Picker("Где читать текст", selection: Binding(get: { model.screenTextMode }, set: { model.setScreenTextMode($0) })) {
                     Text("В приложении").tag(ScreenTextMode.app)

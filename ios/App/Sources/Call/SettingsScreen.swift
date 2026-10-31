@@ -8,8 +8,8 @@ private final class SettingsForm: ObservableObject {
     @Published var userLang = "ru"
     @Published var targetLang = ""
     @Published var textEntry: TextEntry = .clipboard
-    @Published var thinking: ThinkingLevel = .minimal
-    @Published var character: AgentCharacter = .strict
+    @Published var thinking: ThinkingLevel = .auto
+    @Published var character: AgentCharacter = .warm
     @Published var ownCharacter = ""
     @Published var message = ""
 }
@@ -17,6 +17,7 @@ private final class SettingsForm: ObservableObject {
 private extension ThinkingLevel {
     var title: String {
         switch self {
+        case .auto: return "Авто"
         case .minimal: return "Минимальные"
         case .low: return "Низкие"
         case .medium: return "Средние"
@@ -30,8 +31,8 @@ private extension ThinkingLevel {
 private extension AgentCharacter {
     var title: String {
         switch self {
-        case .strict: return "Строгий"
         case .warm: return "Тёплый"
+        case .strict: return "Строгий"
         case .brief: return "Очень краткий"
         case .patient: return "Терпеливый"
         case .own: return "Свой текст"
@@ -80,7 +81,7 @@ struct SettingsScreen: View {
             } header: {
                 Text("Агент")
             } footer: {
-                Text("Чем глубже рассуждения, тем дольше ждать ответа. Запреты на пароли, карты и оплату характер не меняет. Новые настройки применяются со следующего звонка.")
+                Text("Авто: подсказки быстрые, разговор глубже. Чем глубже рассуждения, тем дольше ждать ответа. Запреты на пароли, карты и оплату характер не меняет. Новые настройки применяются со следующего звонка.")
             }
             Section {
                 Toggle("Слушать весь звонок", isOn: Binding(

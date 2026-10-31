@@ -12,12 +12,17 @@ public enum ScreenTextMode: String, Codable, CaseIterable, Sendable {
     case off
 }
 
+/// `auto` leaves the choice to the server: quick for the pointer, deeper for talk.
 public enum ThinkingLevel: String, Codable, CaseIterable, Sendable {
-    case minimal, low, medium, high, xhigh, max
+    case auto, minimal, low, medium, high, xhigh, max
 }
 
 public enum AgentCharacter: String, Codable, CaseIterable, Sendable {
-    case strict, warm, brief, patient, own
+    case warm, strict, brief, patient, own
+}
+
+public enum CallMode: String, Codable, CaseIterable, Sendable {
+    case lead, beside
 }
 
 public struct ServerSettings: Sendable, Equatable {
@@ -26,9 +31,10 @@ public struct ServerSettings: Sendable, Equatable {
     public let userLang: String
     public let targetLang: String
     public let textEntry: TextEntry
-    public var thinking: ThinkingLevel = .minimal
-    public var character: AgentCharacter = .strict
+    public var thinking: ThinkingLevel = .auto
+    public var character: AgentCharacter = .warm
     public var ownCharacter = ""
+    public var mode: CallMode = .lead
 }
 
 public final class SharedStore: @unchecked Sendable {
@@ -56,9 +62,10 @@ public final class SharedStore: @unchecked Sendable {
             userLang: defaults.string(forKey: "userLang") ?? "ru",
             targetLang: defaults.string(forKey: "targetLang") ?? "id",
             textEntry: TextEntry(rawValue: defaults.string(forKey: "textInput") ?? "") ?? .clipboard,
-            thinking: ThinkingLevel(rawValue: defaults.string(forKey: "thinking") ?? "") ?? .minimal,
-            character: AgentCharacter(rawValue: defaults.string(forKey: "character") ?? "") ?? .strict,
-            ownCharacter: defaults.string(forKey: "ownCharacter") ?? ""
+            thinking: ThinkingLevel(rawValue: defaults.string(forKey: "thinkingLevel") ?? "") ?? .auto,
+            character: AgentCharacter(rawValue: defaults.string(forKey: "agentManner") ?? "") ?? .warm,
+            ownCharacter: defaults.string(forKey: "ownCharacter") ?? "",
+            mode: callMode
         )
     }
 
@@ -85,6 +92,34 @@ public final class SharedStore: @unchecked Sendable {
         get { defaults.bool(forKey: "hearsDuringCall") }
         set {
             defaults.set(newValue, forKey: "hearsDuringCall")
+            defaults.synchronize()
+        }
+    }
+
+    /// The app writes it, and the broadcast reads it to know whether frames may leave the phone.
+    public var callMode: CallMode {
+        get {
+            refresh()
+            return CallMode(rawValue: defaults.string(forKey: "callMode") ?? "") ?? .lead
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: "callMode")
+            defaults.synchronize()
+        }
+    }
+
+    public var measuresAppleSpeech: Bool {
+        get { defaults.bool(forKey: "measuresAppleSpeech") }
+        set {
+            defaults.set(newValue, forKey: "measuresAppleSpeech")
+            defaults.synchronize()
+        }
+    }
+
+    public var hearsOverVoice: Bool {
+        get { defaults.bool(forKey: "hearsOverVoice") }
+        set {
+            defaults.set(newValue, forKey: "hearsOverVoice")
             defaults.synchronize()
         }
     }
@@ -122,8 +157,8 @@ public final class SharedStore: @unchecked Sendable {
         defaults.set(user, forKey: "userLang")
         defaults.set(target, forKey: "targetLang")
         defaults.set(textEntry.rawValue, forKey: "textInput")
-        defaults.set(thinking.rawValue, forKey: "thinking")
-        defaults.set(character.rawValue, forKey: "character")
+        defaults.set(thinking.rawValue, forKey: "thinkingLevel")
+        defaults.set(character.rawValue, forKey: "agentManner")
         defaults.set(String(ownCharacter.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500)), forKey: "ownCharacter")
         defaults.synchronize()
     }

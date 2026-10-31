@@ -24,6 +24,9 @@ final class CallViewModel: ObservableObject {
     @Published private(set) var screenTextMode: ScreenTextMode = .extension
     @Published private(set) var useVideoCallFallback = false
     @Published private(set) var hearsDuringCall = true
+    @Published private(set) var measuresAppleSpeech = false
+    @Published private(set) var hearsOverVoice = false
+    @Published private(set) var callMode: CallMode = .lead
     @Published private(set) var status = "Позвоните и скажите, что нужно. Нажимаете всегда вы."
     @Published private(set) var lastInstruction = "Подсказок пока нет"
     @Published private(set) var windowState: HintWindowState = .inactive
@@ -34,6 +37,20 @@ final class CallViewModel: ObservableObject {
     let store: SharedStore?
     let journal: SharedJournal?
     var displayName: String { configuration?.displayName ?? "Звонок" }
+
+    /// One thing the agent has to say. Replies go first, and of the hints only the newest is worth saying.
+    private struct Line {
+        enum Kind { case reply, hint, filler }
+        let text: String
+        var kind = Kind.reply
+        var turn: Int?
+        var layer = ""
+    }
+
+    private static let besideWords = "Я рядом"
+    private static let sayingFailed = "Не получилось ответить, повтори, пожалуйста."
+    private static let streamWait: UInt64 = 2_500_000_000  // Past this the server has not heard the phrase, so it goes as a file.
+    private static let warmthGap: UInt64 = 20_000_000_000
 
     private let audioSession = CallAudioSession()
     private let recorder = GoalAudioRecorder()
@@ -58,12 +75,24 @@ final class CallViewModel: ObservableObject {
     private var isLooking = false
     private var microphone: CallMicrophone?
     private var conversation: Task<Void, Never>?
-    private var isAnswering = false
-    private var heldWords: String?
-    private var agentIsSpeaking = false
+    private var speechStream: SpeechStream?
+    private var streaming: Task<Void, Never>?
+    private var warmth: Task<Void, Never>?
+    private var interruption: Task<Void, Never>?
+    private var probe: AppleSpeechProbe?
+    private var shelf: FrameShelf?
+    private var lines: [Line] = []
+    private var waitingHint: Line?
+    private var currentLine: Line?
+    private var voice: Task<Void, Never>?
+    private var isSounding = false
+    private var heardTurn = 0
+    private var lastHeard = Date.distantPast
+    private var voiceEnded = Date.distantPast
+    private var owesFrameNote = false
+    private var droppedSounds = 0
     private var pauseWords = PauseWords()
     private var pause: Task<Void, Never>?
-    private var isFilling = false
     private var subscriptions = Set<AnyCancellable>()
 
     init(speaker: (any Speaker)? = nil) {
@@ -85,6 +114,13 @@ final class CallViewModel: ObservableObject {
         self.store = store
         self.journal = journal
         screenTextMode = store?.screenTextMode ?? .extension
+        callMode = store?.callMode ?? .lead
+        measuresAppleSpeech = store?.measuresAppleSpeech ?? false
+        hearsOverVoice = store?.hearsOverVoice ?? false
+        if let configuration {
+            do { shelf = try FrameShelf(configuration: configuration) }
+            catch { journal?.append("Полка кадров недоступна: \(error.localizedDescription)") }
+        }
         if let configuration, let store, let journal {
             do { textCoordinator = try ScreenTextCoordinator(configuration: configuration, store: store, journal: journal) }
             catch { journal.append("Текст в приложении недоступен: \(error.localizedDescription)") }
@@ -103,10 +139,8 @@ final class CallViewModel: ObservableObject {
         }
         window.onDiagnostic = { [weak self] in self?.journal?.append($0) }
         recorder.onDiagnostic = { [weak self] in self?.journal?.append($0) }
-        self.speaker.onSpeaking = { [weak self] isSpeaking in
-            self?.agentIsSpeaking = isSpeaking
-            self?.microphone?.agentSpeaks(isSpeaking)
-        }
+        self.speaker.onSounding = { [weak self] in self?.soundChanged($0) }
+        self.speaker.mayStart = { [weak self] in self?.microphone?.isHearing != true }
         window.onRepeatHint = { [weak self] in self?.repeatHint() }
         audioSession.onActivityChange = { [weak self] active in
             self?.audioIsActive = active
@@ -140,6 +174,8 @@ final class CallViewModel: ObservableObject {
         guard !isCallActive, !isWorking, let store else { return }
         let settings = store.settings
         store.sessionID = nil
+        shelf?.clear()
+        (speaker as? ServerSpeaker)?.hearsOverVoice = hearsOverVoice
         textCoordinator?.prepareForCall(targetLang: settings.targetLang)
         recognizedText = ""
         isWorking = true
@@ -161,10 +197,11 @@ final class CallViewModel: ObservableObject {
                 try self.beginLocalCall()
                 self.speaker.prepare(client: client, journal: self.journal)
                 let own = settings.character == .own ? ", \(settings.ownCharacter.count) знаков" : ""
-                self.journal?.append("Сессия создана; рассуждения: \(settings.thinking.rawValue); характер: \(settings.character.rawValue)\(own)")
+                self.journal?.append("Сессия создана; рассуждения: \(settings.thinking.rawValue); характер: \(settings.character.rawValue)\(own); режим: \(settings.mode.rawValue)")
                 self.connect(client: client, sessionID: response.sessionID)
+                if settings.mode == .beside { self.showBesideCard() }
                 self.status = "Агент здоровается"
-                await self.speaker.speakAndWait("Привет, чем помочь?")
+                await self.speaker.speakAndWait(settings.mode == .beside ? "Привет, я рядом. Что смотрим?" : "Привет, чем помочь?")
                 try Task.checkCancellation()
                 try await self.captureAndSendGoal(client: client, sessionID: response.sessionID)
             } catch {
@@ -184,7 +221,7 @@ final class CallViewModel: ObservableObject {
         isWorking = true
         isRecording = false
         recorder.cancel()
-        speaker.stop()
+        silence()
         workflow = Task { [weak self] in
             guard let self else { return }
             defer { if self.workflowID == id { self.isWorking = false } }
@@ -202,7 +239,7 @@ final class CallViewModel: ObservableObject {
         let id = newWorkflow()
         isWorking = true
         recorder.cancel()
-        speaker.stop()
+        silence()
         workflow = Task { [weak self] in
             guard let self else { return }
             defer {
@@ -233,12 +270,24 @@ final class CallViewModel: ObservableObject {
         let endingID = sessionID
         _ = newWorkflow()
         recorder.cancel()
+        noteFrames()
+        noteDroppedSounds()
         stopHearing()
         pause?.cancel()
-        isFilling = false
+        voice?.cancel()
+        voice = nil
+        lines.removeAll()
+        waitingHint = nil
+        currentLine = nil
         speaker.finish()
         connection?.stop()
         connection = nil
+        warmth?.cancel()
+        warmth = nil
+        shelf?.clear()
+        heardTurn = 0
+        lastHeard = .distantPast
+        droppedSounds = 0
         if let endingID, store?.sessionID == endingID { store?.sessionID = nil }
         textCoordinator?.stop()
         startWindowWhenReady = false
@@ -349,7 +398,60 @@ final class CallViewModel: ObservableObject {
     func setHearsDuringCall(_ value: Bool) {
         hearsDuringCall = value
         store?.hearsDuringCall = value
-        if value { hearPerson() } else { stopHearing() }
+        if value { hearPerson() } else if callMode == .lead { stopHearing() }
+    }
+
+    func setMeasuresAppleSpeech(_ value: Bool) {
+        measuresAppleSpeech = value
+        store?.measuresAppleSpeech = value
+    }
+
+    func setHearsOverVoice(_ value: Bool) {
+        hearsOverVoice = value
+        store?.hearsOverVoice = value
+    }
+
+    /// Going beside, frames stop first. Going to lead, the server has to be ready for them first.
+    func setCallMode(_ mode: CallMode) {
+        guard mode != callMode else { return }
+        guard isCallActive, let client, let sessionID else {
+            callMode = mode
+            store?.callMode = mode
+            return
+        }
+        if mode == .beside { applyMode(mode) }
+        Task { [weak self] in
+            do {
+                _ = try await client.setMode(mode, sessionID: sessionID)
+                if mode == .lead { self?.applyMode(mode) }
+            } catch { self?.journal?.append("Ошибка смены режима: \(error.localizedDescription)") }
+        }
+    }
+
+    private func applyMode(_ mode: CallMode) {
+        guard mode != callMode else { return }
+        noteFrames()
+        callMode = mode
+        store?.callMode = mode
+        doneDelivered = false
+        isLooking = false
+        journal?.append("Режим: \(mode.rawValue)")
+        if mode == .beside {
+            showBesideCard()
+            lastInstruction = Self.besideWords
+            hearPerson()
+        } else {
+            lastJPEG = nil
+            lastInstruction = "Смотрю экран"
+            try? restoreWindowImage()
+            if !hearsDuringCall { stopHearing() }
+        }
+    }
+
+    private func showBesideCard() {
+        guard let card = TestFrameFactory.make(title: Self.besideWords).jpegData(compressionQuality: 0.9) else { return }
+        lastJPEG = card
+        try? window.display(jpegData: card)
     }
 
     func setScreenTextMode(_ mode: ScreenTextMode) {
@@ -418,6 +520,7 @@ final class CallViewModel: ObservableObject {
         journal?.append("Сцена: \(name); аудиосессия активна: \(audioIsActive ? "да" : "нет")")
         if isActive, let text = unwrittenPaste { placeOnClipboard(text, reason: "Буфер при возврате") }
         if isActive { hearPerson() }
+        probe?.sceneChanged(isActive: isActive)
         if isBackground, isRecording {
             _ = newWorkflow()
             recorder.cancel()
@@ -501,6 +604,7 @@ final class CallViewModel: ObservableObject {
         let reply = try await client.setGoal(text, sessionID: sessionID)
         try Task.checkCancellation()
         if let ready = reply.readyText { placeOnClipboard(ready, reason: "Буфер заранее") }
+        if let mode = reply.mode { applyMode(mode) }
         hasGoal = true
         needsUserConfirm = false
         status = "Включите трансляцию экрана и перейдите в нужное приложение"
@@ -508,27 +612,45 @@ final class CallViewModel: ObservableObject {
         lastSpokenHint = reply.replyRU
         _ = await AVAudioApplication.requestRecordPermission()  // Only a typed goal has not asked yet.
         hearPerson()
-        speaker.speak(reply.replyRU)
+        enqueue(Line(text: reply.replyRU))
         if speaksRussian { speaker.keep(PauseWords.all) }
         journal?.append("Цель принята; ответ произнесён; можно включать трансляцию")
     }
 
     private func hearPerson() {
-        guard isCallActive, hasGoal, !isRecording, hearsDuringCall, let client, let sessionID else { return }
+        guard isCallActive, hasGoal, !isRecording, hearsDuringCall || callMode == .beside, let client, let sessionID else { return }
+        openStream(client: client, sessionID: sessionID)
         (microphone ?? makeMicrophone(client: client, sessionID: sessionID)).start()
     }
 
+    private func openStream(client: ServerClient, sessionID: String) {
+        guard speechStream == nil else { return }
+        let stream = SpeechStream(client: client, sessionID: sessionID)
+        stream.onDiagnostic = { [weak self] in self?.journal?.append($0) }
+        speechStream = stream
+        stream.start()
+    }
+
     private func makeMicrophone(client: ServerClient, sessionID: String) -> CallMicrophone {
-        let microphone = CallMicrophone()
+        let microphone = CallMicrophone(sharedEngine: hearsOverVoice ? (speaker as? ServerSpeaker)?.engine : nil)
         microphone.onDiagnostic = { [weak self] in self?.journal?.append($0) }
         microphone.onLost = { [weak self] in
             self?.announce("Я перестал тебя слышать. Открой наше приложение на секунду, и снова услышу.")
         }
+        if measuresAppleSpeech {
+            let probe = AppleSpeechProbe(journal: journal)
+            probe.prepare()
+            microphone.measure(with: probe)
+            self.probe = probe
+        }
         self.microphone = microphone
         conversation = Task { [weak self] in
             for await phrase in microphone.phrases {
-                await self?.answer(phrase, client: client, sessionID: sessionID)
+                self?.heardPhrase(phrase, client: client, sessionID: sessionID)
             }
+        }
+        streaming = Task { [weak self] in
+            for await samples in microphone.sound { self?.speechStream?.send(samples) }
         }
         return microphone
     }
@@ -536,79 +658,147 @@ final class CallViewModel: ObservableObject {
     private func stopHearing() {
         conversation?.cancel()
         conversation = nil
+        streaming?.cancel()
+        streaming = nil
+        speechStream?.stop()
+        speechStream = nil
+        interruption?.cancel()
+        interruption = nil
         microphone?.stop()
         microphone = nil
-        isAnswering = false
-        heldWords = nil
+        probe = nil
     }
 
-    private func answer(_ phrase: Phrase, client: ServerClient, sessionID: String) async {
+    /// The stream normally beats this phrase to the server. If it stayed silent, the phrase itself goes as a file.
+    private func heardPhrase(_ phrase: Phrase, client: ServerClient, sessionID: String) {
         let seconds = String(format: "%.1f", locale: Locale(identifier: "ru_RU"), phrase.seconds)
         journal?.append("Реплика \(seconds) с; фон \(Int(phrase.noiseFloor)) дБ, пик \(Int(phrase.loudest)) дБ")
-        fillPause(.thinking, after: 2.5)
-        let started = Date()
-        let id = workflowID
-        var words: String?
-        do {
-            let reply = try await client.say(phrase.wav, sessionID: sessionID)
-            guard !Task.isCancelled, workflowID == id else { return }  // A new goal went in meanwhile.
-            let elapsed = Int(Date().timeIntervalSince(started) * 1000)
-            journal?.append("Ответ на реплику через \(elapsed) мс; распознавание \(reply.timings.speechMS) мс, модель \(reply.timings.modelMS) мс; \(reply.replyRU == nil ? "промолчал" : "ответил")\(reply.goal == nil ? "" : "; цель изменена")")
-            if let newGoal = reply.goal {
-                goal = newGoal
-                doneDelivered = false
-                unwrittenPaste = nil
-                needsUserConfirm = false
+        noteDroppedSounds()
+        guard lastHeard < Date().addingTimeInterval(-phrase.seconds - 1) else { return }
+        let turn = heardTurn
+        let waits = speechStream?.isOpen == true
+        Task { [weak self] in
+            if waits { try? await Task.sleep(nanoseconds: Self.streamWait) }
+            guard let self, self.isCallActive, self.heardTurn == turn, !self.isRecording else { return }
+            self.journal?.append("Поток речи не услышал реплику, отправляю файлом")
+            do {
+                let reply = try await client.say(phrase.wav, sessionID: sessionID)
+                self.journal?.append("Реплика файлом: распознавание \(reply.speechMS) мс; \(reply.heard ? "есть слова" : "пусто")")
+            } catch {
+                self.journal?.append("Ошибка реплики: \(error.localizedDescription)")
+                if self.callMode == .lead { self.enqueue(Line(text: Self.sayingFailed, turn: turn)) }
             }
-            words = reply.replyRU
-        } catch {
-            guard !Task.isCancelled else { return }
-            journal?.append("Ошибка реплики: \(error.localizedDescription)")
-            words = "Не получилось ответить, повтори, пожалуйста."
         }
-        keepQuiet()
-        guard let words, !isRecording else { return }
-        isAnswering = true
-        await speaker.waitUntilQuiet()
-        guard isAnswering else { return }
-        status = words
-        await speaker.speakAndWait(words)
-        guard isAnswering else { return }
-        isAnswering = false
-        speakHeldWords()
+    }
+
+    private func noteDroppedSounds() {
+        guard let dropped = microphone?.dropped, dropped.count > droppedSounds else { return }
+        droppedSounds = dropped.count
+        journal?.append("Коротких звуков отброшено: \(dropped.count), громче всех \(Int(dropped.loudest)) дБ")
+    }
+
+    private func noteFrames() {
+        if owesFrameNote { journal?.append("Кадры не отправлены") }
+        owesFrameNote = false
     }
 
     /// A hint waits for the end of an answer, so the agent never cuts itself off.
     private func announce(_ text: String) {
-        if isAnswering || isFilling { heldWords = text } else { speaker.speak(text) }
+        enqueue(Line(text: text, kind: .hint))
     }
 
-    private func speakHeldWords() {
-        guard !isAnswering, !isFilling, let held = heldWords else { return }
-        heldWords = nil
-        speaker.speak(held)
+    private func enqueue(_ line: Line) {
+        if line.kind == .hint {
+            waitingHint = line
+        } else {
+            lines.append(line)
+            // What the person asked goes before what has not sounded yet.
+            if line.kind == .reply, !isSounding, let currentLine, currentLine.kind != .reply {
+                if currentLine.kind == .hint, waitingHint == nil { waitingHint = currentLine }
+                speaker.stop()
+            }
+        }
+        speakLines()
+    }
+
+    private func takeLine() -> Line? {
+        if !lines.isEmpty { return lines.removeFirst() }
+        defer { waitingHint = nil }
+        return waitingHint
+    }
+
+    private func speakLines() {
+        guard voice == nil, isCallActive else { return }
+        voice = Task { [weak self] in
+            while let self, !Task.isCancelled, let line = self.takeLine() {
+                self.currentLine = line
+                await self.speaker.speakAndWait(line.text)
+                self.currentLine = nil
+            }
+            self?.voice = nil
+        }
+    }
+
+    /// Lines that have not sounded yet and that no longer say what is needed.
+    private func dropLines(where isOutdated: (Line) -> Bool) {
+        lines.removeAll(where: isOutdated)
+        if !isSounding, let currentLine, isOutdated(currentLine) { speaker.stop() }
+    }
+
+    private func silence() {
+        lines.removeAll()
+        waitingHint = nil
+        speaker.stop()
+    }
+
+    private func soundChanged(_ sounding: Bool) {
+        isSounding = sounding
+        microphone?.agentSpeaks(sounding)
+        guard sounding else { return }
+        if hearsOverVoice { watchForInterruption() }
+        guard let line = currentLine, let turn = line.turn, let client, let sessionID else { return }
+        journal?.append("Ход \(turn): первый звук через \(sinceVoiceEnded()) мс после конца речи; \(line.layer)")
+        let journal = journal
+        Task {
+            do { _ = try await client.played(turn: turn, sessionID: sessionID) }
+            catch { journal?.append("Ошибка /played: \(error.localizedDescription)") }
+        }
+    }
+
+    private func sinceVoiceEnded() -> Int { Int(Date().timeIntervalSince(voiceEnded) * 1000) }
+
+    /// Only with iOS filtering the voice out of the microphone. The person's words then reach the stream by themselves.
+    private func watchForInterruption() {
+        interruption?.cancel()
+        interruption = Task { [weak self] in
+            while let self, self.isSounding, !Task.isCancelled {
+                if self.microphone?.isTalking == true {
+                    self.journal?.append("Перебивание: голос остановлен")
+                    self.speaker.stop()
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
     }
 
     /// A short word while the agent works, so the line never goes dead. It only ever fills silence.
     private func fillPause(_ kind: PauseWords.Kind, after seconds: Double) {
-        guard !isFilling, speaksRussian else { return }
+        guard speaksRussian else { return }
         pause?.cancel()
         pause = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            guard let self, !Task.isCancelled, self.isCallActive, !self.agentIsSpeaking, !self.isAnswering, !self.isRecording,
-                  let words = self.pauseWords.next(kind) else { return }
-            self.isFilling = true
+            guard let self, !Task.isCancelled, self.isCallActive, self.currentLine == nil, self.lines.isEmpty,
+                  self.waitingHint == nil, !self.isRecording, let words = self.pauseWords.next(kind) else { return }
             self.journal?.append("Фраза на паузе")
-            await self.speaker.speakAndWait(words)
-            self.isFilling = false
-            self.speakHeldWords()
+            self.enqueue(Line(text: words, kind: .filler))
         }
     }
 
     private var speaksRussian: Bool { store?.settings.userLang == "ru" }
 
     private func keepQuiet() {
-        if !isFilling { pause?.cancel() }
+        pause?.cancel()
     }
 
     private func connect(client: ServerClient, sessionID: String) {
@@ -624,6 +814,13 @@ final class CallViewModel: ObservableObject {
         }
         self.connection = connection
         connection.start(sessionID: sessionID)
+        if hearsDuringCall || callMode == .beside { openStream(client: client, sessionID: sessionID) }
+        warmth = Task {
+            while !Task.isCancelled {
+                try? await client.health()
+                try? await Task.sleep(nanoseconds: Self.warmthGap)
+            }
+        }
     }
 
     private func receive(_ event: ServerEvent) {
@@ -637,7 +834,7 @@ final class CallViewModel: ObservableObject {
                 let elapsed = Date().timeIntervalSince1970 - Double(timestamp) / 1000
                 let seconds = String(format: "%.1f", locale: Locale(identifier: "ru_RU"), elapsed)
                 let timings = hint.timings.map {
-                    "; очередь \($0.queueMS) мс, модель \($0.modelMS) мс, рамка \($0.boxMS) мс, \($0.boxSource)"
+                    "; очередь \($0.queueMS) мс, модель \($0.modelMS) мс, рамка \($0.boxMS) мс, \($0.boxSource); окно на кадре: \($0.window == true ? "да" : "нет")"
                 } ?? ""
                 journal?.append("Подсказка \(hint.stepID) через \(seconds) с после кадра\(timings)")
             }
@@ -672,11 +869,65 @@ final class CallViewModel: ObservableObject {
             needsUserConfirm = false
             announce(done.textRU)
             isLooking = false
-            if let card = TestFrameFactory.make(title: "Готово").jpegData(compressionQuality: 0.9) {
+            if let card = TestFrameFactory.make(title: "Я на связи").jpegData(compressionQuality: 0.9) {
                 lastJPEG = card
                 try? window.display(jpegData: card)
             }
-            journal?.append("Сервер сообщил о завершении цели")
+            journal?.append("Цель достигнута, разговор продолжается")
+        case .heard(let event):
+            noteFrames()
+            owesFrameNote = callMode == .beside
+            heardTurn = event.turn
+            lastHeard = Date()
+            voiceEnded = microphone?.lastVoice ?? lastHeard
+            journal?.append("Ход \(event.turn): услышан через \(sinceVoiceEnded()) мс после конца речи")
+            dropLines { ($0.kind == .reply && $0.layer == "quick") || $0.kind == .filler }
+            if callMode == .lead { fillPause(.thinking, after: 2.5) }
+        case .say(let say):
+            hear(say)
+        case .look(let event):
+            look(turn: event.turn)
+        }
+    }
+
+    private func hear(_ say: SayEvent) {
+        keepQuiet()
+        if let newGoal = say.goal {
+            goal = newGoal
+            doneDelivered = false
+            unwrittenPaste = nil
+            needsUserConfirm = false
+        }
+        if let mode = say.mode { applyMode(mode) }
+        let model = say.timings.screenMS ?? say.timings.quickMS ?? 0
+        journal?.append("Ход \(say.turn): ответ \(say.layer) через \(sinceVoiceEnded()) мс после конца речи; модель \(model) мс")
+        guard say.turn == heardTurn || say.layer == "screen" else { return }  // The person has said more since.
+        if say.layer == "screen" { dropLines { $0.turn == say.turn && $0.layer == "quick" } }
+        status = say.textRU
+        let promise = say.looks && speaksRussian ? pauseWords.any(.promise) : nil  // Kept phrases sound at once.
+        enqueue(Line(text: promise ?? say.textRU, turn: say.turn, layer: say.layer))
+    }
+
+    /// The only way a screen leaves the phone beside the person: the server heard words for the agent and asked.
+    private func look(turn: Int) {
+        guard let client, let sessionID else { return }
+        let frames = shelf?.recent() ?? []
+        guard !frames.isEmpty else {
+            enqueue(Line(text: "Пока не вижу экран. Покажи его, и я посмотрю.", turn: turn, layer: "screen"))
+            return
+        }
+        owesFrameNote = false
+        let journal = journal
+        Task { [weak self] in
+            do {
+                _ = try await client.look(frames, sessionID: sessionID)
+                journal?.append("Кадры отправлены")
+            } catch ClientError.http(409) {
+                journal?.append("Кадры не отправлены")  // The person went on, and a new line replaced this one.
+            } catch {
+                journal?.append("Ошибка /look: \(error.localizedDescription)")
+                self?.enqueue(Line(text: Self.sayingFailed, turn: turn, layer: "screen"))
+            }
         }
     }
 
@@ -695,14 +946,13 @@ final class CallViewModel: ObservableObject {
             isSharing = false
         } else if ["broadcasting", "analyzing"].contains(status.state), !isSharing {
             isSharing = true
-            lastInstruction = "Открой нужное приложение"
+            lastInstruction = callMode == .beside ? Self.besideWords : "Открой нужное приложение"
         }
     }
 
     private func repeatHint() {
         guard isCallActive else { return }
-        let text = lastSpokenHint.isEmpty ? "Пока нет подсказки. Ожидайте." : lastSpokenHint
-        speaker.speak(text)
+        announce(lastSpokenHint.isEmpty ? "Пока нет подсказки. Ожидайте." : lastSpokenHint)
         journal?.append("Последняя подсказка повторена голосом; аудиосессия активна: \(audioIsActive ? "да" : "нет")")
     }
 
@@ -751,7 +1001,7 @@ final class CallViewModel: ObservableObject {
             recorder.cancel()
             isRecording = false
             isWorking = false
-            speaker.stop()
+            silence()
             microphone?.stop()
             status = "Звонок прерван системой"
             journal?.append(status)
@@ -797,6 +1047,10 @@ final class CallViewModel: ObservableObject {
         testTimer?.invalidate()
         workflow?.cancel()
         conversation?.cancel()
+        streaming?.cancel()
+        warmth?.cancel()
+        voice?.cancel()
+        interruption?.cancel()
         pause?.cancel()
         clipboardTask?.cancel()
         textTestTask?.cancel()
