@@ -60,10 +60,15 @@ class CallLog:
             log.warning("Call log: %s", type(error).__name__)
 
     def forget(self, timestamp_ms: int) -> None:
+        """The picture goes, and the line that answers it."""
+        name = str(timestamp_ms) + ".jpg"
+        log_file = self.folder / "call.log"
         try:
-            (self.folder / "frames" / (str(timestamp_ms) + ".jpg")).unlink()
-        except OSError:
-            pass
+            (self.folder / "frames" / name).unlink()
+            lines = log_file.read_text(encoding="utf-8").splitlines(True)
+            log_file.write_text("".join(line for line in lines if json.loads(line).get("frame") != name), encoding="utf-8")
+        except (OSError, ValueError) as error:
+            log.warning("Call log: %s", type(error).__name__)
 
     def keep(self, jpeg: bytes, timestamp_ms: int) -> Optional[str]:
         """Returns the name the log knows this picture by."""

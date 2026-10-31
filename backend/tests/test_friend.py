@@ -370,7 +370,7 @@ def test_a_payment_screen_read_late_leaves_the_log_and_the_chat(backend, monkeyp
     assert list((folder / "frames").iterdir())
     assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={
         "frame_ts": 123, "lines": [{"text": "Bayar Sekarang", "words": []}]}).status_code == 200
-    assert not list((folder / "frames").iterdir())
+    assert not list((folder / "frames").iterdir()) and "Проверь сумму" not in (folder / "call.log").read_text(encoding="utf-8")
     assert not any(turn.get("frame") for turn in backend.store.sessions[session_id].chat)
 
 
@@ -845,7 +845,22 @@ def test_a_line_that_has_gone_out_stands_when_the_answer_breaks(backend):
     words(backend.client, session_id)
     idle(backend, session_id)
     assert spoken(seen) == ["Уже сказал."] and len(backend.meta.calls) == 1
-    assert json.loads(backend.store.sessions[session_id].chat[-1]["text"]) == {"say": "Уже сказал."}
+    assert json.loads(backend.store.sessions[session_id].chat[-1]["text"])["say"] == "Уже сказал."
+
+
+def test_a_screen_whose_answer_broke_leaves_nothing_in_the_log(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    client = backend.client
+    session_id = sharing(client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = ['{"say": "Проверь сумму.", "private": tr']
+    post_frame(client, session_id)
+    idle(backend, session_id)
+    assert spoken(seen) == ["Проверь сумму."]
+    folder = next((tmp_path / "calls").iterdir())
+    assert not list((folder / "frames").iterdir())
+    written = [json.loads(row) for row in (folder / "call.log").read_text(encoding="utf-8").splitlines()]
+    assert [row["private"] for row in written if row["kind"] == "answer"] == [True] and "Проверь сумму" not in str(written)
 
 
 def test_a_line_from_an_answer_nobody_waits_for_stays_silent(backend):

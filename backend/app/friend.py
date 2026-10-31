@@ -339,8 +339,8 @@ class Friend:
             except Exception as error:
                 log.warning("Answer from %s: %s", model, type(error).__name__)
                 session.note("no answer", model=model, error=type(error).__name__)
-                if early:
-                    return model, {"usage": {}}, {"say": early["line"]}
+                if early:  # The word on this screen would have come with the rest, so nothing about it is written down.
+                    return model, {"usage": {}}, {"say": early["line"], "private": True}
         return None
 
     async def _answer(self, session: Session, turn: int, frame: Optional[Frame]) -> None:
