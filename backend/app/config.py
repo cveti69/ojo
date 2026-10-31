@@ -10,8 +10,8 @@ META_API_BASE = os.environ.get("META_API_BASE", "https://api.meta.ai/v1").rstrip
 META_API_KEY = os.environ.get("META_API_KEY") or os.environ.get("MODEL_API_KEY", "")
 META_VISION_MODEL = os.environ.get("META_VISION_MODEL", "")
 META_TEXT_MODEL = os.environ.get("META_TEXT_MODEL", "")
-META_TALK_MODEL = os.environ.get("META_TALK_MODEL", "muse-spark-1.3")
-META_QUICK_MODEL = os.environ.get("META_QUICK_MODEL", "muse-spark-1.2")
+META_TALK_MODEL = os.environ.get("META_TALK_MODEL", "muse-wonder-1.0")
+META_SPARE_MODEL = os.environ.get("META_SPARE_MODEL", "muse-spark-1.3")
 META_TRANSCRIBE_MODEL = os.environ.get("META_TRANSCRIBE_MODEL", "muse-voice-transcribe-1.0")
 META_SAM_MODEL = os.environ.get("META_SAM_MODEL", "sam-3.1")
 META_REASONING = os.environ.get("META_REASONING", "minimal")
@@ -21,6 +21,8 @@ ELEVENLABS_API_BASE = os.environ.get("ELEVENLABS_API_BASE", "https://api.elevenl
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVENLABS_MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_v4_turbo")
 ELEVENLABS_VOICE = os.environ.get("ELEVENLABS_VOICE", "JBFqnCBsd6RMkjVDRZzb")
+VOICES = dict(pair.split(":", 1) for pair in os.environ.get(
+    "ELEVENLABS_VOICES", "JBFqnCBsd6RMkjVDRZzb:George,O4dZDLAkF4Zo2yKOh6R4:Done,xyu8HSCv1JYrhLx4m8UG:Ariana").split(","))
 
 GROUNDING_MODE = os.environ.get("GROUNDING_MODE", "direct")
 SHARED_TOKEN = os.environ.get("SHARED_TOKEN", "")

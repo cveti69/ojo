@@ -15,6 +15,7 @@ from .pool import Pool
 # Guards against a runaway answer; one step needs a few hundred tokens.
 MAX_COMPLETION_TOKENS = 1500
 THINKING_TOKENS = 16000  # Deeper levels think inside this limit, and an answer that runs out of it comes back empty.
+ANSWER_TOKENS = 2000  # One spoken turn with the thinking behind it. The longest of 144 measured answers took 1405.
 
 connections = Pool()
 
@@ -77,6 +78,21 @@ def chat(model: str, messages: list, effort: str | None = None, schema: dict | N
         }
     started = time.perf_counter()
     reply = _request("POST", "/chat/completions", payload, timeout)
+    return {
+        "text": reply["choices"][0]["message"]["content"],
+        "usage": reply.get("usage", {}),
+        "ms": round((time.perf_counter() - started) * 1000),
+    }
+
+
+def chat_json(model: str, messages: list, effort: str, timeout: float = 60) -> dict:
+    """One turn of the call. No schema: under a schema, strict or not, Wonder ran on inside a string field in 7 answers of 12
+    on real screens, and without one in 0 of 156."""
+    started = time.perf_counter()
+    reply = _request("POST", "/chat/completions", {
+        "model": model, "messages": messages, "reasoning_effort": effort, "max_completion_tokens": ANSWER_TOKENS,
+        "response_format": {"type": "json_object"},
+    }, timeout)
     return {
         "text": reply["choices"][0]["message"]["content"],
         "usage": reply.get("usage", {}),

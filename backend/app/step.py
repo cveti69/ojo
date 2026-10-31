@@ -11,9 +11,6 @@ LANGUAGES = {"ru": "Russian", "id": "Indonesian", "en": "English", "zh": "Chines
 EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")
 DIALOG_TURNS = 8
 CHARACTERS = {
-    "warm": ('Your manner: calm and warm, like a friend on the phone. Speak in living sentences, not commands, such as '
-             '"Давай откроем поиск, он вверху" or "Отлично, теперь жми зелёную кнопку". '
-             'No flattery, and do not start every line the same way.'),
     "strict": 'Your manner: short plain commands, such as "Нажми на поиск". No small talk.',
     "brief": "Your manner: as few words as possible. Only the action, no polite words and no explanations.",
     "patient": "Your manner: a patient teacher for someone who is afraid of phones. Plain words, and say where things are.",

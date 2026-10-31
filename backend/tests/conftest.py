@@ -24,28 +24,12 @@ TOKEN = "test-shared-token"
 AUTH = {"X-Token": TOKEN}
 
 
-def answer(**changes):
-    result = {
-        "screen": "Главный экран", "instruction": "Нажми на поиск", "action": "tap",
-        "target": {"label": "Cari", "object": "search bar", "box": [30, 50, 970, 120], "mark_id": None},
-        "insert_texts": ["sampo anti ketombe"], "insert_hint_ru": "запрос для поиска",
-        "needs_user_confirm": False, "done": False,
-    }
-    result.update(changes)
-    return result
+def line(say="Это кнопка оплаты.", **fields):
+    """One answer of the model."""
+    return {"say": say, "notes": "заметка", **fields}
 
 
 real_locate = grounding.locate
-
-
-def quick_line(reply="Сейчас гляну.", addressed=True, new_goal=None, mode="keep", needs_screen=True, wait="look", hold=False):
-    return {"addressed": addressed, "reply": reply, "new_goal": new_goal, "mode": mode, "needs_screen": needs_screen, "wait": wait,
-            "hold": hold}
-
-
-def talk_line(reply="Это кнопка оплаты.", addressed=True, new_goal=None, mode="keep", show=None, private=False, look_again=False):
-    return {"addressed": addressed, "reply": reply, "new_goal": new_goal, "mode": mode, "private": private,
-            "show": show or {"label": "", "object": "", "box": []}, "look_again": look_again}
 
 
 class FakeEars:
@@ -94,18 +78,40 @@ def post_frame(client, session_id, image=None, timestamp=123, small=False):
 
 
 def new_session(client, **changes):
-    response = client.post("/sessions", headers=AUTH, json={"goal": "Купить шампунь", **changes})
+    response = client.post("/sessions", headers=AUTH, json=changes)
     assert response.status_code == 201
     return response.json()["session_id"]
+
+
+def sharing(client, **changes):
+    """A call with the screen on."""
+    session_id = new_session(client, **changes)
+    assert client.post("/sessions/" + session_id + "/broadcast", headers=AUTH, json={"state": "started"}).status_code == 200
+    return session_id
+
+
+def words(client, session_id, text="Что это за кнопка?"):
+    assert client.post("/sessions/" + session_id + "/words", headers=AUTH, json={"text": text}).status_code == 200
+
+
+def say(client, session_id, audio=None):
+    return client.post("/sessions/" + session_id + "/say", content=wav() if audio is None else audio,
+                       headers={**AUTH, "Content-Type": "audio/wav"})
+
+
+def look(client, session_id, pictures, first_taken=None):
+    names = [str(index if first_taken is None else first_taken + index) + ".jpg" for index in range(len(pictures))]
+    parts = [("frame", (name, picture, "image/jpeg")) for name, picture in zip(names, pictures)]
+    return client.post("/sessions/" + session_id + "/look", files=parts, headers=AUTH)
 
 
 def idle(backend, session_id):
     async def wait():
         deadline = time.monotonic() + 5
         session = backend.store.sessions[session_id]
-        while session.busy:
+        while session.answer and not session.answer.done():
             if time.monotonic() > deadline:
-                raise AssertionError("Analysis did not finish")
+                raise AssertionError("The answer did not finish")
             await asyncio.sleep(0.005)
     backend.client.portal.call(wait)
 
@@ -120,78 +126,30 @@ def receive_type(websocket, kind):
 
 class FakeMeta:
     def __init__(self):
-        self.answers = []
-        self.vision_calls = []
-        self.efforts = []
+        self.replies = []
+        self.calls = []
+        self.hook = None
         self.text_calls = []
         self.asr_calls = []
         self.asr_reply = {"transcript": "Купить шампунь", "audioDurationMs": 100, "turns": []}
-        self.ready_text = "sampo anti ketombe"
-        self.text_reply = "Хорошо, помогу. Включи демонстрацию экрана."
-        self.quick = []
-        self.quick_calls = []
-        self.quick_efforts = []
-        self.quick_hook = None
-        self.talk = []
-        self.talk_calls = []
-        self.talk_efforts = []
-        self.talk_seconds = 0
-        self.talk_hook = None
-        self.hook = None
-        self.active = 0
-        self.max_active = 0
         self.lock = threading.Lock()
 
-    def chat(self, model, messages, effort=None, schema=None, timeout=60):
-        if model == "test-quick":
-            with self.lock:
-                self.quick_calls.append(messages)
-                self.quick_efforts.append(effort)
-                response = self.quick.pop(0) if self.quick else quick_line()
-            if self.quick_hook:
-                self.quick_hook()
-            if isinstance(response, Exception):
-                raise response
-            return {"text": response if response == "" else json.dumps(response, ensure_ascii=False), "usage": {}, "ms": 1}
-        if model == "test-talk":
-            with self.lock:
-                self.talk_calls.append(messages)
-                self.talk_efforts.append(effort)
-                response = self.talk.pop(0) if self.talk else talk_line()
-            time.sleep(self.talk_seconds)
-            if self.talk_hook:
-                self.talk_hook()
-            if isinstance(response, Exception):
-                raise response
-            return {"text": json.dumps(response, ensure_ascii=False), "usage": {}, "ms": 1}
-        if model == "test-text":
-            self.text_calls.append(messages)
-            payload = json.loads(messages[-1]["content"])
-            text = self.text_reply if "goal" in payload else "Tolong tunggu di sini."
-            if "phone app in" in messages[0]["content"]:
-                if self.ready_text is None:
-                    raise OSError("no ready text")
-                text = self.ready_text
-            return {"text": text, "usage": {}, "ms": 1}
-        assert model == "test-vision"
-        assert schema is not None
+    def chat_json(self, model, messages, effort, timeout=60):
         with self.lock:
-            self.vision_calls.append(messages)
-            self.efforts.append(effort)
-            index = len(self.vision_calls)
-            response = self.answers.pop(0) if self.answers else answer()
-            self.active += 1
-            self.max_active = max(self.max_active, self.active)
-        try:
-            if self.hook:
-                self.hook(index)
-            if isinstance(response, Exception):
-                raise response
-            return {"text": response if isinstance(response, str) else json.dumps(response, ensure_ascii=False),
-                    "usage": {}, "ms": 1}
-        finally:
-            with self.lock:
-                self.active -= 1
+            self.calls.append(SimpleNamespace(model=model, messages=copy.deepcopy(messages), effort=effort))
+            index = len(self.calls)
+            response = self.replies.pop(0) if self.replies else line()
+        if self.hook:
+            self.hook(index)
+        if isinstance(response, Exception):
+            raise response
+        return {"text": response if isinstance(response, str) else json.dumps(response, ensure_ascii=False),
+                "usage": {"completion_tokens": 9}, "ms": 1}
+
+    def chat(self, model, messages, effort=None, schema=None, timeout=60):
+        assert model == "test-text"
+        self.text_calls.append(messages)
+        return {"text": "Tolong tunggu di sini.", "usage": {}, "ms": 1}
 
     def send(self, method, path, data, content_type, timeout):
         assert method == "POST" and path == "/asr/transcribe"
@@ -214,15 +172,15 @@ def backend(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "SHARED_TOKEN", TOKEN)
     monkeypatch.setattr(config, "META_API_KEY", "test-key")
     monkeypatch.setattr(config, "META_TEXT_MODEL", "test-text")
-    monkeypatch.setattr(config, "META_VISION_MODEL", "test-vision")
     monkeypatch.setattr(config, "META_TALK_MODEL", "test-talk")
-    monkeypatch.setattr(config, "META_QUICK_MODEL", "test-quick")
+    monkeypatch.setattr(config, "META_SPARE_MODEL", "test-spare")
     monkeypatch.setattr(config, "META_TRANSCRIBE_MODEL", "test-asr")
     monkeypatch.setattr(config, "CALLS_DIR", "")
     monkeypatch.setattr(config, "SESSION_TTL_SECONDS", 3600)
     monkeypatch.setattr(config, "SESSION_CLEANUP_SECONDS", 30)
     fake = FakeMeta()
     monkeypatch.setattr(meta, "chat", fake.chat)
+    monkeypatch.setattr(meta, "chat_json", fake.chat_json)
     monkeypatch.setattr(meta, "_send", fake.send)
 
     def locate(image, width, height, model_answer, lines=None, icons=None):

@@ -22,7 +22,7 @@ class SpeechRecognizer(Protocol):
 
 
 class SpeechSynthesizer(Protocol):
-    def stream(self, text: str) -> Iterator[bytes]:
+    def stream(self, text: str, voice: Optional[str] = None) -> Iterator[bytes]:
         ...
 
 
@@ -49,10 +49,11 @@ class MetaSpeechRecognizer:
 class ElevenLabsSynthesizer:
     """Only reads aloud: every word the agent says still comes from the Meta models."""
 
-    def stream(self, text: str) -> Iterator[bytes]:
+    def stream(self, text: str, voice: Optional[str] = None) -> Iterator[bytes]:
         """Connects before it returns, so a refused request can still become an HTTP error."""
+        chosen = voice if voice in config.VOICES else config.ELEVENLABS_VOICE
         connection, response = connections.send(
-            "POST", f"{config.ELEVENLABS_API_BASE}/text-to-speech/{config.ELEVENLABS_VOICE}/stream?output_format=pcm_24000",
+            "POST", f"{config.ELEVENLABS_API_BASE}/text-to-speech/{chosen}/stream?output_format=pcm_24000",
             json.dumps({
                 "text": text, "model_id": config.ELEVENLABS_MODEL,
                 "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},

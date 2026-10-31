@@ -114,6 +114,16 @@ def test_invalid_asr_response(reply):
         meta.parse_transcription(reply)
 
 
+def test_a_turn_of_the_call_asks_for_json_without_a_schema(monkeypatch):
+    connection = FakeConnection([ok({"choices": [{"message": {"content": "{}"}}], "usage": {"completion_tokens": 7}})])
+    use_connections(monkeypatch, connection)
+    reply = meta.chat_json("test-model", [{"role": "user", "content": "Привет"}], "medium", 16)
+    assert reply["text"] == "{}" and reply["usage"] == {"completion_tokens": 7}
+    sent = json.loads(connection.requests[0]["data"])
+    assert sent["response_format"] == {"type": "json_object"} and sent["reasoning_effort"] == "medium"
+    assert sent["max_completion_tokens"] == meta.ANSWER_TOKENS
+
+
 def test_a_connection_is_used_again(monkeypatch):
     connection = FakeConnection([ok({"first": 1}), ok({"second": 2})])
     use_connections(monkeypatch, connection)
@@ -137,6 +147,16 @@ def test_a_new_connection_that_fails_reports_it(monkeypatch):
     with pytest.raises(meta.MetaError) as error:
         meta._request("GET", "/models")
     assert error.value.status == 502
+
+
+@pytest.mark.parametrize("asked,used", [("chosen", "chosen"), ("unknown", "standard"), (None, "standard")])
+def test_only_a_listed_voice_is_used(monkeypatch, asked, used):
+    connection = FakeConnection([(200, b"sound")])
+    monkeypatch.setattr(pool, "connect", lambda host, timeout: connection)
+    monkeypatch.setattr(config, "ELEVENLABS_VOICE", "standard")
+    monkeypatch.setattr(config, "VOICES", {"standard": "George", "chosen": "Done"})
+    assert b"".join(voice.ElevenLabsSynthesizer().stream("Да", asked)) == b"sound"
+    assert "/text-to-speech/" + used + "/stream" in connection.requests[0]["path"]
 
 
 def test_a_timeout_is_not_tried_again(monkeypatch):
