@@ -48,6 +48,9 @@ class Session:
     needs_user_confirm: bool = False
     busy: bool = False
     revision: int = 0
+    analyzing_gray: Optional[bytes] = None
+    stale: asyncio.Event = field(default_factory=asyncio.Event)
+    restarts: int = 0
     last_activity: float = field(default_factory=time.monotonic)
     last_frame: Optional[Frame] = None
     pending_frame: Optional[Frame] = None

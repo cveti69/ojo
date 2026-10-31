@@ -26,9 +26,11 @@ public struct SessionResponse: Decodable, Sendable {
 public struct GoalRequest: Encodable, Sendable { public let goal: String }
 public struct GoalResponse: Decodable, Sendable {
     public let replyRU: String
-    enum CodingKeys: String, CodingKey { case replyRU = "reply_ru" }
+    public let readyText: String?
+    enum CodingKeys: String, CodingKey { case replyRU = "reply_ru", readyText = "ready_text" }
 }
 public struct TextResponse: Decodable, Sendable { public let text: String }
+public struct SpeechRequest: Encodable, Sendable { public let text: String }
 public struct OKResponse: Decodable, Sendable { public let ok: Bool }
 public struct FrameResponse: Decodable, Sendable {
     public let accepted: Bool
@@ -63,19 +65,31 @@ public struct HintEvent: Decodable, Sendable {
     public let pasteText: String?
     public let needsUserConfirm: Bool
     public let frameTS: Int64?
+    public let timings: HintTimings?
 
     enum CodingKeys: String, CodingKey {
-        case stepID = "step_id", instructionRU = "instruction_ru", speak
+        case stepID = "step_id", instructionRU = "instruction_ru", speak, timings
         case imageJPEGBase64 = "image_jpeg_base64", insertTexts = "insert_texts"
         case insertHintRU = "insert_hint_ru", pasteText = "paste_text", needsUserConfirm = "needs_user_confirm"
         case frameTS = "frame_ts"
     }
 }
 
+public struct HintTimings: Decodable, Sendable {
+    public let queueMS: Int
+    public let modelMS: Int
+    public let boxMS: Int
+    public let boxSource: String
+    enum CodingKeys: String, CodingKey {
+        case queueMS = "queue_ms", modelMS = "model_ms", boxMS = "box_ms", boxSource = "box_source"
+    }
+}
+
 public struct StatusEvent: Decodable, Sendable {
     public let state: String
     public let textRU: String
-    enum CodingKeys: String, CodingKey { case state, textRU = "text_ru" }
+    public let newScreen: Bool?
+    enum CodingKeys: String, CodingKey { case state, textRU = "text_ru", newScreen = "new_screen" }
 }
 
 public struct DoneEvent: Decodable, Sendable {

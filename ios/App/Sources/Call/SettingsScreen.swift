@@ -7,7 +7,7 @@ private final class SettingsForm: ObservableObject {
     @Published var token = ""
     @Published var userLang = "ru"
     @Published var targetLang = ""
-    @Published var textEntry: TextEntry = .keyboard
+    @Published var textEntry: TextEntry = .clipboard
     @Published var message = ""
 }
 
@@ -30,13 +30,13 @@ struct SettingsScreen: View {
                 TextField("Язык приложения-цели: id, auto, en…", text: $form.targetLang)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 Picker("Способ ввода", selection: $form.textEntry) {
-                    Text("Клавиатура").tag(TextEntry.keyboard)
                     Text("Буфер обмена").tag(TextEntry.clipboard)
+                    Text("Наша клавиатура").tag(TextEntry.keyboard)
                 }
             } header: {
                 Text("Языки и ввод текста")
             } footer: {
-                Text("auto — агент определит язык по экрану. Для приложений, которые запрещают сторонние клавиатуры, выберите буфер обмена. Новые настройки применяются со следующего звонка.")
+                Text("auto — агент определит язык по экрану. Буфер работает везде. Нашу клавиатуру включайте только для приложений, которые её пускают. Новые настройки применяются со следующего звонка.")
             }
             Section {
                 Button("Сохранить") { save() }

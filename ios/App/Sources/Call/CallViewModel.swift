@@ -3,6 +3,10 @@ import Combine
 import Shared
 import UIKit
 
+enum CallPhase {
+    case idle, busy, listening, needsGoal, needsScreen, guiding
+}
+
 @MainActor
 final class CallViewModel: ObservableObject {
     @Published var goal = ""
@@ -12,17 +16,19 @@ final class CallViewModel: ObservableObject {
     @Published private(set) var isRecording = false
     @Published private(set) var isTestingWindow = false
     @Published private(set) var hasGoal = false
+    @Published private(set) var isSharing = false
     @Published private(set) var needsUserConfirm = false
     @Published private(set) var audioIsActive = false
     @Published private(set) var isClipboardTestPending = false
     @Published private(set) var isTextTestPending = false
-    @Published private(set) var screenTextMode: ScreenTextMode = .app
+    @Published private(set) var screenTextMode: ScreenTextMode = .extension
     @Published private(set) var useVideoCallFallback = false
-    @Published private(set) var status = "Готов к звонку"
+    @Published private(set) var status = "Позвоните и скажите, что нужно. Нажимаете всегда вы."
     @Published private(set) var lastInstruction = "Подсказок пока нет"
     @Published private(set) var windowState: HintWindowState = .inactive
 
     let window: any HintWindowPresenting
+    let screenShare = ScreenSharePicker()
     let configuration: ProjectConfiguration?
     let store: SharedStore?
     let journal: SharedJournal?
@@ -47,10 +53,12 @@ final class CallViewModel: ObservableObject {
     private var lastSpokenHint = ""
     private var seenSteps = Set<String>()
     private var doneDelivered = false
+    private var unwrittenPaste: String?
+    private var isLooking = false
     private var subscriptions = Set<AnyCancellable>()
 
     init(speaker: (any Speaker)? = nil) {
-        self.speaker = speaker ?? SystemSpeaker()
+        self.speaker = speaker ?? ServerSpeaker(fallback: SystemSpeaker())
         window = PictureInPictureHintWindow()
         var configuration: ProjectConfiguration?
         var store: SharedStore?
@@ -67,7 +75,7 @@ final class CallViewModel: ObservableObject {
         self.configuration = configuration
         self.store = store
         self.journal = journal
-        screenTextMode = store?.screenTextMode ?? .app
+        screenTextMode = store?.screenTextMode ?? .extension
         if let configuration, let store, let journal {
             do { textCoordinator = try ScreenTextCoordinator(configuration: configuration, store: store, journal: journal) }
             catch { journal.append("Текст в приложении недоступен: \(error.localizedDescription)") }
@@ -84,6 +92,7 @@ final class CallViewModel: ObservableObject {
             }
         }
         window.onDiagnostic = { [weak self] in self?.journal?.append($0) }
+        recorder.onDiagnostic = { [weak self] in self?.journal?.append($0) }
         window.onRepeatHint = { [weak self] in self?.repeatHint() }
         audioSession.onActivityChange = { [weak self] active in
             self?.audioIsActive = active
@@ -97,7 +106,20 @@ final class CallViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.resumeAudio() }
             .store(in: &subscriptions)
-        journal?.append("Приложение открыто; источник окна: \(useVideoCallFallback ? "видеозвонок" : "sample buffer")")
+        journal?.append("Приложение открыто; iOS \(UIDevice.current.systemVersion); источник окна: \(useVideoCallFallback ? "видеозвонок" : "sample buffer")")
+    }
+
+    var phase: CallPhase {
+        guard isCallActive else { return isWorking ? .busy : .idle }
+        if isRecording { return .listening }
+        if isTestingWindow || (hasGoal && isSharing) { return .guiding }
+        if hasGoal { return .needsScreen }
+        return isWorking ? .busy : .needsGoal
+    }
+
+    var windowFailed: Bool {
+        if case .failed = windowState { return isCallActive }
+        return false
     }
 
     func startCall() {
@@ -123,6 +145,7 @@ final class CallViewModel: ObservableObject {
                 self.sessionID = response.sessionID
                 store.sessionID = response.sessionID
                 try self.beginLocalCall()
+                self.speaker.prepare(client: client, journal: self.journal)
                 self.journal?.append("Сессия создана")
                 self.connect(client: client, sessionID: response.sessionID)
                 self.status = "Агент здоровается"
@@ -180,12 +203,17 @@ final class CallViewModel: ObservableObject {
 
     func finishRecording() { recorder.finishNow() }
 
+    func askForScreen() {
+        // iOS may want a real tap here, so the big button stays under the system sheet either way.
+        journal?.append(screenShare.open() ? "Запрошено окно трансляции" : "Окно трансляции: системная кнопка не найдена")
+    }
+
     func endCall() {
         let endingClient = client
         let endingID = sessionID
         _ = newWorkflow()
         recorder.cancel()
-        speaker.stop()
+        speaker.finish()
         connection?.stop()
         connection = nil
         if let endingID, store?.sessionID == endingID { store?.sessionID = nil }
@@ -200,9 +228,12 @@ final class CallViewModel: ObservableObject {
         isWorking = false
         isRecording = false
         hasGoal = false
+        isSharing = false
         needsUserConfirm = false
         seenSteps.removeAll()
         doneDelivered = false
+        unwrittenPaste = nil
+        isLooking = false
         lastJPEG = nil
         lastSpokenHint = ""
         window.stop()
@@ -354,8 +385,9 @@ final class CallViewModel: ObservableObject {
         }
     }
 
-    func sceneChanged(_ name: String, isBackground: Bool) {
+    func sceneChanged(_ name: String, isBackground: Bool, isActive: Bool) {
         journal?.append("Сцена: \(name); аудиосессия активна: \(audioIsActive ? "да" : "нет")")
+        if isActive, let text = unwrittenPaste { placeOnClipboard(text, reason: "Буфер при возврате") }
         if isBackground, isRecording {
             _ = newWorkflow()
             recorder.cancel()
@@ -363,6 +395,11 @@ final class CallViewModel: ObservableObject {
             isWorking = false
             status = "Вернитесь в приложение, чтобы произнести цель, или введите её текстом"
         }
+    }
+
+    private func placeOnClipboard(_ text: String, reason: String) {
+        // With no window iOS can refuse a write from the background, so the text waits for the person to come back.
+        unwrittenPaste = ClipboardWriter.write(text, reason: reason, journal: journal) ? nil : text
     }
 
     private func newWorkflow() -> UUID {
@@ -381,14 +418,28 @@ final class CallViewModel: ObservableObject {
 
     private func captureAndSendGoal(client: ServerClient, sessionID: String) async throws {
         try Task.checkCancellation()
+        var text = try await listen(client: client)
+        if text.isEmpty {
+            await speaker.speakAndWait("Не слышу, повтори, пожалуйста.")
+            try Task.checkCancellation()
+            text = try await listen(client: client)
+        }
+        guard !text.isEmpty else { throw GoalError.empty }
+        recognizedText = text
+        goal = text
+        journal?.append("Цель распознана; отправляем /goal")
+        try await sendGoal(text, client: client, sessionID: sessionID)
+    }
+
+    private func listen(client: ServerClient) async throws -> String {
         guard UIApplication.shared.applicationState == .active else {
             throw GoalError.foregroundRequired
         }
         isRecording = true
-        status = "Слушаю цель. После фразы помолчите чуть больше секунды"
+        status = "Слушаю. Скажите, что нужно"
         journal?.append("Запись цели: WAV, 16 кГц, моно, 16 бит")
         let wavURL: URL
-        do { wavURL = try await recorder.record() }
+        do { wavURL = try await recordGoal(client: client) }
         catch { isRecording = false; throw error }
         defer { try? FileManager.default.removeItem(at: wavURL) }
         isRecording = false
@@ -397,20 +448,28 @@ final class CallViewModel: ObservableObject {
         let transcriber: any GoalTranscribing = FallbackGoalTranscriber(
             primary: ServerGoalTranscriber(client: client), fallback: SpeechGoalTranscriber(), journal: journal
         )
+        let started = Date()
         let text = try await transcriber.transcribe(wavURL: wavURL).trimmingCharacters(in: .whitespacesAndNewlines)
         try Task.checkCancellation()
-        guard !text.isEmpty else { throw GoalError.empty }
-        recognizedText = text
-        goal = text
-        journal?.append("Цель распознана; отправляем /goal")
-        try await sendGoal(text, client: client, sessionID: sessionID)
+        let seconds = String(format: "%.1f", locale: Locale(identifier: "ru_RU"), Date().timeIntervalSince(started))
+        journal?.append("Распознавание \(seconds) с; \(text.isEmpty ? "пусто" : "есть текст")")
+        return text
+    }
+
+    private func recordGoal(client: ServerClient) async throws -> URL {
+        // Recording was proven on the iPhone without the voice engine next to it.
+        speaker.finish()
+        defer { if isCallActive { speaker.prepare(client: client, journal: journal) } }
+        return try await recorder.record()
     }
 
     private func sendGoal(_ text: String, client: ServerClient, sessionID: String) async throws {
         status = "Передаю цель агенту…"
         doneDelivered = false
+        unwrittenPaste = nil
         let reply = try await client.setGoal(text, sessionID: sessionID)
         try Task.checkCancellation()
+        if let ready = reply.readyText { placeOnClipboard(ready, reason: "Буфер заранее") }
         hasGoal = true
         needsUserConfirm = false
         status = "Включите трансляцию экрана и перейдите в нужное приложение"
@@ -440,14 +499,16 @@ final class CallViewModel: ObservableObject {
         switch event {
         case .hint(let hint):
             guard seenSteps.insert(hint.stepID).inserted else { return }
+            isSharing = true
             if let timestamp = hint.frameTS {
                 let elapsed = Date().timeIntervalSince1970 - Double(timestamp) / 1000
                 let seconds = String(format: "%.1f", locale: Locale(identifier: "ru_RU"), elapsed)
-                journal?.append("Подсказка \(hint.stepID) через \(seconds) с после кадра")
+                let timings = hint.timings.map {
+                    "; очередь \($0.queueMS) мс, модель \($0.modelMS) мс, рамка \($0.boxMS) мс, \($0.boxSource)"
+                } ?? ""
+                journal?.append("Подсказка \(hint.stepID) через \(seconds) с после кадра\(timings)")
             }
-            if let text = hint.pasteText {
-                ClipboardWriter.write(text, reason: "Буфер из hint", journal: journal)
-            }
+            if let text = hint.pasteText { placeOnClipboard(text, reason: "Буфер из hint") }
             lastInstruction = hint.instructionRU
             needsUserConfirm = hint.needsUserConfirm
             status = hint.needsUserConfirm ? "Требуется ваше подтверждение в приложении" : "Новая подсказка"
@@ -458,11 +519,14 @@ final class CallViewModel: ObservableObject {
                 guard let data = Data(base64Encoded: hint.imageJPEGBase64) else { throw GoalError.image }
                 try window.display(jpegData: data)
                 lastJPEG = data
+                isLooking = false
                 journal?.append("Показана подсказка; подтверждение: \(hint.needsUserConfirm ? "да" : "нет")")
             } catch { journal?.append("Ошибка картинки подсказки: \(error.localizedDescription)") }
         case .status(let status):
             if !isRecording && !isWorking { self.status = status.textRU }
             journal?.append("Сервер: \(status.state); \(status.textRU)")
+            updateLookingCard(status)
+            updateSharing(status)
         case .done(let done):
             guard !doneDelivered else { return }  // The server repeats it on every reconnect.
             doneDelivered = true
@@ -471,7 +535,31 @@ final class CallViewModel: ObservableObject {
             lastSpokenHint = done.textRU
             needsUserConfirm = false
             speaker.speak(done.textRU)
+            isLooking = false
+            if let card = TestFrameFactory.make(title: "Готово").jpegData(compressionQuality: 0.9) {
+                lastJPEG = card
+                try? window.display(jpegData: card)
+            }
             journal?.append("Сервер сообщил о завершении цели")
+        }
+    }
+
+    private func updateLookingCard(_ status: StatusEvent) {
+        // The highlighted button belongs to a screen the person has left, so it goes until the next hint comes.
+        if status.newScreen == true, !isLooking {
+            isLooking = (try? window.display(image: TestFrameFactory.make(title: "Смотрю\nэкран…"))) != nil
+        } else if status.state != "analyzing", isLooking {
+            isLooking = false
+            try? restoreWindowImage()
+        }
+    }
+
+    private func updateSharing(_ status: StatusEvent) {
+        if status.state == "broadcast_stopped" {
+            isSharing = false
+        } else if ["broadcasting", "analyzing"].contains(status.state), !isSharing {
+            isSharing = true
+            lastInstruction = "Открой нужное приложение"
         }
     }
 

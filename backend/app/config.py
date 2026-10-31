@@ -15,6 +15,11 @@ META_TRANSCRIBE_MODEL = os.environ.get("META_TRANSCRIBE_MODEL", "muse-voice-tran
 META_SAM_MODEL = os.environ.get("META_SAM_MODEL", "sam-3.1")
 META_REASONING = os.environ.get("META_REASONING", "minimal")
 
+ELEVENLABS_API_BASE = os.environ.get("ELEVENLABS_API_BASE", "https://api.elevenlabs.io/v1").rstrip("/")
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
+ELEVENLABS_MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_v4_turbo")
+ELEVENLABS_VOICE = os.environ.get("ELEVENLABS_VOICE", "JBFqnCBsd6RMkjVDRZzb")
+
 GROUNDING_MODE = os.environ.get("GROUNDING_MODE", "direct")
 SAVE_FRAMES = os.environ.get("SAVE_FRAMES", "0") == "1"
 SHARED_TOKEN = os.environ.get("SHARED_TOKEN", "")

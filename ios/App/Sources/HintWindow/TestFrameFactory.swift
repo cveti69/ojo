@@ -22,7 +22,7 @@ enum TestFrameFactory {
         }
     }
 
-    static func make(number: Int? = nil, date: Date = Date()) -> UIImage {
+    static func make(number: Int? = nil, date: Date = Date(), title: String = "Ожидание\nподсказки") -> UIImage {
         let size = CGSize(width: 720, height: 960)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -52,7 +52,7 @@ enum TestFrameFactory {
                 text(formatter.string(from: date), y: 540, height: 110, font: .monospacedDigitSystemFont(ofSize: 82, weight: .medium))
                 text("Новый кадр\nкаждые 3 секунды", y: 740, height: 150, font: .systemFont(ofSize: 46))
             } else {
-                text("Ожидание\nподсказки", y: 340, height: 240, font: .boldSystemFont(ofSize: 68))
+                text(title, y: 340, height: 240, font: .boldSystemFont(ofSize: 68))
             }
         }
     }

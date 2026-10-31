@@ -3,13 +3,31 @@ from __future__ import annotations
 import base64
 import io
 import threading
+import time
 
 import pytest
 from PIL import Image, ImageDraw
 
-from app import config, grounding, meta
+from app import config, engine, grounding, meta
 from app.sessions import KEPT_FRAME_TEXTS
 from conftest import AUTH, answer, idle, jpeg, new_session, post_frame
+
+
+def with_floating_window(color):
+    image = Image.open(io.BytesIO(jpeg())).convert("RGB")
+    ImageDraw.Draw(image).rectangle((180, 500, 380, 830), fill=color)
+    output = io.BytesIO()
+    image.save(output, format="JPEG", quality=90)
+    return output.getvalue()
+
+
+def wait_until(condition, seconds=2.0):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.01)
+    return False
 
 
 @pytest.mark.parametrize("pending_changed", [True, False])
@@ -21,15 +39,16 @@ def test_busy_keeps_only_latest_frame(backend, pending_changed):
             entered.set()
             assert release.wait(5)
     backend.meta.hook = block_first
-    backend.meta.answers = [answer(), answer(screen="Результаты поиска", instruction="Выбери шампунь")]
+    moved = {"label": "Beli", "object": "green button", "box": [30, 500, 970, 570], "mark_id": None}
+    backend.meta.answers = [answer(), answer(target=moved, instruction="Выбери шампунь")]
     session_id = new_session(backend.client)
     first = jpeg()
-    last = jpeg((60, 70, 90)) if pending_changed else first
+    last = with_floating_window((20, 40, 60)) if pending_changed else first
     try:
         assert post_frame(backend.client, session_id, first).json() == {"accepted": True}
         assert entered.wait(2)
         assert backend.client.get("/health").status_code == 200
-        assert post_frame(backend.client, session_id, jpeg((100, 100, 100))).json() == {
+        assert post_frame(backend.client, session_id, with_floating_window((200, 30, 30))).json() == {
             "accepted": False, "reason": "busy"
         }
         assert post_frame(backend.client, session_id, last).json() == {"accepted": False, "reason": "busy"}
@@ -45,6 +64,144 @@ def test_busy_keeps_only_latest_frame(backend, pending_changed):
         assert backend.store.sessions[session_id].step_id == "s2"
 
 
+def blocked_first_answer(backend):
+    entered, release = threading.Event(), threading.Event()
+
+    def block_first(index):
+        if index == 1:
+            entered.set()
+            assert release.wait(5)
+    backend.meta.hook = block_first
+    return entered, release
+
+
+def test_new_screen_replaces_the_step_for_the_old_one(backend):
+    entered, release = blocked_first_answer(backend)
+    backend.meta.answers = [answer(instruction="Открой приложение"), answer(instruction="Нажми на поиск")]
+    session_id = new_session(backend.client)
+    try:
+        post_frame(backend.client, session_id)
+        assert entered.wait(2)
+        assert post_frame(backend.client, session_id, jpeg((60, 70, 90))).json()["reason"] == "busy"
+        idle(backend, session_id)  # The second answer arrives while the first call is still running.
+        assert len(backend.meta.vision_calls) == 2 and backend.meta.active == 1
+    finally:
+        release.set()
+    session = backend.store.sessions[session_id]
+    assert [item["instruction_ru"] for item in session.history] == ["Нажми на поиск"]
+    assert session.last_hint["instruction_ru"] == "Нажми на поиск" and session.last_hint["step_id"] == "s1"
+
+
+def test_new_screen_during_the_box_drops_the_hint(backend, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    locate = grounding.locate
+
+    def blocked_locate(*args):
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(5)
+        return locate(*args)
+    monkeypatch.setattr(grounding, "locate", blocked_locate)
+    backend.meta.answers = [answer(instruction="Открой приложение"), answer(instruction="Нажми на поиск")]
+    session_id = new_session(backend.client)
+    try:
+        post_frame(backend.client, session_id)
+        assert entered.wait(2)
+        post_frame(backend.client, session_id, jpeg((60, 70, 90)))
+    finally:
+        release.set()
+    idle(backend, session_id)
+    history = backend.store.sessions[session_id].history
+    assert [item["instruction_ru"] for item in history] == ["Нажми на поиск"]
+
+
+def test_new_payment_screen_is_not_lost_with_the_old_answer(backend):
+    entered, release = blocked_first_answer(backend)
+    backend.meta.answers = [answer(done=True), answer(needs_user_confirm=True)]
+    session_id = new_session(backend.client)
+    try:
+        post_frame(backend.client, session_id)
+        assert entered.wait(2)
+        post_frame(backend.client, session_id, jpeg((60, 70, 90)))
+        idle(backend, session_id)
+    finally:
+        release.set()
+    session = backend.store.sessions[session_id]
+    assert session.needs_user_confirm and not session.completed
+
+
+def with_keyboard():
+    image = Image.open(io.BytesIO(jpeg())).convert("RGB")
+    ImageDraw.Draw(image).rectangle((0, 520, 390, 844), fill=(20, 40, 60))
+    output = io.BytesIO()
+    image.save(output, format="JPEG", quality=90)
+    return output.getvalue()
+
+
+def test_keyboard_counts_as_moving_on(backend):
+    entered, release = blocked_first_answer(backend)
+    session_id = new_session(backend.client)
+    try:
+        post_frame(backend.client, session_id)
+        assert entered.wait(2)
+        post_frame(backend.client, session_id, with_keyboard())
+        assert wait_until(lambda: len(backend.meta.vision_calls) == 2)
+    finally:
+        release.set()
+    idle(backend, session_id)
+
+
+def test_status_tells_the_window_about_a_new_screen(backend):
+    session_id = new_session(backend.client)
+    statuses = []
+    session = backend.store.sessions[session_id]
+    publish = session.publish
+    session.publish = lambda event: (statuses.append(event), publish(event))[1]
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    post_frame(backend.client, session_id, with_floating_window((20, 40, 60)))
+    idle(backend, session_id)
+    post_frame(backend.client, session_id, jpeg((60, 70, 90)))
+    idle(backend, session_id)
+    assert [event["new_screen"] for event in statuses if event.get("state") == "analyzing"] == [False, False, True]
+
+
+def test_our_own_window_does_not_stop_the_answer(backend):
+    entered, release = blocked_first_answer(backend)
+    session_id = new_session(backend.client)
+    try:
+        post_frame(backend.client, session_id)
+        assert entered.wait(2)
+        post_frame(backend.client, session_id, with_floating_window((20, 40, 60)))
+        assert len(backend.meta.vision_calls) == 1 and not backend.store.sessions[session_id].stale.is_set()
+    finally:
+        release.set()
+    idle(backend, session_id)
+    assert backend.store.sessions[session_id].last_hint["step_id"] == "s1"
+
+
+def test_screen_that_never_settles_still_gets_a_hint(backend):
+    release = threading.Event()
+
+    def block_early(index):
+        if index <= engine.MAX_RESTARTS + 1:
+            assert release.wait(5)
+    backend.meta.hook = block_early
+    session_id = new_session(backend.client)
+    session = backend.store.sessions[session_id]
+    try:
+        post_frame(backend.client, session_id)
+        for shade in range(engine.MAX_RESTARTS):
+            post_frame(backend.client, session_id, jpeg((40 * (shade % 2), 200 - 160 * (shade % 2), 90)))
+            assert wait_until(lambda: len(backend.meta.vision_calls) == shade + 2)
+        post_frame(backend.client, session_id, jpeg((230, 20, 20)))
+        assert session.busy and not session.stale.is_set()
+    finally:
+        release.set()
+    idle(backend, session_id)
+    assert session.last_hint is not None and session.restarts == 0
+
+
 def test_nearly_identical_frames_and_duplicate_steps(backend):
     session_id = new_session(backend.client)
     assert post_frame(backend.client, session_id).json()["accepted"] is True
@@ -52,14 +209,6 @@ def test_nearly_identical_frames_and_duplicate_steps(backend):
     assert post_frame(backend.client, session_id).json() == {"accepted": False, "reason": "unchanged"}
     assert post_frame(backend.client, session_id, jpeg((231, 236, 241))).json()["accepted"] is False
     assert len(backend.meta.vision_calls) == 1
-
-
-def with_floating_window(color):
-    image = Image.open(io.BytesIO(jpeg())).convert("RGB")
-    ImageDraw.Draw(image).rectangle((180, 500, 380, 830), fill=color)
-    output = io.BytesIO()
-    image.save(output, format="JPEG", quality=90)
-    return output.getvalue()
 
 
 def test_our_own_window_does_not_repeat_the_step(backend):

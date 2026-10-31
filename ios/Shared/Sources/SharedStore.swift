@@ -32,8 +32,8 @@ public final class SharedStore: @unchecked Sendable {
         defaultServerURL = configuration.defaultServerURL
         defaults.register(defaults: [
             "serverURL": configuration.defaultServerURL.absoluteString,
-            "userLang": "ru", "targetLang": "id", "textEntry": TextEntry.keyboard.rawValue,
-            "screenTextMode": ScreenTextMode.app.rawValue
+            "userLang": "ru", "targetLang": "id", "textInput": TextEntry.clipboard.rawValue,
+            "screenReading": ScreenTextMode.extension.rawValue
         ])
     }
 
@@ -44,7 +44,7 @@ public final class SharedStore: @unchecked Sendable {
             token: defaults.string(forKey: "token") ?? "",
             userLang: defaults.string(forKey: "userLang") ?? "ru",
             targetLang: defaults.string(forKey: "targetLang") ?? "id",
-            textEntry: TextEntry(rawValue: defaults.string(forKey: "textEntry") ?? "") ?? .keyboard
+            textEntry: TextEntry(rawValue: defaults.string(forKey: "textInput") ?? "") ?? .clipboard
         )
     }
 
@@ -70,10 +70,10 @@ public final class SharedStore: @unchecked Sendable {
     public var screenTextMode: ScreenTextMode {
         get {
             refresh()
-            return ScreenTextMode(rawValue: defaults.string(forKey: "screenTextMode") ?? "") ?? .app
+            return ScreenTextMode(rawValue: defaults.string(forKey: "screenReading") ?? "") ?? .extension
         }
         set {
-            defaults.set(newValue.rawValue, forKey: "screenTextMode")
+            defaults.set(newValue.rawValue, forKey: "screenReading")
             defaults.synchronize()
         }
     }
@@ -98,7 +98,7 @@ public final class SharedStore: @unchecked Sendable {
         defaults.set(token.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "token")
         defaults.set(user, forKey: "userLang")
         defaults.set(target, forKey: "targetLang")
-        defaults.set(textEntry.rawValue, forKey: "textEntry")
+        defaults.set(textEntry.rawValue, forKey: "textInput")
         defaults.synchronize()
     }
 

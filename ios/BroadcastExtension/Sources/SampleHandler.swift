@@ -31,6 +31,12 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         let previousSize: CGSize
     }
 
+    private struct Sample {
+        let buffer: CVPixelBuffer
+        let orientation: CGImagePropertyOrientation?
+        let capturedAt: Date
+    }
+
     private let lock = NSLock()
     private let context = CIContext(options: [.cacheIntermediates: false])
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
@@ -49,6 +55,8 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private var textInFlight = false
     private var textTask: Task<Void, Never>?
     private var firstTextReadLogged = false
+    private var textPaused = false
+    private var heldSample: Sample?
     private var finished = true
     private var finishReported = false
     private var lastCheck: TimeInterval = -.infinity
@@ -96,19 +104,43 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     }
 
     override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with sampleBufferType: RPSampleBufferType) {
-        guard sampleBufferType == .video else { return }
+        guard sampleBufferType == .video, let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        var orientation: CGImagePropertyOrientation?
+        if let value = CMGetAttachment(sampleBuffer, key: RPVideoSampleOrientationKey as CFString, attachmentModeOut: nil) as? NSNumber {
+            orientation = CGImagePropertyOrientation(rawValue: value.uint32Value)
+        }
+        let sample = Sample(buffer: buffer, orientation: orientation, capturedAt: Date())
         let now = ProcessInfo.processInfo.systemUptime
         let check: FrameCheck? = lock.withLock {
-            guard !finished, let run else { return nil }
-            guard !requestInFlight, !processingFrame, now - lastCheck >= Capture.interval else {
-                skipped += 1
-                return nil
-            }
-            lastCheck = now
-            processingFrame = true
-            return FrameCheck(run: run, previousThumbnail: previousThumbnail, previousSize: previousSize)
+            guard !finished, run != nil else { return nil }
+            let check = beginCheck(now: now)
+            // The system sends nothing once the screen goes still, so the newest skipped sample waits for the monitor.
+            heldSample = check == nil ? sample : nil
+            if check == nil { skipped += 1 }
+            return check
         }
-        guard let check else { return }
+        if let check { process(sample, check: check) }
+    }
+
+    /// Call with the lock held.
+    private func beginCheck(now: TimeInterval) -> FrameCheck? {
+        guard let run, !requestInFlight, !processingFrame, now - lastCheck >= Capture.interval else { return nil }
+        lastCheck = now
+        processingFrame = true
+        return FrameCheck(run: run, previousThumbnail: previousThumbnail, previousSize: previousSize)
+    }
+
+    private func sendHeldSample() {
+        let now = ProcessInfo.processInfo.systemUptime
+        let ready: (Sample, FrameCheck)? = lock.withLock {
+            guard !finished, let sample = heldSample, let check = beginCheck(now: now) else { return nil }
+            heldSample = nil
+            return (sample, check)
+        }
+        if let ready { process(ready.0, check: ready.1) }
+    }
+
+    private func process(_ sample: Sample, check: FrameCheck) {
         defer {
             lock.withLock { if runID == check.run.id { processingFrame = false } }
         }
@@ -118,18 +150,11 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             check.run.journal.append("Предупреждение о памяти: осталось меньше 8 МБ, кадр пропущен")
             return
         }
-        // ReplayKit owns the sample; never queue or retain it.
+        // ReplayKit owns the sample; only the pixel buffer of the newest one is ever kept.
         autoreleasepool {
-            guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                skipFrame(runID: check.run.id)
-                return
-            }
-            let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
-            var image = CIImage(cvPixelBuffer: buffer)
-            if let value = CMGetAttachment(sampleBuffer, key: RPVideoSampleOrientationKey as CFString, attachmentModeOut: nil) as? NSNumber,
-               let orientation = CGImagePropertyOrientation(rawValue: value.uint32Value) {
-                image = image.oriented(orientation)
-            }
+            let timestamp = Int64(sample.capturedAt.timeIntervalSince1970 * 1000)
+            var image = CIImage(cvPixelBuffer: sample.buffer)
+            if let orientation = sample.orientation { image = image.oriented(orientation) }
             image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
             let size = image.extent.size
             guard size.width > 0, size.height > 0 else { return }
@@ -187,6 +212,8 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             textInFlight = false
             textTask = nil
             firstTextReadLogged = false
+            textPaused = false
+            heldSample = nil
             heartbeat = nil
             memoryPressure = nil
             return old
@@ -209,7 +236,9 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         guard reserved else { return }
         let task = Task { [self] in
             do {
-                _ = try await run.client.sendFrame(jpeg, sessionID: run.sessionID, width: Int(size.width), height: Int(size.height), timestampMS: timestamp)
+                let reply = try await run.client.sendFrame(jpeg, sessionID: run.sessionID, width: Int(size.width), height: Int(size.height), timestampMS: timestamp)
+                // With the goal reached or waiting for the person, nothing reads this text.
+                lock.withLock { textPaused = reply.reason == "done" || reply.reason == "user_confirm" }
                 // Any decoded server response confirms delivery, including all skip reasons.
                 frameCompleted(delivered: true, thumbnail: thumbnail, size: size, runID: run.id)
             } catch {
@@ -239,7 +268,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         let mode = run.store.screenTextMode
         guard mode != .off else { return }
         let reserved = lock.withLock { () -> Bool in
-            guard runID == run.id, !finished, !textInFlight else { return false }
+            guard runID == run.id, !finished, !textInFlight, !textPaused else { return false }
             textInFlight = true
             return true
         }
@@ -362,6 +391,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             guard runID == id, !finished else { return (false, false, nil, nil, nil, nil, nil, 0, 0) }
             finished = true
             previousThumbnail = nil
+            heldSample = nil
             let state = (true, !requestInFlight, requestTask, textTask, heartbeat, memoryPressure, journal, sent, skipped)
             heartbeat = nil
             memoryPressure = nil
@@ -408,13 +438,18 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private func startMonitoring(run: Run) {
         let queue = DispatchQueue(label: "broadcast.monitor")
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
+        timer.schedule(deadline: .now() + 0.25, repeating: 0.25)
         timer.setEventHandler { [weak self] in self?.monitor(run: run) }
         timer.resume()
         let pressure = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: queue)
         pressure.setEventHandler { [weak self] in
             guard let self, self.isActive(runID: run.id) else { return }
-            self.lock.withLock { if self.runID == run.id, !self.finished { self.previousThumbnail = nil } }
+            self.lock.withLock {
+                if self.runID == run.id, !self.finished {
+                    self.previousThumbnail = nil
+                    self.heldSample = nil
+                }
+            }
             self.context.clearCaches()
             run.journal.append("Предупреждение о памяти: кэш CIContext очищен")
         }
@@ -437,6 +472,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             return (report, sent, skipped, requestInFlight)
         }
         guard let statistics else { return }
+        sendHeldSample()
         if run.store.sessionID != run.sessionID {
             run.journal.append("Сессия закрыта приложением, останавливаем трансляцию")
             stopForError(BroadcastError.ended, runID: run.id)

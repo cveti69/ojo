@@ -79,6 +79,17 @@ public final class ServerClient: Sendable {
         return try JSONDecoder().decode(ServerEvent.self, from: data)
     }
 
+    /// The agent's words as raw 24 kHz, 16-bit mono audio, while it is being made.
+    public func speech(_ text: String) async throws -> URLSession.AsyncBytes {
+        var request = try request("POST", ["speech"])
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(SpeechRequest(text: text))
+        request.timeoutInterval = 2.5  // Later than this, the system voice is the better answer.
+        let (audio, response) = try await session.bytes(for: request)
+        try validate(response)
+        return audio
+    }
+
     public func eventSocket(sessionID: String) throws -> URLSessionWebSocketTask {
         var request = try request("GET", ["sessions", sessionID, "events"])
         guard let url = request.url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {

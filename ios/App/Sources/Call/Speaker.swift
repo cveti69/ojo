@@ -1,10 +1,137 @@
 import AVFAudio
+import Shared
 
 @MainActor
 protocol Speaker: AnyObject {
+    func prepare(client: ServerClient, journal: SharedJournal?)
     func speak(_ text: String)
     func speakAndWait(_ text: String) async
     func stop()
+    func finish()
+}
+
+extension Speaker {
+    func prepare(client: ServerClient, journal: SharedJournal?) {}
+    func finish() { stop() }
+}
+
+/// Plays the agent's words as they arrive from the server. With no sound in time, the fallback reads them instead.
+@MainActor
+final class ServerSpeaker: Speaker {
+    private static let sampleRate = 24_000.0
+    private static let bufferBytes = 9600  // 200 ms of 16-bit mono.
+    private let fallback: any Speaker
+    private let engine = AVAudioEngine()
+    private let player = AVAudioPlayerNode()
+    private let format = AVAudioFormat(standardFormatWithSampleRate: ServerSpeaker.sampleRate, channels: 1)!
+    private var client: ServerClient?
+    private var journal: SharedJournal?
+    private var playback: Task<Void, Never>?
+
+    init(fallback: any Speaker) {
+        self.fallback = fallback
+        engine.attach(player)
+        engine.connect(player, to: engine.mainMixerNode, format: format)
+    }
+
+    func prepare(client: ServerClient, journal: SharedJournal?) {
+        self.client = client
+        self.journal = journal
+        // iOS can refuse this start from the background, so it happens while the app is on screen.
+        do { try engine.start() }
+        catch { journal?.append("Голос сервера: движок не запустился: \(error.localizedDescription)") }
+    }
+
+    func speak(_ text: String) {
+        stop()
+        playback = Task { [weak self] in await self?.play(text) }
+    }
+
+    func speakAndWait(_ text: String) async {
+        guard !Task.isCancelled else { return }
+        speak(text)
+        let playback = playback
+        await withTaskCancellationHandler { await playback?.value } onCancel: { playback?.cancel() }
+    }
+
+    func stop() {
+        playback?.cancel()
+        playback = nil
+        player.stop()
+        fallback.stop()
+    }
+
+    func finish() {
+        stop()
+        engine.stop()
+        client = nil
+    }
+
+    private func play(_ text: String) async {
+        guard !text.isEmpty else { return }
+        guard let client else {
+            await fallback.speakAndWait(text)
+            return
+        }
+        let started = Date()
+        var frames = 0
+        do {
+            if !engine.isRunning { try engine.start() }
+            var pending = Data(capacity: Self.bufferBytes)
+            for try await byte in try await client.speech(text) {
+                pending.append(byte)
+                guard pending.count == Self.bufferBytes else { continue }
+                if frames == 0 {
+                    journal?.append("Голос сервера: первый звук через \(Int(Date().timeIntervalSince(started) * 1000)) мс")
+                }
+                frames += schedule(pending)
+                pending.removeAll(keepingCapacity: true)
+            }
+            frames += schedule(pending)
+            try Task.checkCancellation()
+            guard frames > 0 else { throw ClientError.invalidResponse }
+            await finishPlaying(seconds: Double(frames) / Self.sampleRate)
+        } catch {
+            guard !Task.isCancelled else { return }
+            journal?.append("Голос сервера: \(error.localizedDescription)")
+            if frames == 0 { await fallback.speakAndWait(text) }
+        }
+    }
+
+    private func schedule(_ data: Data) -> Int {
+        let frames = data.count / 2
+        guard frames > 0, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)),
+              let samples = buffer.floatChannelData?[0] else { return 0 }
+        buffer.frameLength = AVAudioFrameCount(frames)
+        data.withUnsafeBytes { raw in
+            for index in 0..<frames {
+                samples[index] = Float(Int16(littleEndian: raw.loadUnaligned(fromByteOffset: index * 2, as: Int16.self))) / 32768
+            }
+        }
+        player.scheduleBuffer(buffer)
+        if !player.isPlaying, engine.isRunning { player.play() }  // Playing on a stopped engine crashes the app.
+        return frames
+    }
+
+    private func finishPlaying(seconds: TimeInterval) async {
+        guard player.isPlaying, let end = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1) else { return }
+        end.frameLength = 1
+        end.floatChannelData?[0][0] = 0
+        let watchdog = Task { [weak self] in  // A route change stops the engine with no callback at all.
+            try? await Task.sleep(nanoseconds: UInt64((seconds + 2) * 1_000_000_000))
+            if !Task.isCancelled { self?.player.stop() }
+        }
+        await withCheckedContinuation { continuation in
+            Self.schedule(end, on: player) { continuation.resume() }
+        }
+        watchdog.cancel()
+    }
+
+    // Nonisolated because the player calls back on its own thread.
+    private nonisolated static func schedule(_ buffer: AVAudioPCMBuffer, on player: AVAudioPlayerNode,
+                                             then done: @escaping @Sendable () -> Void) {
+        player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { _ in done() }
+    }
 }
 
 @MainActor

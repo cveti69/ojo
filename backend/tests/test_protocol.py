@@ -6,10 +6,11 @@ import json
 
 import pytest
 from PIL import Image
-from starlette.testclient import WebSocketDenialResponse
+from starlette.testclient import TestClient, WebSocketDenialResponse
 from starlette.websockets import WebSocketDisconnect
 
 from app import config
+from app.server import create_app
 from conftest import AUTH, TOKEN, answer, idle, jpeg, new_session, post_frame, receive_type, wav
 
 
@@ -20,7 +21,7 @@ def test_health_and_session_defaults(backend):
     assert response.status_code == 201
     session = backend.store.sessions[response.json()["session_id"]]
     assert (session.goal, session.user_lang, session.target_lang, session.text_entry, session.app_lang) == (
-        "", "ru", "id", "keyboard", "id"
+        "", "ru", "id", "clipboard", "id"
     )
     assert client.get("/sessions/" + session.id + "/suggestions", headers=AUTH).json() == {
         "step_id": None, "texts": [], "hint_ru": ""
@@ -94,7 +95,7 @@ def test_unknown_session_debug_translation_websocket(backend):
 
 def test_full_protocol_and_debug(backend):
     client = backend.client
-    session_id = new_session(client)
+    session_id = new_session(client, text_entry="keyboard")
     prefix = "/sessions/" + session_id
     assert client.get(prefix + "/hint", headers=AUTH).status_code == 204
     reply = client.post(prefix + "/goal", headers=AUTH, json={"goal": "Помоги купить шампунь"})
@@ -140,6 +141,24 @@ def test_full_protocol_and_debug(backend):
     assert post_frame(client, session_id).status_code == 409
 
 
+def test_broadcast_can_finish_after_the_call_ended(backend):
+    session_id = new_session(backend.client)
+    prefix = "/sessions/" + session_id
+    client = backend.client
+    assert client.post(prefix + "/broadcast", headers=AUTH, json={"state": "started"}).status_code == 200
+    assert client.post(prefix + "/end", headers=AUTH).status_code == 200
+    assert client.post(prefix + "/broadcast", headers=AUTH, json={"state": "finished"}).json() == {"ok": True}
+    assert client.post(prefix + "/broadcast", headers=AUTH, json={"state": "started"}).status_code == 409
+
+
+def test_hint_says_where_its_time_went(backend):
+    session_id = new_session(backend.client)
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    timings = backend.store.sessions[session_id].last_hint["timings"]
+    assert set(timings) == {"queue_ms", "model_ms", "box_ms", "box_source"}
+
+
 def test_model_done_event(backend):
     session_id = new_session(backend.client)
     backend.meta.answers = [answer(done=True, instruction="Готово")]
@@ -163,10 +182,27 @@ def test_clipboard_and_keyboard(backend, mode, action, expected):
     idle(backend, session_id)
     event = backend.client.get("/sessions/" + session_id + "/hint", headers=AUTH).json()
     assert event["paste_text"] == ("sampo anti ketombe" if expected else None)
-    assert ("«Вставить»" in event["instruction_ru"]) is expected
+    assert ("над клавиатурой" in event["instruction_ru"]) is expected
+    assert ("sampo anti ketombe" in event["instruction_ru"]) is expected
     assert backend.client.get("/sessions/" + session_id + "/suggestions", headers=AUTH).json()["texts"] == [
         "sampo anti ketombe", "sampo"
     ]
+
+
+@pytest.mark.parametrize("mode,lang,model_reply,expected", [
+    ("clipboard", "id", "sampo anti ketombe", "sampo anti ketombe"),
+    ("clipboard", "id", '"sampo anti ketombe"\n', "sampo anti ketombe"),
+    ("clipboard", "id", "NONE", None),
+    ("clipboard", "id", None, None),
+    ("clipboard", "auto", "sampo anti ketombe", None),
+    ("keyboard", "id", "sampo anti ketombe", None),
+])
+def test_ready_text_comes_with_the_goal(backend, mode, lang, model_reply, expected):
+    backend.meta.ready_text = model_reply
+    session_id = new_session(backend.client, text_entry=mode, target_lang=lang)
+    reply = backend.client.post("/sessions/" + session_id + "/goal", headers=AUTH, json={"goal": "Купить шампунь"})
+    assert reply.status_code == 200
+    assert reply.json()["ready_text"] == expected and "демонстрацию экрана" in reply.json()["reply_ru"]
 
 
 def test_confirmation_stops_analysis_and_overrides_clipboard(backend):
@@ -230,3 +266,28 @@ def test_invalid_payloads(backend, monkeypatch):
     assert client.post("/transcribe", headers={**AUTH, "Content-Type": "audio/wav"}, content=wav()).status_code == 413
     monkeypatch.setattr(config, "MAX_FRAME_BYTES", 4)
     assert post_frame(client, session_id).status_code == 413
+
+
+class FakeVoice:
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.texts = []
+
+    def stream(self, text):
+        if self.fail:
+            raise OSError("refused")
+        self.texts.append(text)
+        return iter([b"ab", b"cd"])
+
+
+@pytest.mark.parametrize("fail,status", [(False, 200), (True, 502)])
+def test_speech_streams_the_agents_words(backend, fail, status):
+    voice = FakeVoice(fail)
+    with TestClient(create_app(synthesizer=voice)) as client:
+        assert client.post("/speech", json={"text": "Нажми"}).status_code == 401
+        assert client.post("/speech", headers=AUTH, json={"text": ""}).status_code == 422
+        reply = client.post("/speech", headers=AUTH, json={"text": "Нажми"})
+    assert reply.status_code == status
+    if not fail:
+        assert reply.content == b"abcd" and reply.headers["content-type"] == "audio/pcm"
+        assert voice.texts == ["Нажми"]

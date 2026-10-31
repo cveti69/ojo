@@ -90,7 +90,7 @@ def text(prompt: str, system: str = "", timeout: float = 60) -> str:
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    reply = chat(config.META_TEXT_MODEL, messages, timeout=timeout)
+    reply = chat(config.META_TEXT_MODEL, messages, effort=config.META_REASONING, timeout=timeout)
     result = reply.get("text")
     if not isinstance(result, str) or not result.strip():
         raise MetaError(502, "Пустой ответ текстовой модели.")

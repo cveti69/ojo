@@ -9,13 +9,14 @@
 
 | Метод и путь | Кто вызывает | Тело | Ответ |
 |---|---|---|---|
-| `POST /sessions` | приложение | `{"goal": "", "user_lang": "ru", "target_lang": "id", "text_entry": "keyboard"}` | `201 {"session_id": "s_ab12cd34"}` |
-| `POST /sessions/{id}/goal` | приложение | `{"goal": "Заказать шампунь от перхоти"}` | `200 {"reply_ru": "Хорошо. Включи демонстрацию экрана."}`. Если трансляция уже идёт, сервер сразу разбирает последний кадр |
+| `POST /sessions` | приложение | `{"goal": "", "user_lang": "ru", "target_lang": "id", "text_entry": "clipboard"}` | `201 {"session_id": "s_ab12cd34"}` |
+| `POST /sessions/{id}/goal` | приложение | `{"goal": "Заказать шампунь от перхоти"}` | `200 {"reply_ru": "Хорошо. Включи демонстрацию экрана.", "ready_text": "sampo anti ketombe"}`. Если трансляция уже идёт, сервер сразу разбирает последний кадр |
 | `POST /transcribe` | приложение | `audio/wav`: моно, 16 бит, 16 кГц | `200 {"text": "..."}` |
 | `POST /sessions/{id}/frames` | расширение записи | `image/jpeg` | `202 {"accepted": true}` или `202 {"accepted": false, "reason": "busy"}` |
 | `POST /sessions/{id}/text` | расширение записи или приложение | `{"frame_ts": 1793436844526, "lines": [{"text": "Beli sekarang", "words": [{"text": "Beli", "box": [0.1, 0.8, 0.2, 0.83]}]}]}` | `200 {"ok": true}` |
 | `GET /sessions/{id}/suggestions` | клавиатура | | `200 {"step_id": "s3", "texts": ["sampo anti ketombe"], "hint_ru": "запрос для поиска"}` |
 | `GET /sessions/{id}/hint?after=s3` | приложение, запасной путь без WebSocket, раз в секунду | | `200` событие `hint` новее `after`, иначе `204` |
+| `POST /speech` | приложение | `{"text": "Нажми на поиск"}` | `200 audio/pcm`: 24 кГц, 16 бит, моно, по мере готовности. `502`, если озвучка недоступна: фразу читает системный голос |
 | `POST /translate` | клавиатура | `{"text": "...", "from": "ru", "to": "id", "session_id": "s_ab12cd34"}` | `200 {"text": "..."}` |
 | `POST /sessions/{id}/broadcast` | расширение записи | `{"state": "started"}` или `{"state": "finished"}` | `200 {"ok": true}` |
 | `POST /sessions/{id}/end` | приложение | | `200 {"ok": true}` |
@@ -26,6 +27,10 @@
 `target_lang` может быть `"auto"`: тогда язык приложения определяет модель по экрану. `text_entry` принимает `"keyboard"`
 или `"clipboard"`. Кадр сопровождают заголовки `X-Frame-Width` и `X-Frame-Height` (исходный размер экрана в пикселях) и
 `X-Frame-Ts` (время кадра в миллисекундах). Расширение не шлёт новый кадр, пока прошлый запрос в полёте.
+
+Если во время разбора приходит кадр с новым экраном, разбор старого бросается и подсказка для него не выходит: сразу начинается
+разбор нового кадра. Новым считается экран, где изменилось не меньше 25% кадра: наше окно столько не меняет, а клавиатура и любой
+новый экран меняют. На экране, который не успокаивается, бросить можно 4 разбора подряд, следующий идёт до конца.
 
 `/text` несёт текст экрана, распознанный на телефоне: `frame_ts` равен `X-Frame-Ts` того же кадра, рамки в долях 0–1 от левого
 верхнего угла. Запрос необязателен и может прийти после кадра: рамку сервер выбирает, когда модель уже ответила, то есть через
@@ -38,16 +43,22 @@
 ```json
 {"type": "hint", "step_id": "s3", "instruction_ru": "Нажми на строку поиска вверху", "speak": true,
  "image_jpeg_base64": "...", "insert_texts": ["sampo anti ketombe"], "insert_hint_ru": "запрос для поиска",
- "paste_text": null, "needs_user_confirm": false, "frame_ts": 1793436844526}
-{"type": "status", "state": "analyzing", "text_ru": "Агент думает"}
+ "paste_text": null, "needs_user_confirm": false, "frame_ts": 1793436844526,
+ "timings": {"queue_ms": 12, "model_ms": 2710, "box_ms": 3, "box_source": "text"}}
+{"type": "status", "state": "analyzing", "text_ru": "Агент думает", "new_screen": false}
 {"type": "done", "text_ru": "Готово, цель достигнута"}
 ```
 
-`status.state`: `waiting_frames`, `broadcasting`, `analyzing`, `broadcast_stopped`, `error`.
+`status.state`: `waiting_frames`, `broadcasting`, `analyzing`, `broadcast_stopped`, `error`. `new_screen` есть только при `analyzing`:
+экран уже не тот, что на последней подсказке, поэтому приложение убирает её из окна, пока агент смотрит. `timings` нужны для журнала.
 
 Если `text_entry` равен `clipboard`, в подсказке есть `paste_text`: приложение кладёт его в буфер обмена сразу при получении
-события, а `instruction_ru` просит зажать поле и выбрать «Вставить». При `keyboard` поле `paste_text` равно `null`, а тексты
-берёт клавиатура из `/suggestions`.
+события, а `instruction_ru` просит нажать на этот текст над клавиатурой или набрать его. При `keyboard` поле `paste_text`
+равно `null`, а тексты берёт клавиатура из `/suggestions`.
+
+iOS пускает приложение в фоне к буферу только при открытом окне, поэтому текст идёт ещё двумя путями. Ответ на `/goal` несёт
+`ready_text`: вероятный первый текст на языке приложения, пока приложение на экране. Его нет при `keyboard`, при `target_lang`
+равном `auto` и когда вводить нечего. Если запись `paste_text` не прошла, приложение повторяет её, когда человек возвращается.
 
 `image_jpeg_base64` всегда 720×960. Голос подсказки на телефоне: `instruction_ru`, если `speak` равен `true`. `frame_ts` равен
 `X-Frame-Ts` кадра, по которому сделана подсказка: так телефон меряет полное время от кадра до подсказки.

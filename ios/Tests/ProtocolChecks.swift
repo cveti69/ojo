@@ -46,8 +46,9 @@ private final class StubState: @unchecked Sendable {
         let path = request.url!.path
         if path.hasSuffix("/hint"), noHint { noHint = false; return (204, "") }
         if path == "/api/sessions" { return (201, #"{"session_id":"session-test"}"#) }
-        if path.hasSuffix("/goal") { return (200, #"{"reply_ru":"Включите трансляцию"}"#) }
+        if path.hasSuffix("/goal") { return (200, #"{"reply_ru":"Включите трансляцию","ready_text":"sampo"}"#) }
         if path.hasSuffix("/frames") { return (202, #"{"accepted":false,"reason":"busy"}"#) }
+        if path.hasSuffix("/speech") { return (200, "abcd") }
         if path.hasSuffix("/suggestions") { return (200, #"{"step_id":"s3","texts":["hello"],"hint_ru":"запрос"}"#) }
         if path.hasSuffix("/transcribe") || path.hasSuffix("/translate") { return (200, #"{"text":"Результат"}"#) }
         if path.hasSuffix("/hint") {
@@ -106,7 +107,10 @@ private enum ProtocolChecks {
         let created = try await client.createSession()
         try check(created.sessionID == "session-test", "session_id decoding")
         let reply = try await client.setGoal("Цель", sessionID: created.sessionID)
-        try check(reply.replyRU == "Включите трансляцию", "reply_ru decoding")
+        try check(reply.replyRU == "Включите трансляцию" && reply.readyText == "sampo", "goal response decoding")
+        var spoken = 0
+        for try await _ in try await client.speech("Привет") { spoken += 1 }
+        try check(spoken == 4, "speech bytes")
         let frame = try await client.sendFrame(Data([0xff, 0xd8, 0xff, 0xd9]), sessionID: created.sessionID,
                                                width: 1170, height: 2532, timestampMS: 123456789)
         try check(!frame.accepted && frame.reason == "busy", "busy frame response")
@@ -218,12 +222,12 @@ private enum ProtocolChecks {
         try check(configuration.defaultServerToken == "fixture-token", "token from Info.plist")
         let defaults = MemoryDefaults()
         let store = try SharedStore(configuration: configuration, defaults: defaults)
-        try check(store.screenTextMode == .app, "default screenTextMode")
+        try check(store.screenTextMode == .extension, "default screenTextMode")
         store.screenTextMode = .extension
-        try check(defaults.string(forKey: "screenTextMode") == "extension", "persisted screenTextMode")
+        try check(defaults.string(forKey: "screenReading") == "extension", "persisted screenTextMode")
         store.screenTextMode = .extensionFast
         let reloaded = try SharedStore(configuration: configuration, defaults: defaults)
-        try check(defaults.string(forKey: "screenTextMode") == "extensionFast" && reloaded.screenTextMode == .extensionFast,
+        try check(defaults.string(forKey: "screenReading") == "extensionFast" && reloaded.screenTextMode == .extensionFast,
                   "restore extensionFast from App Group")
         store.seedDefaultToken(configuration.defaultServerToken)
         try check(store.settings.token == "fixture-token", "seed missing token")

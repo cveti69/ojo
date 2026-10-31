@@ -9,6 +9,7 @@ export SHARED_TOKEN='задай общий токен сервера и теле
 export META_API_KEY='задай ключ Meta'
 export META_VISION_MODEL='доступная модель с изображениями'
 export META_TEXT_MODEL='доступная текстовая модель'
+export ELEVENLABS_API_KEY='задай ключ Eleven Labs, без него фразы читает системный голос телефона'
 .venv/bin/uvicorn app.server:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
