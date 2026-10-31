@@ -55,8 +55,8 @@ General vision models name the right element but miss its pixels, and a wrong ci
 
 | Method | All | Scenario steps | Icons |
 |---|---:|---:|---:|
-| Muse Spark 1.3 alone | 66 of 120 | 17 of 24 | 26 of 51 |
-| With text recognition and SAM 3.1 | **110 of 120** | **22 of 24** | **44 of 51** |
+| Muse Spark 1.3 alone | 72 of 120 | 16 of 24 | 26 of 51 |
+| With text recognition and SAM 3.1 | **107 of 120** | **23 of 24** | **41 of 51** |
 
 The median time for one step stayed at 3.1 seconds, because SAM runs next to the model and not after it. The bench is in
 [backend/eval](backend/eval). Its screenshots are not in this repository, because they show personal data.
