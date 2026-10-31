@@ -172,7 +172,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 check.run.journal.append("Не удалось сжать кадр")
                 return
             }
-            upload(jpeg, thumbnail: thumbnail, size: size, timestamp: timestamp, run: check.run)
+            upload(jpeg, sample: sample, thumbnail: thumbnail, size: size, timestamp: timestamp, run: check.run)
         }
     }
 
@@ -225,7 +225,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         return id
     }
 
-    private func upload(_ jpeg: Data, thumbnail: [UInt8], size: CGSize, timestamp: Int64, run: Run) {
+    private func upload(_ jpeg: Data, sample: Sample, thumbnail: [UInt8], size: CGSize, timestamp: Int64, run: Run) {
         let ticket = UUID()
         let reserved = lock.withLock { () -> Bool in
             guard runID == run.id, !finished, !requestInFlight else { return false }
@@ -242,8 +242,9 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 // Any decoded server response confirms delivery, including all skip reasons.
                 frameCompleted(delivered: true, thumbnail: thumbnail, size: size, runID: run.id)
             } catch {
-                let networkFailure = error is URLError || error is CancellationError
-                frameCompleted(delivered: !networkFailure, thumbnail: thumbnail, size: size, runID: run.id)
+                // A refused frame goes out again, or a still screen would stay unseen after the goal arrives.
+                frameCompleted(delivered: false, thumbnail: thumbnail, size: size, runID: run.id)
+                lock.withLock { if runID == run.id, !finished, heldSample == nil { heldSample = sample } }
                 if !Task.isCancelled { run.journal.append("Ошибка отправки кадра: \(error.localizedDescription)") }
                 if error as? ClientError == .http(404) || error as? ClientError == .http(401) {
                     stopForError(error, runID: run.id)
