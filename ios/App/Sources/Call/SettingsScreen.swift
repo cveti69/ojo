@@ -91,6 +91,13 @@ struct SettingsScreen: View {
                 Text("С агентом можно говорить из другого приложения: спросить по ходу или поменять цель. Микрофон включён до конца звонка.")
             }
             Section {
+                Toggle("Глазки", isOn: Binding(get: { model.showsEyes }, set: { model.setShowsEyes($0) }))
+                    .disabled(model.isCallActive)
+                NavigationLink("Показать глазки") { EyesPreviewScreen() }
+            } footer: {
+                Text("Глаза в окне между подсказками: показывают, что агент смотрит, думает или слушает. Включаются со следующего звонка.")
+            }
+            Section {
                 Button("Сохранить") { save() }
                     .disabled(model.store == nil)
                 if !form.message.isEmpty { Text(form.message) }

@@ -6,6 +6,7 @@ final class HintEventConnection {
     var onEvent: ((ServerEvent) -> Void)?
     var onDiagnostic: ((String) -> Void)?
     var onSessionExpired: (() -> Void)?
+    var onReachable: ((Bool) -> Void)?
     private let client: ServerClient
     private var socket: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
@@ -65,12 +66,14 @@ final class HintEventConnection {
                         try Task.checkCancellation()
                         if let event { self.deliver(event) }
                         previousError = nil
+                        self.onReachable?(true)
                     } catch {
                         if Task.isCancelled { break }
                         if error as? ClientError == .http(404) || error as? ClientError == .http(401) {
                             self.onSessionExpired?()
                             break
                         }
+                        self.onReachable?(false)
                         if error.localizedDescription != previousError {
                             previousError = error.localizedDescription
                             self.onDiagnostic?("Ошибка /hint: \(error.localizedDescription)")
@@ -117,6 +120,7 @@ final class HintEventConnection {
                         if !self.socketAvailable {
                             self.socketAvailable = true
                             self.onDiagnostic?("WebSocket подключён")
+                            self.onReachable?(true)
                         }
                     }
                 }

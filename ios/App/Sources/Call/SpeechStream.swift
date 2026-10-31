@@ -54,14 +54,16 @@ final class SpeechStream {
         isOpen = false
     }
 
-    func send(_ samples: [Int16]) {
-        guard isOpen, let socket else { return }
+    @discardableResult
+    func send(_ samples: [Int16]) -> Bool {
+        guard isOpen, let socket else { return false }
         let data = samples.withUnsafeBytes { Data($0) }  // Little-endian, as the server expects.
         let log = onDiagnostic
         Task {
             do { try await socket.send(.data(data)) }
             catch { log?("Поток речи: звук не ушёл: \(error.localizedDescription)") }
         }
+        return true
     }
 
     private func startPings(_ socket: URLSessionWebSocketTask) {

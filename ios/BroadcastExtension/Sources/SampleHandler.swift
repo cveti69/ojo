@@ -13,6 +13,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         static let thumbnailSide = 64
         static let changeThreshold = 0.025
         static let movedThreshold = 0.08  // New screens change a frame by 0.17 and more, a new picture in our window by 0.06 at most.
+        static let movedShare = 0.3  // With our window left out. On public pages a banner or a video reaches 0.29, the keyboard 0.33, a new screen 0.63.
         static let memoryReserve = 8 * 1024 * 1024
         static let textMemoryReserve = 16 * 1024 * 1024
     }
@@ -25,6 +26,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         let client: ServerClient
         let mailbox: ScreenTextMailbox?
         let shelf: FrameShelf?
+        let leavesWindowOut: Bool  // Our window moves when it shows eyes, and that must not look like a moving screen.
     }
 
     private struct FrameCheck {
@@ -68,6 +70,9 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private var heldSample: Sample?
     private var stillness = ScreenStillness()
     private var movedSent = false
+    private var windowPatch: ScreenPatch?
+    private var windowLooks = 0
+    private var windowFinds = 0
     private var keptFrame: KeptFrame?
     private var owesFrame = false
     private var seenMode = CallMode.lead
@@ -92,7 +97,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             guard !settings.token.isEmpty else { throw ClientError.missingToken }
             let run = Run(id: id, sessionID: sessionID, store: store, journal: journal,
                           client: ServerClient(settings: settings), mailbox: try? ScreenTextMailbox(configuration: configuration),
-                          shelf: try? FrameShelf(configuration: configuration))
+                          shelf: try? FrameShelf(configuration: configuration), leavesWindowOut: settings.eyes)
             let ticket = UUID()
             lock.withLock {
                 self.run = run
@@ -100,7 +105,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 requestInFlight = true
                 requestID = ticket
             }
-            journal.append("Старт; только видео, 500 мс, JPEG 0,6, длинная сторона \(Int(Capture.maximumDimension)) px; текст: \(store.screenTextMode.rawValue); режим: \(settings.mode.rawValue)")
+            journal.append("Старт; только видео, 500 мс, JPEG 0,6, длинная сторона \(Int(Capture.maximumDimension)) px; текст: \(store.screenTextMode.rawValue); режим: \(settings.mode.rawValue); глаза: \(settings.eyes ? "да" : "нет")")
             startMonitoring(run: run)
             let task = Task { [self] in
                 do {
@@ -175,10 +180,11 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             let size = image.extent.size
             guard size.width > 0, size.height > 0 else { return }
             let thumbnail = makeThumbnail(image)
+            let patch = check.run.leavesWindowOut ? findWindow(image) : nil
             let previous = size == check.previousSize ? check.previousThumbnail : nil
-            let change = previous.map { ScreenStillness.difference(thumbnail, $0) }
+            let change = previous.map { ScreenStillness.difference(thumbnail, $0, outside: patch) }
             let now = ProcessInfo.processInfo.systemUptime
-            let (settled, afterMove) = lock.withLock { (stillness.see(thumbnail, at: now), movedSent) }
+            let (settled, afterMove, waited) = lock.withLock { (stillness.see(thumbnail, at: now, outside: patch), movedSent, stillness.waited) }
             guard (change ?? 1) >= Capture.changeThreshold || afterMove else {
                 skipFrame(runID: check.run.id)
                 return
@@ -186,9 +192,16 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             let mode = check.run.store.callMode
             guard settled else {
                 hold(sample, runID: check.run.id)  // Frames stop with the screen, so the monitor looks at this one again.
-                if mode == .lead, let change, change >= Capture.movedThreshold { signalMoved(check.run) }
+                if mode == .lead, let previous, let change {
+                    let moved = check.run.leavesWindowOut ? ScreenStillness.changedShare(thumbnail, previous, outside: patch) >= Capture.movedShare
+                        : change >= Capture.movedThreshold
+                    if moved { signalMoved(check.run) }
+                }
                 skipFrame(runID: check.run.id)
                 return
+            }
+            if waited > 0 {
+                check.run.journal.append("Экран успокоился за \(String(format: "%.1f", locale: Locale(identifier: "ru_RU"), waited)) с")
             }
             let scale = min(1, Capture.maximumDimension / max(size.width, size.height))
             let bounds = CGRect(x: 0, y: 0, width: floor(size.width * scale), height: floor(size.height * scale))
@@ -270,6 +283,9 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             heldSample = nil
             stillness = ScreenStillness()
             movedSent = false
+            windowPatch = nil
+            windowLooks = 0
+            windowFinds = 0
             keptFrame = nil
             owesFrame = false
             seenMode = .lead
@@ -406,6 +422,30 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         return bytes
     }
 
+    /// A missed look keeps the last place: a window that seems to jump would count as a change.
+    private func findWindow(_ image: CIImage) -> ScreenPatch? {
+        let scale = CGFloat(WindowFinder.longSide) / max(image.extent.width, image.extent.height)
+        let width = Int((image.extent.width * scale).rounded())
+        let height = Int((image.extent.height * scale).rounded())
+        let small = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        bytes.withUnsafeMutableBytes { buffer in
+            if let address = buffer.baseAddress {
+                context.render(small, toBitmap: address, rowBytes: width * 4,
+                               bounds: CGRect(x: 0, y: 0, width: width, height: height), format: .RGBA8, colorSpace: colorSpace)
+            }
+        }
+        let found = WindowFinder.find(bytes, width: width, height: height, side: Capture.thumbnailSide)
+        return lock.withLock {
+            windowLooks += 1
+            if let found {
+                windowFinds += 1
+                windowPatch = found
+            }
+            return windowPatch
+        }
+    }
+
     private func makeJPEG(_ image: CIImage) -> Data? {
         guard let cgImage = context.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: colorSpace) else { return nil }
         let data = NSMutableData()
@@ -533,11 +573,11 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
 
     private func monitor(run: Run) {
         let now = ProcessInfo.processInfo.systemUptime
-        let statistics = lock.withLock { () -> (Bool, Int, Int, Bool)? in
+        let statistics = lock.withLock { () -> (Bool, Int, Int, Bool, String)? in
             guard runID == run.id, !finished else { return nil }
             let report = now - lastStatistics >= 5
             if report { lastStatistics = now }
-            return (report, sent, skipped, requestInFlight)
+            return (report, sent, skipped, requestInFlight, run.leavesWindowOut ? "; окно на кадрах: \(windowFinds) из \(windowLooks)" : "")
         }
         guard let statistics else { return }
         sendHeldSample()
@@ -547,7 +587,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             stopForError(BroadcastError.ended, runID: run.id)  // Apple has no stop without this system alert.
         } else if statistics.0 {
             let availableMB = os_proc_available_memory() / 1_048_576
-            run.journal.append("Кадров доставлено: \(statistics.1), пропущено: \(statistics.2); запрос кадра в полёте: \(statistics.3 ? "да" : "нет"); доступно памяти: \(availableMB) МБ")
+            run.journal.append("Кадров доставлено: \(statistics.1), пропущено: \(statistics.2); запрос кадра в полёте: \(statistics.3 ? "да" : "нет"); доступно памяти: \(availableMB) МБ\(statistics.4)")
         }
     }
 

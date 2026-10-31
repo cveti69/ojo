@@ -9,6 +9,7 @@ public struct CreateSessionRequest: Encodable, Sendable {
     public let character: AgentCharacter
     public let ownCharacter: String
     public let mode: CallMode
+    public let eyes: Bool?  // Left out when off, so nothing changes for the server.
 
     public init(settings: ServerSettings, goal: String = "") {
         self.goal = goal
@@ -19,11 +20,12 @@ public struct CreateSessionRequest: Encodable, Sendable {
         character = settings.character
         ownCharacter = settings.ownCharacter
         mode = settings.mode
+        eyes = settings.eyes ? true : nil
     }
 
     enum CodingKeys: String, CodingKey {
         case goal, userLang = "user_lang", targetLang = "target_lang", textEntry = "text_entry"
-        case effort, character, ownCharacter = "own_character", mode
+        case effort, character, ownCharacter = "own_character", mode, eyes
     }
 }
 
@@ -83,9 +85,13 @@ public struct HintEvent: Decodable, Sendable {
     public let needsUserConfirm: Bool
     public let frameTS: Int64?
     public let timings: HintTimings?
+    public let eyesBox: [Double]?
+    public let gaze: [Double]?
+    public let calm: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case stepID = "step_id", instructionRU = "instruction_ru", speak, timings
+        case stepID = "step_id", instructionRU = "instruction_ru", speak, timings, gaze, calm
+        case eyesBox = "eyes_box"
         case imageJPEGBase64 = "image_jpeg_base64", insertTexts = "insert_texts"
         case insertHintRU = "insert_hint_ru", pasteText = "paste_text", needsUserConfirm = "needs_user_confirm"
         case frameTS = "frame_ts"

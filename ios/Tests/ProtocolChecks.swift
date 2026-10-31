@@ -328,6 +328,222 @@ private enum ProtocolChecks {
         try check(calm.see(cursor, at: 2), "a blinking cursor is no change")
         try check(ScreenStillness.difference(side, other) > 0.1 && ScreenStillness.difference(side, side) == 0, "difference")
         try check(ScreenStillness.difference(side, []) == 1, "different sizes count as a new screen")
+        try checkWindowLeftOut()
+        try checkWindowFinder()
+        try checkEyes()
+    }
+
+    /// A page with a picture of its own, and a window whose picture moves every look.
+    private static func movingWindow(_ look: Int) -> [UInt8] {
+        var picture = (0..<4096).map { UInt8(120 + ($0 * 7) % 90) }
+        for y in 20..<46 {
+            for x in 6..<28 {
+                let inPupil = abs(x - 12 - look % 3 * 3) + abs(y - 30) < 6
+                picture[y * 64 + x] = inPupil ? 0 : 240
+            }
+        }
+        return picture
+    }
+
+    private static func checkWindowLeftOut() throws {
+        let patch = ScreenPatch(left: 6.0 / 64, top: 20.0 / 64, right: 28.0 / 64, bottom: 46.0 / 64, side: 64)
+        try check(patch.left == 5 && patch.top == 19 && patch.right == 29 && patch.bottom == 47, "the patch takes one more cell")
+        try check(ScreenPatch(left: 0, top: 0, right: 1, bottom: 1, side: 64).right == 64, "the patch stays on the picture")
+        try check(ScreenStillness.difference(movingWindow(0), movingWindow(1)) >= ScreenStillness.threshold, "eyes do move the small picture")
+        try check(ScreenStillness.difference(movingWindow(0), movingWindow(1), outside: patch) == 0, "the window is left out")
+        func settles(outside patch: ScreenPatch?) -> Double {
+            var stillness = ScreenStillness()
+            var look = 0
+            while !stillness.see(movingWindow(look), at: Double(look) * 0.5 + 0.03 * Double(look % 2), outside: patch) { look += 1 }
+            return stillness.waited
+        }
+        try check(settles(outside: nil) >= ScreenStillness.longestWait, "with the window counted a hint waits for the limit")
+        try check(settles(outside: patch) <= ScreenStillness.stillFor + 0.5, "with the window left out it waits as on a still screen")
+        let page = movingWindow(0)
+        var another = page
+        for index in 0..<3000 { another[index] = 30 }
+        try check(ScreenStillness.difference(page, another, outside: patch) > 0.1, "a new screen still counts")
+        try check(ScreenStillness.changedShare(page, another, outside: patch) > 0.5, "and it counts as a new screen")
+        var banner = page
+        for index in 0..<(64 * 14) { banner[index] = 30 }
+        try check(ScreenStillness.changedShare(page, banner, outside: patch) < 0.3, "a banner does not")
+    }
+
+    private static func picture(width: Int, height: Int, window: (x: Int, y: Int, width: Int)?) -> [UInt8] {
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        for y in 0..<height {
+            for x in 0..<width {
+                let shade = UInt8(200 + (x / 7 + y / 11) % 40)
+                pixels.replaceSubrange((y * width + x) * 4..<(y * width + x) * 4 + 4, with: [shade, shade, shade, 255])
+            }
+        }
+        guard let window else { return pixels }
+        let tall = window.width * 4 / 3
+        let line = max(2, window.width * 35 / 1000)
+        for y in window.y..<(window.y + tall) {
+            for x in window.x..<(window.x + window.width) {
+                let onBorder = x < window.x + line || x >= window.x + window.width - line || y < window.y + line || y >= window.y + tall - line
+                let color: [UInt8] = onBorder ? [245, 12, 165, 255] : (x + y).isMultiple(of: 5) ? [255, 255, 255, 255] : [0, 0, 0, 255]
+                pixels.replaceSubrange((y * width + x) * 4..<(y * width + x) * 4 + 4, with: color)
+            }
+        }
+        return pixels
+    }
+
+    private static func checkWindowFinder() throws {
+        let (width, height) = (185, 400)
+        for (x, y, side) in [(10, 150, 74), (90, 40, 60), (20, 200, 90), (5, 10, 150)] {
+            let patch = try require(WindowFinder.find(picture(width: width, height: height, window: (x, y, side)), width: width, height: height, side: 64),
+                                    "the window at \(x), \(y), \(side) is found")
+            let tall = side * 4 / 3
+            try check(abs(patch.left - x * 64 / width) <= 2 && abs(patch.right - (x + side) * 64 / width) <= 2 &&
+                      abs(patch.top - y * 64 / height) <= 2 && abs(patch.bottom - (y + tall) * 64 / height) <= 2, "the window's place")
+        }
+        try check(WindowFinder.find(picture(width: width, height: height, window: nil), width: width, height: height, side: 64) == nil,
+                  "a page with no window")
+        var banner = picture(width: width, height: height, window: nil)
+        for y in 60..<110 {
+            for x in 0..<width { banner.replaceSubrange((y * width + x) * 4..<(y * width + x) * 4 + 4, with: [245, 12, 165, 255]) }
+        }
+        try check(WindowFinder.find(banner, width: width, height: height, side: 64) == nil, "a pink banner is not a window")
+        try check(WindowFinder.find([], width: width, height: height, side: 64) == nil, "no picture")
+    }
+
+    private static func require<Value>(_ value: Value?, _ message: String) throws -> Value {
+        guard let value else { throw CheckFailure(description: message) }
+        return value
+    }
+
+    /// Plays the eyes the way the timer does, by the moments they ask for. Returns each picture and when it was drawn.
+    private static func play(_ director: inout EyesDirector, from start: Double, to end: Double) -> [(time: Double, pose: EyePose)] {
+        var pictures: [(time: Double, pose: EyePose)] = []
+        var time = start
+        var shown: EyePose?
+        while time < end {
+            let pose = director.advance(to: time)
+            if pose != shown { pictures.append((time, pose)) }
+            shown = pose
+            let next = director.nextChange
+            guard next > time else { return pictures }
+            time = next
+        }
+        return pictures
+    }
+
+    private static func sameRandom() -> () -> Double {
+        var value = 0.31
+        return {
+            value = (value * 9301 + 0.49297).truncatingRemainder(dividingBy: 1)
+            return value
+        }
+    }
+
+    private static func checkEyes() throws {
+        var rest = EyesDirector(random: sameRandom())
+        let quiet = play(&rest, from: 0, to: 60)
+        let gaps = zip(quiet, quiet.dropFirst()).map { $1.time - $0.time }.filter { $0 > 1 }.dropFirst()  // The first blink comes early.
+        try check(gaps.count >= 3 && gaps.allSatisfy { $0 >= 4 }, "at rest nothing is drawn between rare blinks")
+        try check(quiet.count < 120, "at rest there are only a few pictures")
+        try check(quiet.allSatisfy { abs($0.pose.x) < 0.001 && abs($0.pose.y) < 0.001 && $0.pose.brow == 0 }, "at rest they look straight ahead")
+
+        var short = EyesDirector(random: sameRandom())
+        _ = short.advance(to: 1)
+        short.beginWaiting(at: 1)
+        let brief = play(&short, from: 1, to: 1.9)
+        try check(short.mood == .rest && brief.allSatisfy { $0.pose.brow == 0 && $0.pose.x == 0 }, "a wait under a second changes nothing")
+        short.endWaiting()
+
+        var thinking = EyesDirector(random: sameRandom())
+        _ = thinking.advance(to: 1)
+        thinking.beginWaiting(at: 1)
+        let thoughts = play(&thinking, from: 1, to: 3.9).filter { $0.time > 2.2 }
+        try check(thinking.mood == .thinking && thoughts.contains { $0.pose.brow == 1 && $0.pose.squint > 0.3 && $0.pose.y < -0.5 }, "a longer wait looks up, with the brow")
+        try check(Set(thoughts.map { $0.pose.x > 0 }).count == 2, "and to both sides")
+        var moves = 0
+        for (one, two) in zip(thoughts, thoughts.dropFirst()) where abs(one.pose.x - two.pose.x) > 0.01 && two.pose.left > 0.99 { moves += 1 }
+        try check(moves < 12, "jumps are short: a side change takes a couple of pictures, not a slide")
+        try check(!thinking.hasGivenUp(at: 9.9) && thinking.hasGivenUp(at: 10.1), "after nine seconds the eyes give way to words")
+
+        var reader = EyesDirector(random: sameRandom())
+        _ = reader.advance(to: 1)
+        reader.screenChanged(at: 1)
+        let reading = play(&reader, from: 1, to: 3.5)
+        try check(reader.mood == .reading, "a new screen is read")
+        let line = reading.filter { $0.time > 1.1 && $0.time < 1.6 && $0.pose.left > 0.99 }.map(\.pose.x)
+        try check(line.count >= 3 && zip(line, line.dropFirst()).allSatisfy { $1 >= $0 - 0.001 }, "left to right along a line")
+        let rows = reading.map { ($0.pose.y * 10).rounded() / 10 }.reduce(into: [Double]()) { if $0.last != $1 { $0.append($1) } }
+        try check(rows.filter { [-0.6, 0, 0.6].contains($0) }.count >= 3 && (rows.first { $0 != 0 } ?? 0) < 0, "line after line, from the top")
+
+        var listener = EyesDirector(random: sameRandom())
+        _ = listener.advance(to: 1)
+        listener.hear(level: 1, at: 1)
+        var pupil = 0.0
+        for step in 1...3 { pupil = listener.advance(to: 1 + Double(step) * 0.1).pupil }
+        try check(listener.mood == .listening && pupil > 1.4, "the pupil grows with the voice")
+        try check(listener.advance(to: 1.6).x == 0 && listener.mood == .rest, "and silence ends the listening")
+        try check(EyesDirector.level(of: []) == 0 && EyesDirector.level(of: [0, 0, 0]) == 0, "a deaf stream shows no level")
+        try check(EyesDirector.level(of: [Int16](repeating: 12000, count: 1600)) > 0.9, "a loud voice fills the level")
+
+        var pointer = EyesDirector(random: sameRandom())
+        _ = pointer.advance(to: 1)
+        pointer.point(x: 0.8, y: -0.6, at: 1)
+        _ = pointer.advance(to: 1)
+        let flare = pointer.advance(to: 1.2)
+        try check(pointer.mood == .pointing && flare.x > 0.79 && flare.y < -0.59 && flare.left >= 1 && flare.pupil > 1.2, "a hint: wide open, towards the button")
+        try check(pointer.advance(to: 1.9).pupil == 1 && pointer.mood == .pointing, "only for a moment")
+        var look = pointer.advance(to: 2.6)
+        look = pointer.advance(to: 2.7)
+        try check(pointer.mood == .rest && look.x == 0, "then back to rest")
+
+        var calm = EyesDirector(random: sameRandom())
+        calm.isCalm = true
+        calm.beginWaiting(at: 0)
+        calm.screenChanged(at: 0)
+        calm.hear(level: 1, at: 0)
+        calm.rejoice(at: 0)
+        try check(play(&calm, from: 0, to: 12).allSatisfy { $0.pose.x == 0 && $0.pose.brow == 0 && !$0.pose.isHappy }, "payment: nothing but rest")
+
+        var happy = EyesDirector(random: sameRandom())
+        _ = happy.advance(to: 1)
+        happy.rejoice(at: 1)
+        try check(happy.advance(to: 1.5).isHappy && !happy.advance(to: 2.1).isHappy, "arcs for a second")
+
+        var jokes = EyesDirector(random: sameRandom())
+        var seen: [Int] = []
+        var time = 1.0
+        for pause in 0..<40 {
+            jokes.beginWaiting(at: time)
+            let pictures = play(&jokes, from: time, to: time + 5.5)
+            let joked = pictures.contains { abs($0.pose.cross - 1) < 0.01 || $0.pose.right < $0.pose.left * 0.6 || hypot($0.pose.x, $0.pose.y) > 0.84 && $0.pose.y > 0.3 }
+            if joked { seen.append(pause) }
+            jokes.endWaiting()
+            time += 6
+            _ = jokes.advance(to: time)
+        }
+        try check(seen.count >= 7 && seen.count <= 10, "a joke once in four or five pauses: \(seen.count) of 40")
+        try check(zip(seen, seen.dropFirst()).allSatisfy { $1 - $0 >= 4 }, "never two pauses running")
+
+        var painted = [UInt8](repeating: 0, count: 720 * 960 * 4)
+        let inked: (EyePose) throws -> Int = { pose in
+            painted = [UInt8](repeating: 0, count: 720 * 960 * 4)
+            try painted.withUnsafeMutableBytes { bytes in
+                guard let context = CGContext(data: bytes.baseAddress, width: 720, height: 960, bitsPerComponent: 8, bytesPerRow: 2880,
+                                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                    throw CheckFailure(description: "eyes context")
+                }
+                context.translateBy(x: 0, y: 960)
+                context.scaleBy(x: 1, y: -1)
+                EyesPainter.draw(pose, in: CGRect(x: 108, y: 228, width: 504, height: 504), on: context)
+            }
+            return painted.lazy.filter { $0 > 128 }.count
+        }
+        let open = try inked(EyePose())
+        try check(open > 100_000, "the eyes are drawn")
+        let shut = try inked(EyePose(left: 0.05, right: 0.05))
+        try check(shut * 4 < open, "a blink shuts them")
+        _ = try inked(EyePose(x: 1))
+        let onRight = painted[(480 * 720 + 300) * 4] < 128 && painted[(480 * 720 + 150) * 4] > 128
+        try check(onRight, "looking right leaves the left of the eye white")
     }
 
     private static func checkShelf() throws {

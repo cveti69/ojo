@@ -35,6 +35,7 @@ public struct ServerSettings: Sendable, Equatable {
     public var character: AgentCharacter = .warm
     public var ownCharacter = ""
     public var mode: CallMode = .lead
+    public var eyes = false
 }
 
 public final class SharedStore: @unchecked Sendable {
@@ -65,7 +66,8 @@ public final class SharedStore: @unchecked Sendable {
             thinking: ThinkingLevel(rawValue: defaults.string(forKey: "thinkingLevel") ?? "") ?? .auto,
             character: AgentCharacter(rawValue: defaults.string(forKey: "agentManner") ?? "") ?? .warm,
             ownCharacter: defaults.string(forKey: "ownCharacter") ?? "",
-            mode: callMode
+            mode: callMode,
+            eyes: defaults.bool(forKey: "eyes")
         )
     }
 
@@ -120,6 +122,14 @@ public final class SharedStore: @unchecked Sendable {
         get { defaults.bool(forKey: "hearsOverVoice") }
         set {
             defaults.set(newValue, forKey: "hearsOverVoice")
+            defaults.synchronize()
+        }
+    }
+
+    public var eyes: Bool {
+        get { defaults.bool(forKey: "eyes") }
+        set {
+            defaults.set(newValue, forKey: "eyes")
             defaults.synchronize()
         }
     }

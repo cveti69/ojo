@@ -1,7 +1,7 @@
 import UIKit
 
 @MainActor
-protocol HintWindowPresenting: AnyObject {
+protocol HintWindowPresenting: EyesSurface {
     var inlineView: UIView { get }
     var onStateChange: ((HintWindowState) -> Void)? { get set }
     var onRepeatHint: (() -> Void)? { get set }

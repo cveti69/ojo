@@ -26,6 +26,7 @@ final class CallViewModel: ObservableObject {
     @Published private(set) var hearsDuringCall = true
     @Published private(set) var measuresAppleSpeech = false
     @Published private(set) var hearsOverVoice = false
+    @Published private(set) var showsEyes = false
     @Published private(set) var callMode: CallMode = .lead
     @Published private(set) var status = "Позвоните и скажите, что нужно. Нажимаете всегда вы."
     @Published private(set) var lastInstruction = "Подсказок пока нет"
@@ -48,6 +49,7 @@ final class CallViewModel: ObservableObject {
     }
 
     private static let besideWords = "Я рядом"
+    private static let doneWords = "Я на связи"
     private static let sayingFailed = "Не получилось ответить, повтори, пожалуйста."
     private static let streamWait: UInt64 = 2_500_000_000  // Past this the server has not heard the phrase, so it goes as a file.
     private static let warmthGap: UInt64 = 20_000_000_000
@@ -93,6 +95,7 @@ final class CallViewModel: ObservableObject {
     private var droppedSounds = 0
     private var pauseWords = PauseWords()
     private var pause: Task<Void, Never>?
+    private var eyes: EyesStage?
     private var subscriptions = Set<AnyCancellable>()
 
     init(speaker: (any Speaker)? = nil) {
@@ -117,6 +120,7 @@ final class CallViewModel: ObservableObject {
         callMode = store?.callMode ?? .lead
         measuresAppleSpeech = store?.measuresAppleSpeech ?? false
         hearsOverVoice = store?.hearsOverVoice ?? false
+        showsEyes = store?.eyes ?? false
         if let configuration {
             do { shelf = try FrameShelf(configuration: configuration) }
             catch { journal?.append("Полка кадров недоступна: \(error.localizedDescription)") }
@@ -194,7 +198,7 @@ final class CallViewModel: ObservableObject {
                 self.client = client
                 self.sessionID = response.sessionID
                 store.sessionID = response.sessionID
-                try self.beginLocalCall()
+                try self.beginLocalCall(withEyes: settings.eyes)
                 self.speaker.prepare(client: client, journal: self.journal)
                 let own = settings.character == .own ? ", \(settings.ownCharacter.count) знаков" : ""
                 self.journal?.append("Сессия создана; рассуждения: \(settings.thinking.rawValue); характер: \(settings.character.rawValue)\(own); режим: \(settings.mode.rawValue)")
@@ -308,6 +312,8 @@ final class CallViewModel: ObservableObject {
         isLooking = false
         lastJPEG = nil
         lastSpokenHint = ""
+        eyes?.stop()
+        eyes = nil
         window.stop()
         deactivateAudio()
         status = "Звонок завершён"
@@ -391,6 +397,7 @@ final class CallViewModel: ObservableObject {
 
     private func restoreWindowImage() throws {
         if isTestingWindow { try displayTestFrame() }
+        else if let eyes { eyes.redraw() }
         else if let lastJPEG { try window.display(jpegData: lastJPEG) }
         else { try window.display(image: TestFrameFactory.make()) }
     }
@@ -409,6 +416,11 @@ final class CallViewModel: ObservableObject {
     func setHearsOverVoice(_ value: Bool) {
         hearsOverVoice = value
         store?.hearsOverVoice = value
+    }
+
+    func setShowsEyes(_ value: Bool) {
+        showsEyes = value
+        store?.eyes = value
     }
 
     /// Going beside, frames stop first. Going to lead, the server has to be ready for them first.
@@ -442,6 +454,7 @@ final class CallViewModel: ObservableObject {
             hearPerson()
         } else {
             lastJPEG = nil
+            eyes?.pause(words: nil)
             lastInstruction = "Смотрю экран"
             try? restoreWindowImage()
             if !hearsDuringCall { stopHearing() }
@@ -449,6 +462,7 @@ final class CallViewModel: ObservableObject {
     }
 
     private func showBesideCard() {
+        if let eyes { return eyes.pause(words: Self.besideWords) }
         guard let card = TestFrameFactory.make(title: Self.besideWords).jpegData(compressionQuality: 0.9) else { return }
         lastJPEG = card
         try? window.display(jpegData: card)
@@ -541,10 +555,14 @@ final class CallViewModel: ObservableObject {
         return workflowID
     }
 
-    private func beginLocalCall() throws {
+    private func beginLocalCall(withEyes: Bool = false) throws {
         try audioSession.activate()
         window.prepare()
-        try window.display(image: TestFrameFactory.make())
+        if withEyes {
+            let stage = EyesStage(surface: window, journal: journal)
+            stage.start()
+            eyes = stage
+        } else { try window.display(image: TestFrameFactory.make()) }
         isCallActive = true
         lastInstruction = "Ожидание подсказки"
     }
@@ -650,7 +668,9 @@ final class CallViewModel: ObservableObject {
             }
         }
         streaming = Task { [weak self] in
-            for await samples in microphone.sound { self?.speechStream?.send(samples) }
+            for await samples in microphone.sound {
+                if self?.speechStream?.send(samples) == true { self?.eyes?.heard(samples) }
+            }
         }
         return microphone
     }
@@ -755,6 +775,7 @@ final class CallViewModel: ObservableObject {
     private func soundChanged(_ sounding: Bool) {
         isSounding = sounding
         microphone?.agentSpeaks(sounding)
+        eyes?.speaks(sounding)
         guard sounding else { return }
         if hearsOverVoice { watchForInterruption() }
         guard let line = currentLine, let turn = line.turn, let client, let sessionID else { return }
@@ -807,6 +828,7 @@ final class CallViewModel: ObservableObject {
         let connection = HintEventConnection(client: client)
         connection.onEvent = { [weak self] in self?.receive($0) }
         connection.onDiagnostic = { [weak self] in self?.journal?.append($0) }
+        connection.onReachable = { [weak self] in self?.eyes?.linkChanged(isUp: $0) }
         connection.onSessionExpired = { [weak self] in
             guard let self else { return }
             self.endCall()
@@ -848,7 +870,9 @@ final class CallViewModel: ObservableObject {
             if hint.speak || hint.needsUserConfirm { announce(lastSpokenHint) }
             do {
                 guard let data = Data(base64Encoded: hint.imageJPEGBase64) else { throw GoalError.image }
-                try window.display(jpegData: data)
+                if let eyes {
+                    try eyes.show(hint: data, box: hint.eyesBox, gaze: hint.gaze, calm: hint.needsUserConfirm || hint.calm == true)
+                } else { try window.display(jpegData: data) }
                 lastJPEG = data
                 isLooking = false
                 journal?.append("Показана подсказка; подтверждение: \(hint.needsUserConfirm ? "да" : "нет")")
@@ -856,6 +880,7 @@ final class CallViewModel: ObservableObject {
         case .status(let status):
             if !isRecording && !isWorking { self.status = status.textRU }
             journal?.append("Сервер: \(status.state); \(status.textRU)")
+            if status.state == "analyzing" { eyes?.wait(for: .screen) } else { eyes?.stopWaiting(for: .screen) }
             updateLookingCard(status)
             updateSharing(status)
             let firstLook = status.state == "analyzing" && seenSteps.isEmpty
@@ -870,7 +895,8 @@ final class CallViewModel: ObservableObject {
             needsUserConfirm = false
             announce(done.textRU)
             isLooking = false
-            if let card = TestFrameFactory.make(title: "Я на связи").jpegData(compressionQuality: 0.9) {
+            if let eyes { eyes.celebrate(words: Self.doneWords) }
+            else if let card = TestFrameFactory.make(title: Self.doneWords).jpegData(compressionQuality: 0.9) {
                 lastJPEG = card
                 try? window.display(jpegData: card)
             }
@@ -882,6 +908,7 @@ final class CallViewModel: ObservableObject {
             lastHeard = Date()
             voiceEnded = microphone?.lastVoice ?? lastHeard
             journal?.append("Ход \(event.turn): услышан через \(sinceVoiceEnded()) мс после конца речи")
+            eyes?.wait(for: .reply)
             dropLines { ($0.kind == .reply && $0.layer == "quick") || $0.kind == .filler }
             if callMode == .lead { fillPause(.thinking, after: 2.5) }
         case .say(let say):
@@ -891,6 +918,7 @@ final class CallViewModel: ObservableObject {
         case .quiet(let event):
             guard event.turn == heardTurn else { break }
             keepQuiet()
+            eyes?.stopWaiting(for: .reply)
             dropLines { $0.kind == .filler }
         }
     }
@@ -909,6 +937,8 @@ final class CallViewModel: ObservableObject {
         guard say.turn == heardTurn || say.layer == "screen" else { return }  // The person has said more since.
         if say.layer == "screen" { dropLines { $0.turn == say.turn && $0.layer == "quick" } }
         status = say.textRU
+        if !say.looks { eyes?.stopWaiting(for: .reply) }
+        if !say.looks, say.textRU.hasSuffix("?") { eyes?.ask(say.textRU) }
         let promise = say.looks && speaksRussian ? pauseWords.any(.promise) : nil  // Kept phrases sound at once.
         enqueue(Line(text: promise ?? say.textRU, turn: say.turn, layer: say.layer))
     }
@@ -939,9 +969,13 @@ final class CallViewModel: ObservableObject {
     private func updateLookingCard(_ status: StatusEvent) {
         // The highlighted button belongs to a screen the person has left, so it goes until the next hint comes.
         if status.newScreen == true, !isLooking {
-            isLooking = (try? window.display(image: TestFrameFactory.make(title: "Смотрю\nэкран…"))) != nil
+            if let eyes {
+                eyes.newScreen()
+                isLooking = true
+            } else { isLooking = (try? window.display(image: TestFrameFactory.make(title: "Смотрю\nэкран…"))) != nil }
         } else if status.state != "analyzing", isLooking {
             isLooking = false
+            eyes?.sameScreen()
             try? restoreWindowImage()
         }
     }

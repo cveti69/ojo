@@ -83,6 +83,20 @@ final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
         controller?.invalidatePlaybackState()
     }
 
+    func display(background: CGImage, drawing: (CGContext) -> Void) throws -> Bool {
+        guard sourceView.isReady else { return false }
+        let sampleBuffer = try makeSampleBuffer { context in
+            // Before the flip the picture goes in as it is, the cheapest way. This runs 30 times a second.
+            context.draw(background, in: CGRect(origin: .zero, size: Self.frameSize))
+            context.translateBy(x: 0, y: Self.frameSize.height)
+            context.scaleBy(x: 1, y: -1)
+            drawing(context)
+        }
+        sourceView.enqueue(sampleBuffer)
+        videoCallView?.enqueue(sampleBuffer)
+        return true
+    }
+
     func startPictureInPicture() {
         onDiagnostic?("Запрошен старт окна")
         guard let controller, !controller.isPictureInPictureActive else { return }
@@ -121,6 +135,24 @@ final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
 
     private func makeSampleBuffer(from image: UIImage) throws -> CMSampleBuffer {
         guard image.size.width > 0, image.size.height > 0 else { throw FrameError.invalidImage }
+        return try makeSampleBuffer { context in
+            context.setFillColor(UIColor.black.cgColor)
+            context.fill(CGRect(origin: .zero, size: Self.frameSize))
+            context.translateBy(x: 0, y: Self.frameSize.height)
+            context.scaleBy(x: 1, y: -1)
+            let scale = min(Self.frameSize.width / image.size.width, Self.frameSize.height / image.size.height)
+            let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            let rect = CGRect(
+                x: (Self.frameSize.width - size.width) / 2,
+                y: (Self.frameSize.height - size.height) / 2, width: size.width, height: size.height
+            )
+            UIGraphicsPushContext(context)
+            defer { UIGraphicsPopContext() }
+            image.draw(in: rect)
+        }
+    }
+
+    private func makeSampleBuffer(painting paint: (CGContext) -> Void) throws -> CMSampleBuffer {
         if pixelBufferPool == nil {
             let attributes: [CFString: Any] = [
                 kCVPixelBufferWidthKey: Int(Self.frameSize.width),
@@ -139,7 +171,7 @@ final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
         guard allocationResult == kCVReturnSuccess, let pixelBuffer else {
             throw FrameError.system(allocationResult)
         }
-        try draw(image, into: pixelBuffer)
+        try draw(into: pixelBuffer, painting: paint)
 
         var format: CMVideoFormatDescription?
         let formatResult = CMVideoFormatDescriptionCreateForImageBuffer(
@@ -171,7 +203,7 @@ final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
         return sample
     }
 
-    private func draw(_ image: UIImage, into buffer: CVPixelBuffer) throws {
+    private func draw(into buffer: CVPixelBuffer, painting paint: (CGContext) -> Void) throws {
         let result = CVPixelBufferLockBaseAddress(buffer, [])
         guard result == kCVReturnSuccess else { throw FrameError.system(result) }
         defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
@@ -184,24 +216,16 @@ final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: bitmapInfo
         ) else { throw FrameError.invalidImage }
 
-        context.setFillColor(UIColor.black.cgColor)
-        context.fill(CGRect(origin: .zero, size: Self.frameSize))
-        context.translateBy(x: 0, y: Self.frameSize.height)
-        context.scaleBy(x: 1, y: -1)
-        let scale = min(Self.frameSize.width / image.size.width, Self.frameSize.height / image.size.height)
-        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let rect = CGRect(
-            x: (Self.frameSize.width - size.width) / 2,
-            y: (Self.frameSize.height - size.height) / 2, width: size.width, height: size.height
-        )
-        UIGraphicsPushContext(context)
-        defer { UIGraphicsPopContext() }
-        image.draw(in: rect)
-        // This colour tells the server which part of a screenshot is our own window.
-        let thickness = (Self.frameSize.width * 0.035).rounded()
+        paint(context)
+        Self.strokeBorder(on: context)
+    }
+
+    /// This colour tells the server which part of a screenshot is our own window.
+    static func strokeBorder(on context: CGContext) {
+        let thickness = (frameSize.width * 0.035).rounded()
         context.setStrokeColor(UIColor(red: 1, green: 0, blue: 170.0 / 255, alpha: 1).cgColor)
         context.setLineWidth(thickness)
-        context.stroke(CGRect(origin: .zero, size: Self.frameSize).insetBy(dx: thickness / 2, dy: thickness / 2))
+        context.stroke(CGRect(origin: .zero, size: frameSize).insetBy(dx: thickness / 2, dy: thickness / 2))
     }
 
     private enum FrameError: LocalizedError {
@@ -219,6 +243,7 @@ final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
     private final class SampleBufferView: UIView {
         override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
         var displayLayer: AVSampleBufferDisplayLayer { layer as! AVSampleBufferDisplayLayer }
+        var isReady: Bool { displayLayer.sampleBufferRenderer.isReadyForMoreMediaData }
 
         init() {
             super.init(frame: .zero)
