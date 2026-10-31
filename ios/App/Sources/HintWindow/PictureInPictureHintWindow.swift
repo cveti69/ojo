@@ -1,0 +1,316 @@
+import AVKit
+import CoreMedia
+import CoreVideo
+import OSLog
+import UIKit
+
+@MainActor
+final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
+    private var useVideoCallFallback = false
+    private static let frameSize = CGSize(width: 720, height: 960)
+
+    var inlineView: UIView { sourceView }
+    var onStateChange: ((HintWindowState) -> Void)?
+    var onRepeatHint: (() -> Void)?
+    var onDiagnostic: ((String) -> Void)?
+
+    private let sourceView = SampleBufferView()
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "App", category: "HintWindow")
+    private var controller: AVPictureInPictureController?
+    private var readinessObservation: NSKeyValueObservation?
+    private var videoCallController: AVPictureInPictureVideoCallViewController?
+    private var videoCallView: SampleBufferView?
+    private var pixelBufferPool: CVPixelBufferPool?
+
+    func setVideoCallFallback(_ enabled: Bool) {
+        guard enabled != useVideoCallFallback else { return }
+        stop()
+        useVideoCallFallback = enabled
+        onDiagnostic?("Источник окна: \(enabled ? "видеозвонок" : "sample buffer")")
+    }
+
+    func prepare() {
+        guard controller == nil else { return }
+        guard AVPictureInPictureController.isPictureInPictureSupported() else {
+            onStateChange?(.unavailable)
+            return
+        }
+
+        let contentSource: AVPictureInPictureController.ContentSource
+        if useVideoCallFallback {
+            let callController = AVPictureInPictureVideoCallViewController()
+            callController.preferredContentSize = Self.frameSize
+            let callView = SampleBufferView()
+            callView.translatesAutoresizingMaskIntoConstraints = false
+            callController.view.addSubview(callView)
+            NSLayoutConstraint.activate([
+                callView.leadingAnchor.constraint(equalTo: callController.view.leadingAnchor),
+                callView.trailingAnchor.constraint(equalTo: callController.view.trailingAnchor),
+                callView.topAnchor.constraint(equalTo: callController.view.topAnchor),
+                callView.bottomAnchor.constraint(equalTo: callController.view.bottomAnchor)
+            ])
+            videoCallController = callController
+            videoCallView = callView
+            contentSource = .init(activeVideoCallSourceView: sourceView, contentViewController: callController)
+        } else {
+            contentSource = .init(sampleBufferDisplayLayer: sourceView.displayLayer, playbackDelegate: self)
+        }
+
+        let controller = AVPictureInPictureController(contentSource: contentSource)
+        self.controller = controller
+        controller.delegate = self
+        controller.canStartPictureInPictureAutomaticallyFromInline = true
+        controller.requiresLinearPlayback = true
+        onStateChange?(.preparing)
+        readinessObservation = controller.observe(\.isPictureInPicturePossible, options: [.initial, .new]) { [weak self] observed, _ in
+            let identifier = ObjectIdentifier(observed)
+            Task { @MainActor [weak self] in
+                guard let self, let controller = self.controller, ObjectIdentifier(controller) == identifier else { return }
+                self.publishState()
+            }
+        }
+    }
+
+    func display(jpegData: Data) throws {
+        guard let image = UIImage(data: jpegData) else { throw FrameError.invalidImage }
+        try display(image: image)
+    }
+
+    func display(image: UIImage) throws {
+        let sampleBuffer = try makeSampleBuffer(from: image)
+        sourceView.enqueue(sampleBuffer)
+        videoCallView?.enqueue(sampleBuffer)
+        controller?.invalidatePlaybackState()
+    }
+
+    func startPictureInPicture() {
+        onDiagnostic?("Запрошен старт окна")
+        guard let controller, !controller.isPictureInPictureActive else { return }
+        guard controller.isPictureInPicturePossible else {
+            publishState()
+            return
+        }
+        controller.startPictureInPicture()
+    }
+
+    func stop() {
+        if controller != nil { onDiagnostic?("Запрошен стоп окна") }
+        readinessObservation?.invalidate()
+        readinessObservation = nil
+        controller?.canStartPictureInPictureAutomaticallyFromInline = false
+        controller?.stopPictureInPicture()
+        controller?.contentSource = nil
+        controller?.delegate = nil
+        controller = nil
+        sourceView.clear()
+        videoCallView?.clear()
+        videoCallView = nil
+        videoCallController = nil
+        pixelBufferPool = nil
+        onStateChange?(.inactive)
+    }
+
+    private func publishState() {
+        guard let controller else { return }
+        if controller.isPictureInPictureActive {
+            onStateChange?(.active)
+        } else {
+            onStateChange?(controller.isPictureInPicturePossible ? .ready : .preparing)
+        }
+    }
+
+    private func makeSampleBuffer(from image: UIImage) throws -> CMSampleBuffer {
+        guard image.size.width > 0, image.size.height > 0 else { throw FrameError.invalidImage }
+        if pixelBufferPool == nil {
+            let attributes: [CFString: Any] = [
+                kCVPixelBufferWidthKey: Int(Self.frameSize.width),
+                kCVPixelBufferHeightKey: Int(Self.frameSize.height),
+                kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferCGImageCompatibilityKey: true,
+                kCVPixelBufferCGBitmapContextCompatibilityKey: true,
+                kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any]
+            ]
+            let result = CVPixelBufferPoolCreate(kCFAllocatorDefault, nil, attributes as CFDictionary, &pixelBufferPool)
+            guard result == kCVReturnSuccess else { throw FrameError.system(result) }
+        }
+        guard let pool = pixelBufferPool else { throw FrameError.invalidImage }
+        var pixelBuffer: CVPixelBuffer?
+        let allocationResult = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &pixelBuffer)
+        guard allocationResult == kCVReturnSuccess, let pixelBuffer else {
+            throw FrameError.system(allocationResult)
+        }
+        try draw(image, into: pixelBuffer)
+
+        var format: CMVideoFormatDescription?
+        let formatResult = CMVideoFormatDescriptionCreateForImageBuffer(
+            allocator: kCFAllocatorDefault, imageBuffer: pixelBuffer, formatDescriptionOut: &format
+        )
+        guard formatResult == noErr, let format else { throw FrameError.system(formatResult) }
+
+        var timing = CMSampleTimingInfo(
+            duration: .invalid,
+            presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+            decodeTimeStamp: .invalid
+        )
+        var sample: CMSampleBuffer?
+        let sampleResult = CMSampleBufferCreateReadyWithImageBuffer(
+            allocator: kCFAllocatorDefault, imageBuffer: pixelBuffer, formatDescription: format,
+            sampleTiming: &timing, sampleBufferOut: &sample
+        )
+        guard sampleResult == noErr, let sample else { throw FrameError.system(sampleResult) }
+
+        // Sparse hints replace the current image immediately; no custom timebase is used.
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true),
+           CFArrayGetCount(attachments) > 0 {
+            let entry = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+            CFDictionarySetValue(
+                entry, Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
+            )
+        }
+        return sample
+    }
+
+    private func draw(_ image: UIImage, into buffer: CVPixelBuffer) throws {
+        let result = CVPixelBufferLockBaseAddress(buffer, [])
+        guard result == kCVReturnSuccess else { throw FrameError.system(result) }
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+
+        let bitmapInfo = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
+        guard let context = CGContext(
+            data: CVPixelBufferGetBaseAddress(buffer),
+            width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer),
+            bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: bitmapInfo
+        ) else { throw FrameError.invalidImage }
+
+        context.setFillColor(UIColor.black.cgColor)
+        context.fill(CGRect(origin: .zero, size: Self.frameSize))
+        context.translateBy(x: 0, y: Self.frameSize.height)
+        context.scaleBy(x: 1, y: -1)
+        let scale = min(Self.frameSize.width / image.size.width, Self.frameSize.height / image.size.height)
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let rect = CGRect(
+            x: (Self.frameSize.width - size.width) / 2,
+            y: (Self.frameSize.height - size.height) / 2, width: size.width, height: size.height
+        )
+        UIGraphicsPushContext(context)
+        defer { UIGraphicsPopContext() }
+        image.draw(in: rect)
+    }
+
+    private enum FrameError: LocalizedError {
+        case invalidImage
+        case system(OSStatus)
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidImage: return "Не удалось прочитать картинку подсказки."
+            case .system(let code): return "Не удалось подготовить кадр (\(code))."
+            }
+        }
+    }
+
+    private final class SampleBufferView: UIView {
+        override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
+        var displayLayer: AVSampleBufferDisplayLayer { layer as! AVSampleBufferDisplayLayer }
+
+        init() {
+            super.init(frame: .zero)
+            backgroundColor = .black
+            displayLayer.videoGravity = .resizeAspect
+            displayLayer.preventsDisplaySleepDuringVideoPlayback = true
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+        func enqueue(_ sampleBuffer: CMSampleBuffer) {
+            let renderer = displayLayer.sampleBufferRenderer
+            if renderer.status == .failed || renderer.requiresFlushToResumeDecoding {
+                renderer.flush()
+            }
+            renderer.enqueue(sampleBuffer)
+        }
+
+        func clear() {
+            displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
+        }
+    }
+}
+
+extension PictureInPictureHintWindow: AVPictureInPictureSampleBufferPlaybackDelegate {
+    nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, setPlaying playing: Bool) {
+        // Keep hints live; the system control repeats the spoken instruction.
+        let identifier = ObjectIdentifier(pictureInPictureController)
+        Task { @MainActor [weak self] in
+            guard let self, let controller = self.controller, ObjectIdentifier(controller) == identifier else { return }
+            self.onDiagnostic?("Системная кнопка: \(playing ? "плей" : "пауза"); повтор голоса")
+            self.onRepeatHint?()
+            controller.invalidatePlaybackState()
+        }
+    }
+
+    nonisolated func pictureInPictureControllerTimeRangeForPlayback(_ pictureInPictureController: AVPictureInPictureController) -> CMTimeRange {
+        CMTimeRange(start: .zero, duration: .positiveInfinity)
+    }
+
+    nonisolated func pictureInPictureControllerIsPlaybackPaused(_ pictureInPictureController: AVPictureInPictureController) -> Bool {
+        false
+    }
+
+    nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, didTransitionToRenderSize newRenderSize: CMVideoDimensions) {
+        Task { @MainActor [weak self] in
+            self?.logger.debug("PiP render size: \(newRenderSize.width)x\(newRenderSize.height)")
+        }
+    }
+
+    nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, skipByInterval skipInterval: CMTime, completion: @escaping () -> Void) {
+        completion()
+    }
+
+    nonisolated func pictureInPictureControllerShouldProhibitBackgroundAudioPlayback(_ pictureInPictureController: AVPictureInPictureController) -> Bool {
+        false
+    }
+}
+
+extension PictureInPictureHintWindow: AVPictureInPictureControllerDelegate {
+    nonisolated func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        let identifier = ObjectIdentifier(pictureInPictureController)
+        Task { @MainActor [weak self] in
+            guard let self, let controller = self.controller, ObjectIdentifier(controller) == identifier else { return }
+            self.onDiagnostic?("Окно начинает открываться")
+        }
+    }
+
+    nonisolated func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        let identifier = ObjectIdentifier(pictureInPictureController)
+        Task { @MainActor [weak self] in
+            guard let self, let controller = self.controller, ObjectIdentifier(controller) == identifier else { return }
+            self.onDiagnostic?("Старт окна подтверждён системой")
+            self.onStateChange?(.active)
+        }
+    }
+
+    nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        let identifier = ObjectIdentifier(pictureInPictureController)
+        Task { @MainActor [weak self] in
+            guard let self, let controller = self.controller, ObjectIdentifier(controller) == identifier else { return }
+            self.onDiagnostic?("Стоп окна подтверждён системой")
+            self.publishState()
+        }
+    }
+
+    nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
+        let identifier = ObjectIdentifier(pictureInPictureController)
+        let message = error.localizedDescription
+        Task { @MainActor [weak self] in
+            guard let self, let controller = self.controller, ObjectIdentifier(controller) == identifier else { return }
+            self.logger.error("PiP start failed: \(message, privacy: .public)")
+            self.onStateChange?(.failed(message))
+        }
+    }
+
+    nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void) {
+        completionHandler(true)
+    }
+}
