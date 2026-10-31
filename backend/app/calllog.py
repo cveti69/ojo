@@ -59,6 +59,12 @@ class CallLog:
         except OSError as error:
             log.warning("Call log: %s", type(error).__name__)
 
+    def forget(self, timestamp_ms: int) -> None:
+        try:
+            (self.folder / "frames" / (str(timestamp_ms) + ".jpg")).unlink()
+        except OSError:
+            pass
+
     def keep(self, jpeg: bytes, timestamp_ms: int) -> Optional[str]:
         """Returns the name the log knows this picture by."""
         name = str(timestamp_ms) + ".jpg"

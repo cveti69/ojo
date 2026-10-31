@@ -45,6 +45,7 @@ class Session:
     open_mark: int = 0
     seen_gray: Optional[bytes] = None  # The screen of the last turn: a new screen is measured against it.
     restarts: int = 0
+    held: bool = False
     answer: Optional[asyncio.Task] = None
     ears: Any = None
     app_lang: Optional[str] = None

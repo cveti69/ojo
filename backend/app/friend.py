@@ -54,8 +54,8 @@ LOOK_SECONDS = 2  # The phone sends the screen within this, unless iOS holds it 
 MAX_RESTARTS = 2  # A screen that keeps changing still gets an answer.
 MAX_REPLY = 500
 MAX_LABEL = 200
-# Broad on purpose: a screen wrongly taken for a payment costs one picture in the log, the other way round costs a card number.
 _SAY_FIRST = re.compile(r'\s*\{\s*"say"\s*:\s*"((?:[^"\\]|\\.)*)"', re.S)
+# Broad on purpose: a screen wrongly taken for a payment costs one picture in the log, the other way round costs a card number.
 _PRIVATE_SCREEN = re.compile(
     r"парол|\bкарт[аыуе]\b|\bкартой\b|пин-код|оплат|заплат|плат[её]ж|код подтверждения|код из смс"
     r"|password|\bpin\b|cvv|cvc|(credit|debit|bank) card|card (number|details)|payment|billing|\bpay\b|verification code|\botp\b"
@@ -180,6 +180,10 @@ def _text_on(session: Session, frame: Frame) -> Optional[list]:
     return window.outside(lines, frame.window) if lines and frame.window else lines
 
 
+def _plain(text: str) -> str:
+    return re.sub(r"\W+", " ", text).strip().lower()
+
+
 def first_line(text: str) -> str:
     """The spoken line of an answer still being written, once it is whole. The model writes it first, and an answer
     that does not simply waits for its end."""
@@ -217,6 +221,8 @@ class Friend:
 
     def heard(self, session: Session, said: str) -> None:
         """Their words. With the screen on, the answer waits for the screen as it is now, which the phone sends at once."""
+        if _plain(session.open_words).endswith(_plain(said)):  # The same phrase by its second road, the file after the stream.
+            return
         if session.open_words:  # They went on before the agent spoke, so both are one line.
             said = session.open_words + " " + said
             del session.chat[session.open_mark:]
@@ -257,6 +263,7 @@ class Friend:
         self._left(session)
         if self._busy(session):
             if session.restarts >= MAX_RESTARTS:
+                session.held = True
                 return False, "busy"
             session.restarts += 1
         self._start(session, SILENT_TURN, frame)
@@ -266,7 +273,19 @@ class Friend:
         """What is outlined belongs to the old screen."""
         if session.shown:
             session.shown = False
+            session.last_hint = None  # A phone that reconnects or asks for the hint must not get it back.
             session.publish({"type": "left"})
+
+    def text_read(self, session: Session, timestamp_ms: int) -> None:
+        """The words on a screen can come after its answer, and a payment screen leaves the log and the chat all the same."""
+        lines = session.frame_text.get(timestamp_ms) or []
+        if not _PRIVATE_SCREEN.search(" ".join(line["text"] for line in lines)):
+            return
+        for kept in session.chat:
+            if kept.get("frame") and kept["frame"].timestamp_ms == timestamp_ms:
+                kept["frame"] = None
+        if session.call_log:
+            session.call_log.forget(timestamp_ms)
 
     def played(self, session: Session, turn: int) -> None:
         if turn == session.turn:
@@ -295,7 +314,7 @@ class Friend:
         found: List[str] = []
 
         def deliver(line: str) -> None:
-            if session.answer is not task or early:
+            if session.answer is not task or session.ended or early:
                 return
             early.update(line=line, ms=_ms(started), turn={"role": "assistant", "text": json.dumps({"say": line}, ensure_ascii=False)})
             session.chat.append(early["turn"])
@@ -325,6 +344,14 @@ class Friend:
         return None
 
     async def _answer(self, session: Session, turn: int, frame: Optional[Frame]) -> None:
+        await self._reply(session, turn, frame)
+        held, session.held = session.held, False
+        now = session.last_frame
+        if held and now and not now.small and not session.heard and not session.ended and _new_screen(session, now):
+            session.answer = None  # This one is done, and it is what would be stopped.
+            self._start(session, SILENT_TURN, now)  # The screen that had to wait would otherwise go unseen.
+
+    async def _reply(self, session: Session, turn: int, frame: Optional[Frame]) -> None:
         started = time.perf_counter()
         early: dict = {}
         got = await self._ask(session, self._on_text(session, turn, started, early), early)
@@ -386,6 +413,9 @@ class Friend:
             session.note("show", outcome="not found", target=written, box_ms=box_ms)
             return
         image = await run_in_threadpool(hint.render, frame.jpeg, location["box"], text, session.eyes)
+        if _gone(session, frame):  # A screen that came while the answer was busy stops nothing, so it can only be seen here.
+            session.note("show", outcome="left", target=written, box_ms=box_ms)
+            return
         session.step_sequence += 1
         session.step_id = "s" + str(session.step_sequence)
         event = {

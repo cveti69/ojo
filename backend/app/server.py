@@ -245,6 +245,7 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
         session = session_or_404(session_id)
         require_active(session)
         session.remember_text(body.frame_ts, [line.model_dump() for line in body.lines])
+        friend.text_read(session, body.frame_ts)
         return {"ok": True}
 
     @router.get("/sessions/{session_id}/suggestions")
@@ -304,7 +305,7 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
         except Exception:
             raise HTTPException(502, "Не удалось распознать речь. Попробуй ещё раз.") from None
         speech_ms = round((time.perf_counter() - started) * 1000)
-        if said:
+        if said and not session.ended:
             friend.heard(session, said)
         return {"heard": bool(said), "speech_ms": speech_ms}
 
@@ -323,8 +324,9 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
         if not session.heard:
             raise HTTPException(409, "Нет реплики, которой нужен экран.")
         frames = await read_pictures(request)
-        if session.heard:  # They may have gone on while the pictures came.
-            friend.look(session, frames[-1])
+        if not session.heard:  # They went on, or the wait ran out, while the pictures came.
+            raise HTTPException(409, "Нет реплики, которой нужен экран.")
+        friend.look(session, frames[-1])
         return {"ok": True}
 
     @router.post("/sessions/{session_id}/played")

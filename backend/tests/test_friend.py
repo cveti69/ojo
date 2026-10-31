@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 
-from app import config, friend, grounding, meta
-from conftest import AUTH, idle, jpeg, line, look, new_session, post_frame, real_locate, sharing, words
+from app import config, friend, grounding, hint, meta, server
+from conftest import AUTH, idle, jpeg, line, look, new_session, post_frame, real_locate, say, sharing, words
 
 SHOW = {"label": "Beli Langsung", "object": "green button", "box": [600, 900, 950, 960]}
 SCREENS = [jpeg((value, value, value)) for value in (20, 90, 160, 230)]
@@ -297,7 +297,123 @@ def test_a_screen_that_never_settles_still_gets_an_answer(backend):
     finally:
         release.set()
     idle(backend, session_id)
-    assert len(spoken(seen)) == 1 and backend.store.sessions[session_id].restarts == 0
+    assert wait_until(lambda: len(spoken(seen)) == 2) and backend.store.sessions[session_id].restarts == 0
+
+
+def test_the_screen_that_had_to_wait_gets_its_turn_after_the_answer(backend):
+    entered, release = blocked(backend, only=1)
+    client = backend.client
+    session_id = sharing(client)
+    session = backend.store.sessions[session_id]
+    session.restarts = friend.MAX_RESTARTS
+    post_frame(client, session_id, SCREENS[0], timestamp=1)
+    assert entered.wait(2)
+    assert post_frame(client, session_id, SCREENS[1], timestamp=2).json() == {"accepted": False, "reason": "busy"}
+    release.set()
+    assert wait_until(lambda: len(backend.meta.calls) == 2)
+    idle(backend, session_id)
+    assert session.chat[-2]["text"] == friend.SILENT_TURN and session.chat[-2]["frame"].timestamp_ms == 2 and not session.held
+
+
+def test_words_under_way_take_the_place_of_the_screen_that_waited(backend):
+    entered, release = blocked(backend, only=1)
+    client = backend.client
+    session_id = sharing(client)
+    session = backend.store.sessions[session_id]
+    session.restarts = friend.MAX_RESTARTS
+    post_frame(client, session_id, SCREENS[0], timestamp=1)
+    assert entered.wait(2)
+    assert post_frame(client, session_id, SCREENS[1], timestamp=2).json()["reason"] == "busy"
+    words(client, session_id, "Что это?")
+    release.set()
+    assert look(client, session_id, [SCREENS[1]]).status_code == 200
+    assert wait_until(lambda: len(backend.meta.calls) == 2)
+    idle(backend, session_id)
+    assert len(backend.meta.calls) == 2
+
+
+def test_the_same_phrase_by_its_second_road_is_one_turn(backend):
+    session_id = new_session(backend.client)
+    entered, release = blocked(backend, only=1)
+    words(backend.client, session_id, "Куда нажать?")
+    assert entered.wait(2)
+    words(backend.client, session_id, "куда нажать")
+    release.set()
+    idle(backend, session_id)
+    assert len(backend.meta.calls) == 1 and backend.store.sessions[session_id].turn == 1
+
+
+def test_a_look_that_comes_too_late_is_told_so(backend, monkeypatch):
+    client = backend.client
+    session_id = sharing(client)
+    post_frame(client, session_id, SCREENS[0])
+    idle(backend, session_id)
+    words(client, session_id)
+    session = backend.store.sessions[session_id]
+    read_pictures = server.read_pictures
+
+    async def late(request):
+        session.heard = ""
+        return await read_pictures(request)
+    monkeypatch.setattr(server, "read_pictures", late)
+    assert look(client, session_id, [SCREENS[1]]).status_code == 409
+
+
+def test_a_payment_screen_read_late_leaves_the_log_and_the_chat(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    client = backend.client
+    session_id = sharing(client)
+    backend.meta.replies = [line("Проверь сумму.")]
+    post_frame(client, session_id)
+    idle(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    assert list((folder / "frames").iterdir())
+    assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={
+        "frame_ts": 123, "lines": [{"text": "Bayar Sekarang", "words": []}]}).status_code == 200
+    assert not list((folder / "frames").iterdir())
+    assert not any(turn.get("frame") for turn in backend.store.sessions[session_id].chat)
+
+
+def test_no_outline_over_a_screen_that_came_while_it_was_drawn(backend, monkeypatch):
+    client = backend.client
+    session_id = sharing(client)
+    seen = events_of(backend, session_id)
+    session = backend.store.sessions[session_id]
+    backend.meta.replies = [line("Жми.", show=SHOW)]
+    real = hint.render
+
+    def render(*args):
+        session.last_frame = friend.prepare_frame(SCREENS[3], 720, 1560, 2, time.perf_counter())
+        return real(*args)
+    monkeypatch.setattr(hint, "render", render)
+    post_frame(client, session_id, SCREENS[0])
+    idle(backend, session_id)
+    assert "hint" not in kinds(seen) and session.last_hint is None
+
+
+def test_words_that_arrive_after_the_call_ended_start_nothing(backend, monkeypatch):
+    client = backend.client
+    session_id = new_session(client)
+    session = backend.store.sessions[session_id]
+
+    def transcribe(audio, language_bias=None):
+        session.ended = True
+        return "Куда нажать?"
+    monkeypatch.setattr(client.app.state.speech, "transcribe", transcribe)
+    assert say(client, session_id).status_code == 200
+    assert backend.meta.calls == [] and session.turn == 0
+
+
+def test_an_outline_of_a_screen_they_left_does_not_come_back(backend):
+    client = backend.client
+    session_id = sharing(client)
+    backend.meta.replies = [line("Жми.", show=SHOW)]
+    post_frame(client, session_id, SCREENS[0])
+    idle(backend, session_id)
+    assert client.get("/sessions/" + session_id + "/hint", headers=AUTH).status_code == 200
+    post_frame(client, session_id, SCREENS[1])
+    idle(backend, session_id)
+    assert client.get("/sessions/" + session_id + "/hint", headers=AUTH).status_code == 204
 
 
 def test_new_words_replace_the_answer_under_way_and_its_turn_stays(backend):
@@ -511,7 +627,7 @@ def test_no_outline_over_a_screen_they_left_while_the_model_thought(backend):
     backend.meta.hook = lambda index: post_frame(client, session_id, SCREENS[1])
     post_frame(client, session_id, SCREENS[0])
     idle(backend, session_id)
-    assert kinds(seen) == ["say"] and backend.store.sessions[session_id].last_hint is None
+    assert "hint" not in kinds(seen) and backend.store.sessions[session_id].last_hint is None
 
 
 def test_no_outline_if_they_left_while_the_button_was_found(backend, monkeypatch):
