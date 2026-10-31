@@ -72,12 +72,19 @@ def left_the_screen(session: Session, frame: Frame) -> bool:
             and changed_share(frame.gray, session.analyzing_gray) >= MOVED_ON_SHARE)
 
 
+def left_the_payment(session: Session, frame: Frame) -> bool:
+    """The agent stops on the payment screen and on no other: on a new one it is needed again."""
+    return not session.last_step or changed_share(frame.gray, session.last_step["gray"]) >= NEW_SCREEN_SHARE
+
+
 def outdated(session: Session, revision: int) -> bool:
     return session.ended or revision != session.revision or session.stale.is_set()
 
 
 def same_step(last: Optional[dict], frame: Frame, action: str, box: Optional[list], confirm: bool) -> bool:
     """Our own hint changes the frame and the model rewords itself, so only the target and a new screen count."""
+    if last and last["confirm"] and confirm:  # Said once, and they may well scroll the payment screen to check it.
+        return True
     if not last or last["action"] != action or last["confirm"] != confirm:
         return False
     if changed_share(frame.gray, last["gray"]) >= NEW_SCREEN_SHARE:
@@ -144,7 +151,9 @@ class Engine:
                 session.stale.set()
             return False, "busy"
         if session.needs_user_confirm:
-            return False, "user_confirm"
+            if not left_the_payment(session, frame):
+                return False, "user_confirm"
+            session.needs_user_confirm = False
         if session.completed:
             return False, "done"
         if same_frame(frame.gray, session.last_analyzed_gray) and not frame.small:
@@ -358,6 +367,7 @@ class Engine:
         session.grounding = location
         seen.update(box=location["box"], box_source=location["source"])
         if same_step(session.last_step, frame, answer["action"], location["box"], needs_confirm):
+            session.needs_user_confirm = needs_confirm
             session.last_frame_hash = frame.digest
             session.last_analyzed_gray = frame.gray
             session.publish({"type": "status", "state": "broadcasting" if session.broadcasting else "waiting_frames",
@@ -372,12 +382,14 @@ class Engine:
             return
         stage = time.perf_counter()
         session.needs_user_confirm = needs_confirm
-        step_id = self._put_up(session, frame, image, location, answer["action"], instruction,
-                               speak=not (session.heard or session.looking),  # The answer they are waiting for goes first.
+        thinking = bool(session.heard or session.looking)  # The answer they are waiting for goes first.
+        speak = not thinking and session.answered_at <= frame.received_at
+        session.unspoken = instruction if thinking else ""
+        step_id = self._put_up(session, frame, image, location, answer["action"], instruction, speak=speak,
                                texts=texts, insert_hint=answer["insert_hint_ru"], paste_text=paste_text,
                                confirm=needs_confirm, calm=private,
                                timings={"queue_ms": timings["queue_ms"], "model_ms": timings["model_ms"], "box_ms": timings["box_ms"],
                                         "box_source": location["source"], "window": frame.window is not None})
-        seen.update(outcome="hint", step=step_id, said=None if private else instruction)
+        seen.update(outcome="hint", step=step_id, said=None if private else instruction, spoken=speak)
         timings["send_ms"] = round((time.perf_counter() - stage) * 1000)
         timings["total_ms"] = round((time.perf_counter() - frame.received_at) * 1000)

@@ -86,10 +86,12 @@ You also point. Your floating window can outline any button, field or option on 
 - If they want to go to another screen and look at it there, say what to press and set look_again=true: you will see that screen as soon as it opens, and speak first.
 - If they ask to close something or go back, say what to press and show it, and say nothing of the plan: the next step is theirs to say.
 - If what they want is not on the screen, say how to get to it and leave show empty.
+- If the next step needs something only they know, such as an address, a place, a name or a phone number, and neither the goal nor the call gives it, ask them for it in a few words and leave show empty. Never make it up and never offer a guess of your own to type.
 show.label copies the visible text of the element exactly as shown on the screen. show.object is a short English noun phrase for what it looks like, such as "green button" or "radio button". show.box is [x1, y1, x2, y2] around it in 0-1000 coordinates of the last screenshot: x is relative to its width, y to its height. With nothing to show, leave both strings and the box empty.
 Set private=true if the last screenshot shows a payment, a card, a password or a PIN."""
 AGAIN_RULE = """
-They have just opened the screen you talked about, and you speak first: do not ask what they want. Say what is on it that matters for their goal. If it offers options, compare them and name the best one with a short reason."""
+They have just opened the screen you talked about, and you speak first: do not ask what they want. Say what is on it that matters for their goal. If it offers options, compare them and name the best one with a short reason.
+If the last screenshot is still loading, or is the same page as the one before it, only scrolled or with something moving on it, leave reply empty: there is nothing new to say yet."""
 DONE_STATE = " It is reached: stay on the call, talk it over and help with whatever comes next."
 
 

@@ -53,7 +53,8 @@ class Talker:
         session.turn += 1
         session.heard = ""
         session.looks_again = ""
-        session.second_look = False
+        session.second_look = 0
+        session.unspoken = ""
         session.note("heard", turn=session.turn, said=said)
         session.publish({"type": "heard", "turn": session.turn})
         return session.turn, said
@@ -97,7 +98,7 @@ class Talker:
         """The head answers from the screens the phone kept, in both modes. A turn that only chats leaves this answer standing:
         only a newer question to the screen or a new plan replaces it."""
         said, session.heard = session.heard, ""
-        again, session.second_look = session.second_look, False
+        again, session.second_look = session.second_look, 0
         turn = session.turn
         session.looking = turn
         try:
@@ -106,7 +107,7 @@ class Talker:
             if session.looking == turn:
                 session.looking = 0
 
-    async def _answer_from(self, session: Session, turn: int, said: str, frames: Sequence[Frame], again: bool) -> None:
+    async def _answer_from(self, session: Session, turn: int, said: str, frames: Sequence[Frame], again: int) -> None:
         started = time.perf_counter()
         newest = frames[-1]
         try:
@@ -120,7 +121,11 @@ class Talker:
                      frame=session.keep_picture(newest, answer["private"]), frames=[frame.timestamp_ms for frame in frames],
                      ages_ms=[round(now - frame.timestamp_ms) for frame in frames], used=session.looking == turn,
                      **_written_down(answer))
-        if session.looking != turn or session.ended or not answer["reply"]:
+        if session.looking != turn or session.ended:
+            return
+        step, session.unspoken = session.unspoken, ""
+        if not answer["reply"]:
+            self._nothing_new(session, turn, said, step, again)
             return
         self._change(session, answer, newest)
         left = session.moved_at > newest.received_at
@@ -133,6 +138,16 @@ class Talker:
             session.looks_again = said
             if left:
                 self.moved(session)
+
+    def _nothing_new(self, session: Session, turn: int, said: str, step: str, again: int) -> None:
+        """Right on a screen that is still loading or has not changed, but the person must not be left with silence."""
+        if step:
+            session.note("step spoken", turn=turn)
+            self._say(session, turn, said, {"reply": step, "new_goal": None, "mode": None}, "screen", {})
+        elif not again:
+            self._say(session, turn, said, FAILED_LINE, "screen", {})
+        elif again == 1 and session.mode == "beside":  # Here no pointer speaks up when it has loaded.
+            self._run(self._look_again(session, turn, said, 2))
 
     def _hold(self, session: Session, quick: dict) -> None:
         """After "close", "go back" or "stop" the next step is theirs to say, so the pointer waits for their next words."""
@@ -151,15 +166,15 @@ class Talker:
         if said:
             self._run(self._look_again(session, session.turn, said))
 
-    async def _look_again(self, session: Session, turn: int, said: str) -> None:
+    async def _look_again(self, session: Session, turn: int, said: str, tries: int = 1) -> None:
         await asyncio.sleep(SETTLES_IN)
         if turn == session.turn and not session.ended:
             session.heard = said
-            session.second_look = True
+            session.second_look = tries
             session.note("look", turn=turn, again=True)
             session.publish({"type": "look", "turn": turn})
 
-    async def _see(self, session: Session, said: str, frames: Sequence[Frame], again: bool = False) -> dict:
+    async def _see(self, session: Session, said: str, frames: Sequence[Frame], again: int = 0) -> dict:
         prompt = self._prompt(session, said, len(frames))
         if frames[-1].window:
             prompt += window.RULE.format(box=[round(value * 1000) for value in frames[-1].window])
@@ -192,5 +207,7 @@ class Talker:
             session.written_turn = turn
             session.dialog.append({"who": "person", "text": said})
         session.dialog.append({"who": "agent", "text": answer["reply"]})
+        if layer == "screen":
+            session.answered_at = time.perf_counter()
         session.publish({"type": "say", "turn": turn, "layer": layer, "text_ru": answer["reply"], "goal": answer["new_goal"],
                          "mode": answer["mode"], "looks": looks, "wait": answer.get("wait"), "timings": timings})

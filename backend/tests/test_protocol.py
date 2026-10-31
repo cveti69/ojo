@@ -252,9 +252,31 @@ def test_confirmation_stops_analysis_and_overrides_clipboard(backend):
     assert session.last_hint["paste_text"] is None and session.last_hint["insert_texts"] == []
     assert not session.completed
     assert post_frame(backend.client, session_id).json() == {"accepted": False, "reason": "user_confirm"}
-    assert post_frame(backend.client, session_id, jpeg((20, 40, 70))).json()["accepted"] is False
+    assert post_frame(backend.client, session_id, jpeg((225, 230, 235))).json()["accepted"] is False
     assert len(backend.meta.vision_calls) == 1
     assert len(session.history) == 1
+
+
+def test_the_stop_on_a_payment_screen_ends_when_they_leave_it(backend):
+    session_id = new_session(backend.client)
+    backend.meta.answers = [answer(needs_user_confirm=True), answer(instruction="Жми поиск вверху.")]
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    assert post_frame(backend.client, session_id, jpeg((20, 40, 70)), timestamp=124).json()["accepted"] is True
+    idle(backend, session_id)
+    session = backend.store.sessions[session_id]
+    assert session.last_hint["instruction_ru"] == "Жми поиск вверху." and session.needs_user_confirm is False
+
+
+def test_a_scroll_of_the_payment_screen_repeats_nothing(backend):
+    session_id = new_session(backend.client)
+    backend.meta.answers = [answer(needs_user_confirm=True), answer(needs_user_confirm=True, action="none")]
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    assert post_frame(backend.client, session_id, jpeg((20, 40, 70)), timestamp=124).json()["accepted"] is True
+    idle(backend, session_id)
+    session = backend.store.sessions[session_id]
+    assert len(session.history) == 1 and session.needs_user_confirm is True
 
 
 def test_translate_languages_and_auto(backend):
@@ -1128,6 +1150,75 @@ def test_the_pointer_keeps_quiet_while_the_head_thinks(backend):
     post_frame(client, session_id, jpeg((200, 30, 40)), timestamp=125)
     idle(backend, session_id)
     assert backend.store.sessions[session_id].last_hint["speak"] is True
+
+
+def test_the_pointer_does_not_repeat_what_the_head_has_just_said(backend):
+    client = backend.client
+    session_id = new_session(client)
+    seen_frame(backend, session_id)
+
+    def head_answers_first(index):
+        ask_the_screen(backend, session_id)
+        wait_for_answers(backend)
+    backend.meta.hook = head_answers_first
+    post_frame(client, session_id, jpeg((200, 30, 40)), timestamp=124)
+    idle(backend, session_id)
+    assert backend.store.sessions[session_id].last_hint["speak"] is False
+
+
+def test_the_pointer_speaks_when_the_head_has_nothing_new(backend):
+    client = backend.client
+    session_id = new_session(client)
+    seen_frame(backend, session_id)
+
+    def point_meanwhile():
+        backend.meta.answers.append(answer(instruction="Жми поиск вверху."))
+        post_frame(client, session_id, jpeg((20, 30, 40)), timestamp=124)
+        idle(backend, session_id)
+    backend.meta.talk_hook = point_meanwhile
+    backend.meta.talk.append(talk_line(""))
+    ask_the_screen(backend, session_id)
+    wait_for_answers(backend)
+    assert agent_words(backend, session_id)[-1] == "Жми поиск вверху."
+
+
+def test_an_empty_answer_to_a_question_is_not_silence(backend):
+    session_id = new_session(backend.client)
+    backend.meta.talk.append(talk_line(""))
+    ask_the_screen(backend, session_id)
+    wait_for_answers(backend)
+    assert agent_words(backend, session_id)[-1] == talker.FAILED_LINE["reply"]
+
+
+def test_nothing_new_on_a_second_look_stays_silent_for_the_pointer(backend, monkeypatch):
+    monkeypatch.setattr(talker, "SETTLES_IN", 0)
+    client = backend.client
+    session_id = new_session(client)
+    backend.meta.talk.append(talk_line("Жми на доставку.", look_again=True))
+    ask_the_screen(backend, session_id)
+    backend.meta.talk.append(talk_line(""))
+    client.post("/sessions/" + session_id + "/moved", headers=AUTH)
+    wait_for_answers(backend)
+    assert look(client, session_id, [jpeg((10, 20, 30))]).status_code == 200
+    wait_for_answers(backend)
+    assert agent_words(backend, session_id)[-1] == "Жми на доставку."
+
+
+def test_beside_the_head_looks_once_more_if_the_page_was_loading(backend, monkeypatch):
+    monkeypatch.setattr(talker, "SETTLES_IN", 0)
+    client = backend.client
+    session_id = new_session(client, mode="beside")
+    backend.meta.talk.append(talk_line("Жми на доставку.", look_again=True))
+    ask_the_screen(backend, session_id)
+    backend.meta.talk.extend([talk_line(""), talk_line(""), talk_line("Дешевле всего Reguler.")])
+    client.post("/sessions/" + session_id + "/moved", headers=AUTH)
+    wait_for_answers(backend)
+    assert look(client, session_id, [jpeg((10, 20, 30))]).status_code == 200
+    wait_for_answers(backend)
+    assert look(client, session_id, [jpeg((30, 20, 10))]).status_code == 200
+    wait_for_answers(backend)
+    assert not backend.store.sessions[session_id].heard  # Once more, and no more than that.
+    assert agent_words(backend, session_id)[-1] == "Жми на доставку."
 
 
 def test_both_layers_know_the_window_can_show(backend):

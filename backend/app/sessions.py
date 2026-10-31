@@ -68,7 +68,9 @@ class Session:
     restarts: int = 0
     shown: bool = False  # Beside the person: what the head showed is still in the window.
     looks_again: str = ""  # Their words, when the head waits for the screen they are about to open.
-    second_look: bool = False
+    second_look: int = 0  # 1 for the look at the screen they opened, 2 for one more if it was still loading.
+    answered_at: float = 0.0  # When the head last spoke. What the pointer found before that adds nothing.
+    unspoken: str = ""  # The pointer's step, kept back for the head. It goes out if the head has nothing to say.
     held: bool = False  # They said to close, go back or stop, so the pointer waits for their next words.
     moved_at: float = 0
     last_activity: float = field(default_factory=time.monotonic)
