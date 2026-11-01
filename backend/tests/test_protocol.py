@@ -409,11 +409,28 @@ def test_payment_words_under_our_window_count_only_without_their_frame(backend):
 
     read(7, under)
     assert session.chat[0]["frame"] is not None and not seen
-    read(8, under)  # Its frame has not come, so the window stays in.
-    assert seen == [{"type": "face", "turn": 0, "face": None, "calm": True}]
-    assert session.chat[0]["frame"] is not None
+    read(8, under)  # Its frame has not come, so there is nothing to take the window out of.
+    assert not seen and session.chat[0]["frame"] is not None
     read(7, beside)
     assert session.chat[0]["frame"] is None
+
+
+def test_our_own_words_ahead_of_the_frame_stop_nothing(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    client = backend.client
+    session_id = sharing(client, eyes=True)
+    seen = []
+    backend.store.sessions[session_id].publish = seen.append
+    picture = windowed((200, 40, 40))
+    box = window.find(picture)
+    middle = [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2] * 2
+    middle = [middle[0] - 0.01, middle[1] - 0.01, middle[2] + 0.01, middle[3] + 0.01]
+    assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={
+        "frame_ts": 7, "lines": [{"text": "Вот сама карта", "words": [{"text": "карта", "box": middle}]}]}).status_code == 200
+    post_frame(client, session_id, picture, timestamp=7)
+    idle(backend, session_id)
+    assert all(not event.get("calm") for event in seen if event["type"] == "face")
+    assert list((next((tmp_path / "calls").iterdir()) / "frames").iterdir())
 
 
 def test_our_window_comes_out_of_the_words_of_a_look_too(backend):

@@ -13,6 +13,7 @@ from . import meta
 
 MIN_TEXT_MATCH = 0.78
 TEXT_DISTANCE_WEIGHT = 1  # A spelling 0.1 worse still wins when it is 10% of the frame closer: the model's box can be a row off.
+TEXT_REACH = 0.4  # On the bench and on real calls words sat within 0.33 of the model's box or past 0.66: there it is another place.
 MAX_UNSPACED_WORDS = 6
 FONT = Path(__file__).parent.parent / "assets" / "Inter-Bold.otf"
 MARK_FONT_SIZE = 13
@@ -45,7 +46,7 @@ def _union(boxes: list[list[float]]) -> list[float]:
     return [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)]
 
 
-def snap_to_text(label: str, near: list[float] | None, lines: list[dict]) -> list[float] | None:
+def snap_to_text(label: str, near: list[float] | None, lines: list[dict], reach: float = TEXT_REACH) -> list[float] | None:
     """Finds the words that spell the label, weighing the spelling against the distance from the model's guess.
 
     `lines` holds {"text", "words": [{"text", "box"}]} with boxes in 0-1 coordinates.
@@ -72,7 +73,10 @@ def snap_to_text(label: str, near: list[float] | None, lines: list[dict]) -> lis
                 if score < MIN_TEXT_MATCH:
                     continue
                 box = _union([word["box"] for word in window])
-                rank = score - TEXT_DISTANCE_WEIGHT * math.sqrt(_distance(box, near)) if near else score
+                distance = math.sqrt(_distance(box, near)) if near else 0
+                if distance > reach:
+                    continue
+                rank = score - TEXT_DISTANCE_WEIGHT * distance
                 if best is None or rank > best[0]:
                     best = (rank, box)
     return best[1] if best else None
@@ -132,7 +136,7 @@ def locate(jpeg: bytes, width: int, height: int, answer: dict, lines: list[dict]
     if marks and target.get("mark_id") in marks:
         return {"box": marks[target["mark_id"]], "source": "mark", "ms": 0}
     shape = not target.get("words_first") and any(word in target["object"].lower() for word in SHAPE_WORDS)
-    snapped = snap_to_text(target["label"], near, lines or [])
+    snapped = snap_to_text(target["label"], near, lines or [], math.inf if shape else TEXT_REACH)
     if snapped and not shape:
         return {"box": snapped, "source": "text", "ms": 0}
     if snapped:  # The model's box can be a row off, and the words next to a radio button say which row it is.

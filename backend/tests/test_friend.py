@@ -619,18 +619,198 @@ def test_a_broken_answer_brings_the_spare_model(backend, broken):
     assert spoken(seen) == ["Запасной."]
 
 
-def test_a_late_answer_brings_the_spare_model(backend, monkeypatch):
-    monkeypatch.setattr(friend, "ANSWER_SECONDS", 0.05)
+def test_a_late_answer_brings_the_spare_model_and_changes_nothing_after_it(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 0.05)
     entered, release = blocked(backend, only=1)
     session_id = new_session(backend.client)
     seen = events_of(backend, session_id)
-    backend.meta.replies = [line("Поздно."), line("Запасной.")]
+    session = backend.store.sessions[session_id]
+    backend.meta.replies = [line("Поздно.", paste="главная", notes="главная"), line("Запасной.", paste="запасная", notes="запасная")]
     try:
         words(backend.client, session_id)
         assert wait_until(lambda: spoken(seen))
+        idle(backend, session_id)
     finally:
         release.set()
-    assert spoken(seen) == ["Запасной."]
+    time.sleep(0.05)
+    answers = [json.loads(turn["text"]) for turn in session.chat if turn["role"] == "assistant"]
+    assert list(filter(None, spoken(seen))) == ["Запасной."] and session.texts == ["запасная"]
+    assert [answer["notes"] for answer in answers] == ["запасная"] and session.last_answer["notes"] == "запасная"
+
+
+def test_a_line_from_the_main_model_can_still_win_beside_the_spare_one(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 0.05)
+    spare_began, main_said, spare_ended = threading.Event(), threading.Event(), threading.Event()
+
+    def hook(index):
+        if index == 1:
+            assert spare_began.wait(2)
+        else:
+            spare_began.set()
+            assert main_said.wait(2)
+
+    def after(index):
+        if index == 1:
+            main_said.set()
+            assert spare_ended.wait(2)
+            time.sleep(0.05)
+        else:
+            spare_ended.set()
+    backend.meta.hook, backend.meta.after_text = hook, after
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    session = backend.store.sessions[session_id]
+    backend.meta.replies = [line("Главный.", paste="главная", notes="главная"), line("Запасной.", paste="запасная", notes="запасная")]
+    words(backend.client, session_id)
+    assert wait_until(lambda: session.last_answer)
+    idle(backend, session_id)
+    assert list(filter(None, spoken(seen))) == ["Главный."] and session.texts == ["главная"] and session.last_answer["notes"] == "главная"
+
+
+def test_a_line_in_time_keeps_the_spare_model_out_however_long_the_rest_takes(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 0.05)
+    backend.meta.after_text = lambda index: time.sleep(0.15)
+    session_id = new_session(backend.client)
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    assert [call.model for call in backend.meta.calls] == ["test-talk"]
+
+
+def test_a_whole_answer_shuts_the_spare_model_up(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 0.05)
+    spare_began, answered = threading.Event(), threading.Event()
+
+    def hook(index):
+        if index == 1:
+            assert spare_began.wait(2)
+        else:
+            spare_began.set()
+            assert answered.wait(2)
+    backend.meta.hook = hook
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [{"notes": "заметка", "say": "Главный."}, line("Запасной.")]
+    words(backend.client, session_id)
+    assert wait_until(lambda: spoken(seen))
+    idle(backend, session_id)
+    answered.set()
+    time.sleep(0.05)
+    assert spoken(seen) == ["Главный."] and len(backend.store.sessions[session_id].chat) == 2
+
+
+def test_silence_from_the_spare_model_waits_for_the_main_one(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 0.05)
+    spare_ended = threading.Event()
+
+    def hook(index):
+        if index == 1:
+            assert spare_ended.wait(2)
+            time.sleep(0.05)
+    backend.meta.hook = hook
+    backend.meta.after_text = lambda index: spare_ended.set() if index == 2 else None
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Главный."), line("")]
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    assert spoken(seen) == ["Главный."]
+
+
+def test_silence_from_the_spare_model_stands_when_the_main_one_broke(backend):
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [OSError("down"), line("")]
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    assert spoken(seen) == [] and "quiet" in kinds(seen)
+    assert backend.store.sessions[session_id].last_answer["say"] == ""
+
+
+def test_a_spare_line_stands_when_the_rest_of_its_answer_breaks(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 0.05)
+    entered, release = blocked(backend, only=1)
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    session = backend.store.sessions[session_id]
+    backend.meta.replies = [line("Главный.", paste="главная"), '{"say": "Запасной.", "notes": "обрыв']
+    try:
+        words(backend.client, session_id)
+        assert wait_until(lambda: spoken(seen))
+        idle(backend, session_id)
+    finally:
+        release.set()
+    time.sleep(0.05)
+    assert spoken(seen) == ["Запасной."] and session.texts == [] and json.loads(session.chat[-1]["text"])["say"] == "Запасной."
+
+
+def test_a_spare_line_keeps_its_own_answer_when_the_main_one_ends_first(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 0.05)
+    spare_said, main_ended = threading.Event(), threading.Event()
+
+    def after(index):
+        if index == 1:
+            main_ended.set()
+        else:
+            spare_said.set()
+            assert main_ended.wait(2)
+            time.sleep(0.05)
+    backend.meta.hook = lambda index: spare_said.wait(2) if index == 1 else None
+    backend.meta.after_text = after
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    session = backend.store.sessions[session_id]
+    backend.meta.replies = [line("Главный.", notes="главная"), line("Запасной.", notes="запасная")]
+    words(backend.client, session_id)
+    assert wait_until(lambda: session.last_answer)
+    idle(backend, session_id)
+    assert spoken(seen) == ["Запасной."] and session.last_answer["notes"] == "запасная"
+
+
+def test_both_models_share_one_limit(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 0.05)
+    entered, release = blocked(backend, only=1)
+    session_id = new_session(backend.client)
+    try:
+        words(backend.client, session_id)
+        assert wait_until(lambda: len(backend.meta.calls) == 2)
+        idle(backend, session_id)
+    finally:
+        release.set()
+    assert backend.meta.calls[1].timeout < backend.meta.calls[0].timeout
+
+
+def test_the_log_says_when_the_spare_model_began_and_not_how_the_loser_ended(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 0.05)
+    entered, release = blocked(backend, only=1)
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [OSError("down"), line("Запасной.")]
+    try:
+        words(backend.client, session_id)
+        assert wait_until(lambda: spoken(seen))
+        idle(backend, session_id)
+    finally:
+        release.set()
+    time.sleep(0.05)
+    rows = lines_of(next((tmp_path / "calls").iterdir()))
+    assert [row["model"] for row in rows if row["kind"] == "spare"] == ["test-spare"] and "no answer" not in [row["kind"] for row in rows]
+
+
+def test_a_new_turn_stops_the_race(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 0.05)
+    release = threading.Event()
+    backend.meta.hook = lambda index: release.wait(5) if index < 3 else None
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Старый."), line("Старый запасной."), line("Новый.")]
+    words(backend.client, session_id, "Первое")
+    assert wait_until(lambda: len(backend.meta.calls) == 2)
+    words(backend.client, session_id, "Второе")
+    assert wait_until(lambda: spoken(seen) == ["Новый."])
+    release.set()
+    time.sleep(0.05)
+    assert spoken(seen) == ["Новый."]
 
 
 def test_the_first_object_of_a_reply_counts(backend):
@@ -1057,24 +1237,17 @@ def test_a_screen_whose_answer_broke_leaves_nothing_in_the_log(backend, monkeypa
 
 
 def test_a_model_given_up_on_stays_silent(backend, monkeypatch):
-    monkeypatch.setattr(friend, "ANSWER_SECONDS", 0.2)
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 0.02)
+    monkeypatch.setattr(friend, "ANSWER_SECONDS", 0.1)
+    entered, release = blocked(backend)
     session_id = new_session(backend.client)
     seen = events_of(backend, session_id)
-    backend.meta.replies = [line("Поздний ответ."), line("Ответ запасной модели.")]
-    spare_began, late_line = threading.Event(), threading.Event()
-
-    def hook(index):
-        if index == 1:
-            assert spare_began.wait(2)
-        else:
-            spare_began.set()
-            assert late_line.wait(2)
-    backend.meta.hook = hook
-    backend.meta.after_text = lambda index: late_line.set() if index == 1 else None
+    backend.meta.replies = [line("Поздний ответ."), line("Поздний запасной.")]
     words(backend.client, session_id)
-    idle(backend, session_id)
+    assert wait_until(lambda: spoken(seen) == [friend.FAILED_LINE])
+    release.set()
     time.sleep(0.05)
-    assert spoken(seen) == ["Ответ запасной модели."]
+    assert spoken(seen) == [friend.FAILED_LINE]
 
 
 def test_a_line_from_an_answer_nobody_waits_for_stays_silent(backend):
@@ -1136,6 +1309,22 @@ def test_payment_words_that_come_during_the_drawing_reach_the_hint_and_the_log(b
     folder = next((tmp_path / "calls").iterdir())
     assert wait_until(lambda: any(row["kind"] == "show" for row in lines_of(folder)))
     assert SHOW["label"] not in (folder / "call.log").read_text(encoding="utf-8")
+
+
+def test_payment_words_ahead_of_their_frame_wait_for_its_answer(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    client = backend.client
+    session_id = sharing(client, eyes=True)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Проверь сумму.")]
+    assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={"frame_ts": 7, "lines": [{"text": "Bayar Sekarang", "words": []}]}).status_code == 200
+    assert "face" not in kinds(seen)
+    post_frame(client, session_id, timestamp=7)
+    idle(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    assert [row["private"] for row in lines_of(folder) if row["kind"] == "answer"] == [True]
+    assert not list((folder / "frames").iterdir())
+    assert backend.store.sessions[session_id].chat[0]["frame"] is None
 
 
 def test_payment_words_after_the_outline_take_it_out_of_the_log(backend, monkeypatch, tmp_path):

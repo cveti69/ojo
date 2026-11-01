@@ -137,7 +137,7 @@ class FakeMeta:
 
     def chat_json(self, model, messages, effort, timeout=60, on_text=None):
         with self.lock:
-            self.calls.append(SimpleNamespace(model=model, messages=copy.deepcopy(messages), effort=effort))
+            self.calls.append(SimpleNamespace(model=model, messages=copy.deepcopy(messages), effort=effort, timeout=timeout))
             index = len(self.calls)
             response = self.replies.pop(0) if self.replies else line()
         if self.hook:

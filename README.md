@@ -61,7 +61,7 @@ Each Meta model has one job:
 - **Muse Wonder 1.0** thinks for the whole call. On every turn it reads the conversation and the last 4 different screens.
 - **Muse Voice Transcribe 1.0** listens through one streaming session for the whole call and finds where each phrase ends.
 - **SAM 3.1** finds the exact pixels when the words on the screen do not settle it.
-- **Muse Spark 1.3** steps in when Wonder gives no answer in 15 seconds, and translates text in the keyboard.
+- **Muse Spark 1.3** starts beside Wonder when Wonder has no line in 8 seconds, and translates text in the keyboard.
 - **Muse Code** reviewed our code as an independent second reader. Its findings are behind many of the fixes in the history.
 
 ElevenLabs reads the agent's lines aloud. Every line comes from Meta models. The only fixed text is the greeting and a few short

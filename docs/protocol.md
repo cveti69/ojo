@@ -55,7 +55,9 @@ keyboard do not change that much, and a transition does. Such a frame reaches th
 the model decides by itself whether to say something.
 
 A new turn cancels the answer in flight. Its turn stays in the chat and goes out with the next one. A screen that does not settle
-cancels an answer at most 2 times in a row. With no answer in 15 seconds, or a broken one, there is one try on the spare model.
+cancels an answer at most 2 times in a row. With no line in 8 seconds, or a broken answer, the spare model starts beside the main
+one and the main one is not cancelled. The first whole line has the say, and the other call changes neither the voice nor the chat.
+Silence from the spare model waits for the main one. Nothing by 30 seconds ends the turn.
 
 The Meta stream hears the line and finds the end of the phrase by itself. The server answers at once, and the app does not start the
 voice until the person has finished. If the person goes on before the first sound (`/played`), the new words count as the same line:
@@ -110,7 +112,7 @@ A call with `eyes` has two more events. Without `eyes` they do not exist and the
 came, and the eyes read it while the answer is on its way. `face`, at the end of every answer:
 `{"type":"face","turn":3,"face":"нашёл","calm":false}`. `face` is the word the model chose by itself: думаю (thinking), нашёл (found),
 сомневаюсь (doubting), рад (glad), стоп (stop), or `null`. `calm`: a payment, card or password screen, no face. Such a `face` also
-comes ahead of the answer if payment words were found in the screen text.
+comes ahead of the answer if payment words were found in the text of a frame the server already has.
 
 If `text_entry` is `clipboard`, the app puts `paste_text` on the clipboard as soon as it gets `say`. iOS lets a background app reach the
 clipboard only while the window is open, so if the write failed, the app repeats it when the person comes back. With `keyboard`,

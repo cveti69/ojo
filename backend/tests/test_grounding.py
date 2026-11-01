@@ -15,7 +15,7 @@ def test_the_words_say_which_row_a_radio_button_is_in(monkeypatch):
     target = {"label": "Reguler", "object": "radio button", "box": [900, 745, 950, 775], "mark_id": None}  # A row too high.
     found = real_locate(b"", 1000, 1000, {"action": "tap", "target": target}, lines, [])
     assert found["box"] == radios[1] and found["source"] == "sam"
-    head = {**target, "words_first": True}
+    head = {**target, "words_first": True, "box": [50, 790, 250, 810]}  # A row too high, and next to the words.
     assert real_locate(b"", 1000, 1000, {"action": "tap", "target": head}, lines, [])["source"] == "text"  # No time for SAM.
     monkeypatch.setattr(meta, "sam", lambda image, phrase: {"boxes": [], "ms": 1})
     found = real_locate(b"", 1000, 1000, {"action": "tap", "target": target}, lines, [])
@@ -95,6 +95,32 @@ def text_line(*words):
 def test_text_match_works_in_any_script(label, words, left):
     box = grounding.snap_to_text(label, [0.1, 0.8, 0.4, 0.85], [text_line(*words)])
     assert box and box[0] == pytest.approx(left)
+
+
+@pytest.mark.parametrize("right,source", [(960, "model"), (300, "text")])
+def test_words_far_from_the_model_box_are_another_place(monkeypatch, right, source):
+    asked_sam(monkeypatch, {})
+    lines = [{"text": "搜索", "words": [{"text": "搜索", "box": [0.1, 0.13, 0.16, 0.14]}]}]
+    target = {"label": "搜索", "object": "", "box": [right - 130, 106, right, 140], "mark_id": None, "words_first": True}
+    found = real_locate(b"", 1000, 1000, {"action": "tap", "target": target}, lines, [])
+    assert found["source"] == source
+
+
+def test_a_label_found_anywhere_needs_no_model_box():
+    assert grounding.snap_to_text("Beli", None, [text_line("Beli")])
+
+
+@pytest.mark.parametrize("gap", [{"text": " ", "box": [0, 0, 0, 0]}, {"text": "", "box": [0.1, 0.2, 0.3, 0.4]},
+                                 {"text": "RUB", "box": [0, 0, 0, 0]}, {"text": "RUB", "box": [0.5, 0.2, 0.5, 0.4]}])
+def test_a_gap_read_as_a_word_stays_out_of_the_outline(backend, gap):
+    session_id = new_session(backend.client)
+    rouble = {"text": "俄罗斯卢布", "box": [0.5, 0.2, 0.7, 0.25]}
+    lines = [{"text": "俄罗斯卢布 RUB", "words": [rouble, gap]}]
+    reply = backend.client.post("/sessions/" + session_id + "/text", headers=AUTH, json={"frame_ts": 77, "lines": lines})
+    assert reply.status_code == 200
+    kept = backend.store.sessions[session_id].frame_text[77]
+    assert kept == [{"text": "俄罗斯卢布 RUB", "words": [rouble]}]
+    assert grounding.snap_to_text("俄罗斯卢布", [0.5, 0.2, 0.7, 0.25], kept) == rouble["box"]
 
 
 def test_text_match_keeps_different_chinese_labels_apart():

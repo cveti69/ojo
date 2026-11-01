@@ -13,6 +13,12 @@ from .calllog import CallLog
 KEPT_FRAME_TEXTS = 8
 
 
+def _real_word(word: dict) -> bool:
+    """Between two scripts Vision can read the gap as a word, with a box of nothing in the corner of the screen."""
+    left, top, right, bottom = word["box"]
+    return bool(word["text"].strip()) and right > left and bottom > top
+
+
 @dataclass(frozen=True)
 class Frame:
     jpeg: bytes
@@ -82,7 +88,7 @@ class Session:
         return self.call_log.keep(frame.jpeg, frame.timestamp_ms) if self.call_log and not private else None
 
     def remember_text(self, timestamp_ms: int, lines: List[dict]) -> None:
-        self.frame_text[timestamp_ms] = lines
+        self.frame_text[timestamp_ms] = [dict(line, words=[word for word in line["words"] if _real_word(word)]) for line in lines]
         while len(self.frame_text) > KEPT_FRAME_TEXTS:
             del self.frame_text[next(iter(self.frame_text))]
 

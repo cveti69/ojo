@@ -52,7 +52,8 @@ FRAME_DIFF_THRESHOLD = 3.0
 PIXEL_CHANGED = 12  # A thumbnail pixel counts as changed above this difference.
 NEW_SCREEN_SHARE = 0.38  # Measured on a real call: a looping video reaches 0.37, the keyboard 0.33, a new screen 0.4 and up.
 SCREENS_KEPT = 4
-ANSWER_SECONDS = 15  # Past this the spare model answers: the person is on the line.
+SPARE_SECONDS = 8  # With no line by then the spare model starts beside the main one: on real calls 2 lines of 113 came later.
+ANSWER_SECONDS = 30  # One limit for both, so no call lives for ever. The eyes on the phone wait 35 s with the look.
 LOOK_SECONDS = 2  # The phone sends the screen within this, unless iOS holds it back.
 LATE_SECONDS = 10  # The phone gives up on a frame after 5 s, so anything older means its clock has moved.
 MAX_RESTARTS = 2  # A screen that keeps changing still gets an answer.
@@ -301,11 +302,10 @@ class Friend:
 
     def text_read(self, session: Session, timestamp_ms: int) -> None:
         """The words on a screen can come after its answer, and a payment screen leaves the log and the chat all the same.
-        Our window is taken out only with the frame they were read on: ahead of it, a calm that was not needed does no harm."""
+        Ahead of the frame nothing is done: its answer reads these words with our window taken out, and without one the frame is not kept."""
         known = [session.last_frame] + [kept.get("frame") for kept in session.chat]
         frame = next((seen for seen in known if seen and seen.timestamp_ms == timestamp_ms), None)
-        lines = (_text_on(session, frame) if frame else session.frame_text.get(timestamp_ms)) or []
-        if not _PRIVATE_SCREEN.search(" ".join(line["text"] for line in lines)):
+        if not frame or not _PRIVATE_SCREEN.search(" ".join(line["text"] for line in _text_on(session, frame) or [])):
             return
         for kept in session.chat:
             if kept.get("frame") and kept["frame"].timestamp_ms == timestamp_ms:
@@ -337,10 +337,10 @@ class Friend:
         self._stop(session)
         session.answer = self._run(self._answer(session, session.turn, frame))
 
-    def _on_text(self, session: Session, turn: int, started: float, early: dict) -> tuple:
+    def _on_text(self, session: Session, turn: int, started: float, early: dict, model: str) -> tuple:
         """The line goes to the voice once it is whole, ahead of the rest of the answer. It reaches the chat at the same
         moment, because the rest may never come. The call runs on in its thread after a new turn, which then has the say,
-        and after the spare model took over: the second thing returned is what shuts this one up."""
+        and after the other model won: the second thing returned is what shuts this one up."""
         loop, task = asyncio.get_running_loop(), asyncio.current_task()
         found: List[str] = []
         dropped: List[bool] = []
@@ -348,7 +348,7 @@ class Friend:
         def deliver(line: str) -> None:
             if session.answer is not task or session.ended or early or dropped:
                 return
-            early.update(line=line, ms=_ms(started), turn={"role": "assistant", "text": json.dumps({"say": line}, ensure_ascii=False)})
+            early.update(line=line, ms=_ms(started), model=model, turn={"role": "assistant", "text": json.dumps({"say": line}, ensure_ascii=False)})
             session.chat.append(early["turn"])
             session.publish({"type": "say", "turn": turn, "text_ru": line, "paste_text": None, "timings": {"model_ms": early["ms"]}})
 
@@ -358,24 +358,56 @@ class Friend:
                 loop.call_soon_threadsafe(deliver, found[0])
         return on_text, lambda: dropped.append(True)
 
+    async def _call(self, session: Session, model: str, messages: List[dict], effort: str, seconds: float, on_text: Callable) -> Optional[tuple]:
+        try:
+            reply = await asyncio.wait_for(run_in_threadpool(meta.chat_json, model, messages, effort, seconds + 1, on_text), seconds)
+            return model, reply, read(reply["text"])
+        except Exception as error:
+            log.warning("Answer from %s: %s", model, type(error).__name__)
+            session.note("no answer", model=model, error=type(error).__name__)
+            return None
+
     async def _ask(self, session: Session, turn: int, started: float, early: dict) -> Optional[tuple]:
-        """No answer in time, or a broken one: one try on the spare model. The person cannot wait for more.
-        A line that has already gone out stands, and only the rest of the answer is lost."""
+        """The main model alone while the person can wait. With no line from it by then, or a broken answer, the spare model
+        runs beside it. The first whole line has the say and the other call ends unused, but silence from the spare one
+        waits for the main one. A line that has already gone out stands, and only the rest of the answer is lost."""
         messages = messages_of(session)
         effort = session.effort or config.META_TALK_REASONING
-        for model in (config.META_TALK_MODEL, config.META_SPARE_MODEL):
-            on_text, drop = self._on_text(session, turn, started, early)
-            try:
-                reply = await asyncio.wait_for(
-                    run_in_threadpool(meta.chat_json, model, messages, effort, ANSWER_SECONDS + 1, on_text), ANSWER_SECONDS)
-                return model, reply, read(reply["text"])
-            except Exception as error:
+        main, spare = config.META_TALK_MODEL, config.META_SPARE_MODEL
+        running: dict = {}
+        ended: dict = {}
+        drops: List[Callable] = []
+
+        def call(model: str) -> asyncio.Task:
+            on_text, drop = self._on_text(session, turn, started, early, model)
+            drops.append(drop)
+            seconds = ANSWER_SECONDS - (time.perf_counter() - started)
+            task = self._run(self._call(session, model, messages, effort, seconds, on_text))
+            running[task] = model
+            return task
+
+        try:
+            first = call(main)
+            await asyncio.wait({first}, timeout=SPARE_SECONDS)
+            if not early and not (first.done() and first.result()):
+                session.note("spare", model=spare, ms=_ms(started))
+                call(spare)
+            while running:
+                done, _ = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+                ended.update((running.pop(task), task.result()) for task in done)
+                if early:
+                    if early["model"] in ended:  # The word on this screen would have come with the rest, so nothing about it is written down.
+                        return ended[early["model"]] or (early["model"], {"usage": {}}, {"say": early["line"], "private": True})
+                elif ended.get(main):
+                    return ended[main]
+                elif ended.get(spare) and (main in ended or _text(ended[spare][2].get("say"))):
+                    return ended[spare]
+            return None
+        finally:
+            for drop in drops:
                 drop()
-                log.warning("Answer from %s: %s", model, type(error).__name__)
-                session.note("no answer", model=model, error=type(error).__name__)
-                if early:  # The word on this screen would have come with the rest, so nothing about it is written down.
-                    return model, {"usage": {}}, {"say": early["line"], "private": True}
-        return None
+            for task in running:
+                task.cancel()
 
     async def _answer(self, session: Session, turn: int, frame: Optional[Frame]) -> None:
         await self._reply(session, turn, frame)
