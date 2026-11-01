@@ -9,8 +9,9 @@ protocol EyesSurface: AnyObject {
     func display(background: CGImage, drawing: (CGContext) -> Void) throws -> Bool
 }
 
-/// Keeps the window alive between hints: the eyes and the word for what is really going on, which real events decide and not the
-/// model. A hint takes the whole window. Draws only when the picture changes: up to 30 pictures a second in motion, none at rest.
+/// Keeps the window alive between hints: the drawing inside the border, the eyes and the word for what is really going on, which real
+/// events decide and not the model. A hint takes the whole window. Draws only when the picture changes: up to 30 pictures a second in
+/// motion, none at rest.
 /// It runs on a plain timer, as a screen timer stops once the app is in the background.
 @MainActor
 final class EyesStage {
@@ -19,13 +20,18 @@ final class EyesStage {
     private enum Scene: Equatable { case pause, hint }
 
     private static let size = CGSize(width: 720, height: 960)
-    private static let wordsBox = CGRect(x: 180, y: 130, width: 360, height: 360)
-    private static let wordsArea = CGRect(x: 60, y: 510, width: 600, height: 400)
+    private static let wordsBox = CGRect(x: 180, y: 170, width: 360, height: 360)
+    private static let wordsArea = CGRect(x: 60, y: 592, width: 600, height: 318)
     private static let slowestRetry = 8  // In frames: a window that keeps refusing is not worth 30 tries a second.
+    private static let longestStep = 0.1  // The drawing does not jump after a long stillness.
 
     private let surface: any EyesSurface
     private let phrases: CallWords
     private let journal: SharedJournal?
+    private let black: CGImage?
+    private var frame: EyesFrame
+    private var motion = EyesFrameMotion()
+    private var settledAt: TimeInterval = 0
     private var director = EyesDirector()
     private var timer: DispatchSourceTimer?
     private var startedAt: TimeInterval = 0
@@ -36,6 +42,7 @@ final class EyesStage {
     private var isLinkDown = false
     private var notice: String?
     private var backdrop: CGImage?
+    private var overlay: CGImage?  // The nose and the word, ready to go over the drawing, as they change far more rarely than it does.
     private var eyesBox: CGRect?
     private var composedWords: String?
     private var needsComposing = true
@@ -48,10 +55,12 @@ final class EyesStage {
     private var refused = 0
     private var drawing: TimeInterval = 0
 
-    init(surface: any EyesSurface, phrases: CallWords, journal: SharedJournal?) {
+    init(surface: any EyesSurface, phrases: CallWords, frame: EyesFrame, journal: SharedJournal?) {
         self.surface = surface
         self.phrases = phrases
+        self.frame = frame
         self.journal = journal
+        black = Self.canvas { _ in }
     }
 
     func start() {
@@ -111,6 +120,19 @@ final class EyesStage {
         tick()
     }
 
+    /// The server's word, and no other: shut eyes are a promise. The hint goes with them, as the agent has stopped looking at that screen.
+    func notLooking(_ isOn: Bool) {
+        director.isLookingAway = isOn
+        if isOn {
+            hint = nil
+            scene = .pause
+            question = nil
+            director.stopReading()
+        }
+        needsComposing = true
+        tick()
+    }
+
     /// On a payment screen the eyes keep still.
     func express(_ face: EyesFace?, calm: Bool) {
         director.isCalm = calm
@@ -126,13 +148,16 @@ final class EyesStage {
         tick()
     }
 
+    /// Only their words start the clock. A screen the agent looks at by itself leaves the window at rest.
     func wait(for reason: Wait) {
         waits.insert(reason)
         director.isOnNewScreen = waits.contains(.screen)
-        director.beginWaiting(at: clock)
-        if reason == .reply, question != nil {
-            question = nil
-            needsComposing = true
+        if reason == .reply {
+            director.beginWaiting(at: clock)
+            if question != nil {
+                question = nil
+                needsComposing = true
+            }
         }
         tick()
     }
@@ -140,7 +165,7 @@ final class EyesStage {
     func stopWaiting(for reason: Wait, redraw: Bool = true) {
         waits.remove(reason)
         director.isOnNewScreen = waits.contains(.screen)
-        if waits.isEmpty { director.endWaiting() }
+        if reason == .reply { director.endWaiting() }
         if redraw { tick() }
     }
 
@@ -167,6 +192,11 @@ final class EyesStage {
         tick()
     }
 
+    func change(frame: EyesFrame) {
+        self.frame = frame
+        redraw()
+    }
+
     func redraw() {
         needsComposing = true
         shown = nil
@@ -189,25 +219,30 @@ final class EyesStage {
             mood = director.mood
             moodSince = now
         }
-        let wanted = isLinkDown ? phrases.noLink : director.hasGivenUp(at: now) ? phrases.longWait : nil
+        let wanted = isLinkDown ? phrases.noLink : nil
         if wanted != notice || needsComposing || underEyes != composedWords {
             if wanted != notice { journal?.append("Глаза: \(wanted == nil ? "снова на месте" : "убраны, текст на чёрном")") }
             notice = wanted
             compose()
         }
+        let moved = eyesBox != nil && motion.settle(by: min(now - settledAt, Self.longestStep), mood: mood, level: director.level, gaze: pose.x)
+        settledAt = now
+        if moved { shown = nil }
         if pose != shown { draw(pose) }
-        let next = pose == shown ? director.nextChange : now + EyesDirector.frame * Double(min(max(refused, 1), Self.slowestRetry))
+        let next = pose == shown && !moved ? director.nextChange : now + EyesDirector.frame * Double(min(max(refused, 1), Self.slowestRetry))
         timer.schedule(deadline: .now() + max(0, next - now), leeway: .milliseconds(3))
     }
 
     private var underEyes: String {
+        if mood == .away { return phrases.notLooking }
         if let question { return question }
         switch mood {
         case .listening: return phrases.listening
-        case .reading: return phrases.looking
-        case .thinking: return phrases.thinking
+        case .reading: return director.hasGivenUp(at: clock) ? phrases.longWait : phrases.looking
         case .speaking: return phrases.speaking
-        default: return words ?? phrases.rest
+        default:
+            if director.hasGivenUp(at: clock) { return phrases.longWait }
+            return mood == .thinking ? phrases.thinking : words ?? phrases.rest
         }
     }
 
@@ -215,25 +250,29 @@ final class EyesStage {
         needsComposing = false
         shown = nil
         composedWords = underEyes
+        overlay = nil
+        eyesBox = nil
         if scene == .hint, let hint {
             backdrop = hint
-            eyesBox = nil
         } else if let notice {
             backdrop = Self.wordsPicture(notice, in: CGRect(x: 60, y: 200, width: 600, height: 560))
-            eyesBox = nil
         } else {
-            backdrop = Self.wordsPicture(underEyes, in: Self.wordsArea)
+            backdrop = black
+            overlay = Self.wordsPicture(underEyes, in: Self.wordsArea, noseIn: Self.wordsBox)
             eyesBox = Self.wordsBox
         }
+        if eyesBox == nil { motion = EyesFrameMotion() }  // A hint and a notice have no drawing, and it starts anew after them.
     }
 
     private func draw(_ pose: EyePose) {
         guard let backdrop else { return }
         let started = ProcessInfo.processInfo.systemUptime
-        let box = eyesBox
         do {
             let sent = try surface.display(background: backdrop) { context in
-                if let box { EyesPainter.draw(pose, in: box, on: context) }
+                guard let eyesBox else { return }
+                frame.draw(motion, on: context)
+                if let overlay { Self.drawUpright(overlay, on: context) }
+                EyesPainter.draw(pose, in: eyesBox, on: context)
             }
             if sent {
                 shown = pose
@@ -247,15 +286,26 @@ final class EyesStage {
         drawing += ProcessInfo.processInfo.systemUptime - started
     }
 
+    /// A picture goes in with its origin at the bottom left, and the surface's context is turned over.
+    private static func drawUpright(_ picture: CGImage, on context: CGContext) {
+        context.saveGState()
+        context.translateBy(x: 0, y: size.height)
+        context.scaleBy(x: 1, y: -1)
+        context.draw(picture, in: CGRect(origin: .zero, size: size))
+        context.restoreGState()
+    }
+
     /// The same bytes as the window's own pictures, so it only has to copy them.
-    private static func canvas(_ paint: (CGContext) -> Void) -> CGImage? {
+    private static func canvas(clear: Bool = false, _ paint: (CGContext) -> Void) -> CGImage? {
         guard let context = CGContext(
             data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
         ) else { return nil }
-        context.setFillColor(UIColor.black.cgColor)
-        context.fill(CGRect(origin: .zero, size: size))
+        if !clear {
+            context.setFillColor(UIColor.black.cgColor)
+            context.fill(CGRect(origin: .zero, size: size))
+        }
         context.translateBy(x: 0, y: size.height)
         context.scaleBy(x: 1, y: -1)
         UIGraphicsPushContext(context)
@@ -264,7 +314,9 @@ final class EyesStage {
         return context.makeImage()
     }
 
-    private static func wordsPicture(_ text: String, in area: CGRect) -> CGImage? {
+    /// A notice stands in the middle of its area, on black. Under the eyes the word starts right at the top of it, below the nose,
+    /// and the two come on a clear picture to lie over the drawing.
+    private static func wordsPicture(_ text: String, in area: CGRect, noseIn box: CGRect? = nil) -> CGImage? {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         paragraph.lineBreakMode = .byWordWrapping
@@ -277,8 +329,9 @@ final class EyesStage {
                                                      attributes: attributes, context: nil).height
             if height <= area.height { break }
         }
-        let top = area.minY + max(0, area.height - height) / 2
-        return canvas { _ in
+        let top = box == nil ? area.minY + max(0, area.height - height) / 2 : area.minY
+        return canvas(clear: box != nil) { context in
+            if let box { EyesPainter.drawNose(in: box, on: context) }
             (text as NSString).draw(with: CGRect(x: area.minX, y: top, width: area.width, height: area.maxY - top), options: options,
                                     attributes: attributes, context: nil)
         }

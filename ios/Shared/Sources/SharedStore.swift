@@ -30,7 +30,6 @@ public struct ServerSettings: Sendable, Equatable {
     public var thinking: ThinkingLevel = .auto
     public var character: AgentCharacter = .warm
     public var ownCharacter = ""
-    public var eyes = false
 }
 
 public final class SharedStore: @unchecked Sendable {
@@ -55,13 +54,12 @@ public final class SharedStore: @unchecked Sendable {
         return ServerSettings(
             serverURL: URL(string: defaults.string(forKey: "serverURL") ?? "") ?? defaultServerURL,
             token: defaults.string(forKey: "token") ?? "",
-            userLang: Locale.preferredLanguages.first ?? "en",  // The phone's language at every call, and never a saved one.
+            userLang: language.isEmpty ? Locale.preferredLanguages.first ?? "en" : language,  // With none chosen, the phone's at every call.
             targetLang: defaults.string(forKey: "targetLang") ?? "id",
             textEntry: TextEntry(rawValue: defaults.string(forKey: "textInput") ?? "") ?? .clipboard,
             thinking: ThinkingLevel(rawValue: defaults.string(forKey: "thinkingLevel") ?? "") ?? .auto,
             character: AgentCharacter(rawValue: defaults.string(forKey: "agentManner") ?? "") ?? .warm,
-            ownCharacter: defaults.string(forKey: "ownCharacter") ?? "",
-            eyes: defaults.bool(forKey: "eyes")
+            ownCharacter: (defaults.string(forKey: "ownCharacter") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         )
     }
 
@@ -92,6 +90,18 @@ public final class SharedStore: @unchecked Sendable {
         }
         set {
             defaults.set(newValue, forKey: "voice")
+            defaults.synchronize()
+        }
+    }
+
+    /// The person asked the agent not to look, by the server's word. Until it says otherwise the broadcast sends no frames and reads nothing.
+    public var notLooking: Bool {
+        get {
+            refresh()
+            return defaults.bool(forKey: "notLooking")
+        }
+        set {
+            defaults.set(newValue, forKey: "notLooking")
             defaults.synchronize()
         }
     }
@@ -159,10 +169,42 @@ public final class SharedStore: @unchecked Sendable {
         }
     }
 
-    public var eyes: Bool {
-        get { defaults.bool(forKey: "eyes") }
+    /// The one place the language of a call comes from: its words, the agent's rule and the phone's own voice. Empty follows the phone.
+    public var language: String {
+        get {
+            refresh()
+            return defaults.string(forKey: "language") ?? ""
+        }
         set {
-            defaults.set(newValue, forKey: "eyes")
+            defaults.set(newValue, forKey: "language")
+            defaults.synchronize()
+        }
+    }
+
+    /// The drawing inside the window's border, by the name the app gives it.
+    public var windowFrame: String {
+        get {
+            refresh()
+            return defaults.string(forKey: "windowFrame") ?? ""
+        }
+        set {
+            defaults.set(newValue, forKey: "windowFrame")
+            defaults.synchronize()
+        }
+    }
+
+    public var character: AgentCharacter {
+        get { settings.character }
+        set {
+            defaults.set(newValue.rawValue, forKey: "agentManner")
+            defaults.synchronize()
+        }
+    }
+
+    public var ownCharacter: String {
+        get { settings.ownCharacter }
+        set {
+            defaults.set(String(newValue.prefix(500)), forKey: "ownCharacter")
             defaults.synchronize()
         }
     }

@@ -75,6 +75,9 @@ final class ScreenTextCoordinator {
 
     func modeChanged() { consumeLatest() }
 
+    /// What already waits for a read goes too: the agent was told not to look.
+    func stopLooking() { clearMailbox() }
+
     func recognizeTest(jpeg: Data, targetLang: String, label: String, cpuOnly: Bool = false) async {
         let background = UIApplication.shared.applicationState == .background
         let journal = journal
@@ -86,7 +89,7 @@ final class ScreenTextCoordinator {
     }
 
     private func consumeLatest() {
-        guard !isReading, store.screenTextMode == .app, let client, let sessionID,
+        guard !isReading, store.screenTextMode == .app, !store.notLooking, let client, let sessionID,
               store.sessionID == sessionID else { return }
         do {
             guard let frame = try mailbox.latest(), frame.sessionID == sessionID, frame.frameTS != lastFrameTS else { return }

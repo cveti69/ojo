@@ -10,7 +10,7 @@ Project and signing settings are in `Config/Project.xcconfig`: `APP_DISPLAY_NAME
 `APP_GROUP_IDENTIFIER`, `DEFAULT_SERVER_URL`. Write a URL there as `https:/$()/…`, because `//` starts a comment.
 
 `Config/Local.xcconfig` is optional and stays out of git. Its `DEFAULT_SERVER_TOKEN` goes to `DefaultServerToken` in the app's
-Info.plist, and on launch the app moves it to the App Group if no token is there yet. Without the file, enter the token in settings.
+Info.plist, and on launch the app moves it to the App Group if no token is there yet. Without the file the app has no token.
 
 ```sh
 cd ios
@@ -21,9 +21,8 @@ open App.xcodeproj
 ## The call
 
 1. The main screen works like a phone: one button to call and one to end. The app's own words on a call are in
-   `Shared/Sources/CallWords.swift`, in Russian, English and Spanish by the language of the phone, English for any other. Everything
-   else is behind "⋯": a typed line, the
-   broadcast button, the window, settings and the checks.
+   `Shared/Sources/CallWords.swift`, in Russian, English and Spanish by the language chosen in settings or else the phone's, English
+   for any other. "⋯" opens the settings: the log, the frame, the language, the tone of the call and the voice.
 2. A call creates a session, turns on `.playAndRecord`, says hello and opens the microphone. Right after the greeting the app asks
    iOS for the system broadcast sheet. If it does not open, the "Show your screen" button stays, with the real system button under it.
 3. `CallMicrophone` listens until the end of the call, also from another app: iOS gives a background app the microphone only if it
@@ -35,11 +34,11 @@ open App.xcodeproj
    behind "⋯" lists the voices from `/voices` and works from the next line.
 5. With no answer 1.5 seconds after a phrase, the phone says a short waiting phrase from `PauseWords`, in Russian calls only.
 6. A `hint` event carries a 720×960 picture for the floating window: a zoomed part of the screen with the target outlined.
-   `PictureInPictureHintWindow` draws it through `AVSampleBufferDisplayLayer`. A second window source, based on a video call, is a
-   switch on the checks screen.
+   `PictureInPictureHintWindow` draws it through `AVSampleBufferDisplayLayer`. A second window source, based on a video call, stays in
+   the code with no switch on screen.
 7. `paste_text` goes to `UIPasteboard` as soon as it arrives. iOS lets a background app reach the clipboard only while the window is
-   open, so if the write fails, it is repeated when the person comes back. With the keyboard chosen in settings, the keyboard takes
-   the text from `/suggestions` instead.
+   open, so if the write fails, it is repeated when the person comes back. The keyboard road stays in the code with no setting on
+   screen: with it the keyboard takes the text from `/suggestions` instead.
 8. "Завершить" stops the voice, the microphone, the events and the window, turns off the audio session and sends `/end` under
    `beginBackgroundTask`. The extension notices the end through the App Group within 0.5 seconds and finishes the broadcast.
 
@@ -62,7 +61,7 @@ memory warning clears the cache, and a frame is skipped when less than 8 MB is l
 ## Screen text
 
 `Shared.ScreenTextReader` reads words and their boxes with Apple Vision, and the server uses them to pick the exact box. Vision makes
-no decisions. The checks screen picks where it runs:
+no decisions. `screenReading` in the App Group picks where it runs, and nothing on screen changes it:
 
 - `extension`, the default: `.accurate` Vision on the same small JPEG, in the extension, in a queue of its own. It is skipped when less
   than 16 MB of memory is available.
@@ -74,22 +73,22 @@ If a read fails, `ScreenTextWorker` repeats it once on the CPU. The shared frame
 
 ## Keyboard
 
-Settings have a page that explains how to turn it on, with a test field. The keyboard shows a hint, up to three chips with ready text,
+The page that explains how to turn it on stays in the code, and settings no longer lead to it. The keyboard shows a hint, up to three chips with ready text,
 "Перевести" (translate), the globe and delete. It has no full layout and no microphone. It polls `/suggestions` once a second, only
 while it is on screen. Without full access it uses neither the network nor the App Group and asks for that access. Some apps do not
 allow third-party keyboards, and there the clipboard does the job.
 
 ## Eyes
 
-An experiment, off by default: a switch in settings, and "Показать глазки" shows every expression. In a call, the window shows two
-eyes drawn in code between hints. `EyesDirector` decides how they move and `EyesStage` draws, up to 30 pictures a second in motion and
-none at rest. The model picks the expression in its answer. On a payment, card or password screen the eyes only rest.
+Always on. In a call, the window shows two eyes drawn in code between hints, the nose of the icon, a word under them, and between the
+border and the eyes the drawing chosen in settings, from `EyesFrame`. `EyesDirector` decides how they move and `EyesStage` draws, up to
+30 pictures a second in motion and none at rest. The word comes from real events of the call. On a payment, card or password screen
+the eyes only rest. They shut only on the server's `not_looking`, when frames really stop.
 
 ## Checks
 
-The "Проверка" screen behind "⋯" works without Xcode: a window test with no server, a clipboard test, a text-reading test, the screen
-text mode and "Скопировать журнал". The log is `events.log` in the App Group, limited to about 256 KB. It holds facts and timings,
-not what was said.
+"Журнал" in settings shows the log and copies it. The log is `events.log` in the App Group, limited to about 256 KB. It holds facts and
+timings, not what was said. The older checks screen stays in the code with no way to it.
 
 From the repository root:
 

@@ -74,6 +74,7 @@ class Session:
     last_say: Optional[dict] = None
     last_status: dict = field(init=False)
     last_done: Optional[dict] = None
+    last_sight: Optional[dict] = None  # The last word to the phone on whether the agent may look.
     grounding: Optional[dict] = None
     timings: Dict[str, Any] = field(default_factory=dict)
     frame_text: Dict[int, List[dict]] = field(default_factory=dict)
@@ -84,6 +85,11 @@ class Session:
     def __post_init__(self) -> None:
         self.words = language.words(self.user_lang)
         self.last_status = {"type": "status", "state": "waiting_frames", "text_ru": self.words["share"]}
+
+    @property
+    def not_looking(self) -> bool:
+        """They asked the agent not to watch their screen. What the phone was told is the only record, so the two cannot differ."""
+        return bool(self.last_sight and self.last_sight["on"])
 
     def touch(self) -> None:
         self.last_activity = time.monotonic()
@@ -118,6 +124,8 @@ class Session:
             self.last_say = event
         elif event["type"] == "done":
             self.last_done = event
+        elif event["type"] == "not_looking":
+            self.last_sight = event
         for queue in tuple(self.subscribers):
             self._put(queue, event)
 
@@ -131,6 +139,8 @@ class Session:
         queue: asyncio.Queue = asyncio.Queue(maxsize=16)
         self.subscribers.add(queue)
         queue.put_nowait(self.last_status)
+        if self.last_sight:
+            queue.put_nowait(self.last_sight)  # A lost connection changes nothing: their wish lasts for the call.
         if self.last_say and self.last_say["turn"] == self.turn and self.open_words and not self.ended:
             queue.put_nowait({"type": "heard", "turn": self.turn})  # No sound of the answer yet: it went to a dead socket.
             queue.put_nowait(self.last_say)

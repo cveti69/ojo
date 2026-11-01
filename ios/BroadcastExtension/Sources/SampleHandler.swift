@@ -81,6 +81,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private var windowFinds = 0
     private var windowMisses = 0
     private var keptFrame: KeptFrame?
+    private var notLooking = false
     private var screenLang: String?
     private var finished = true
     private var finishReported = false
@@ -107,14 +108,16 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             let ticket = UUID()
             let asked = store.screenAsked
             let read = store.textAsked
+            let away = store.notLooking
             lock.withLock {
                 self.run = run
                 answeredAsk = asked
                 answeredRead = read
+                notLooking = away
                 requestInFlight = true
                 requestID = ticket
             }
-            journal.append("Старт; только видео, 500 мс, JPEG 0,6, длинная сторона \(Int(Capture.maximumDimension)) px; текст: \(store.screenTextMode.rawValue); глаза: \(settings.eyes ? "да" : "нет")")
+            journal.append("Старт; только видео, 500 мс, JPEG 0,6, длинная сторона \(Int(Capture.maximumDimension)) px; текст: \(store.screenTextMode.rawValue)")
             startMonitoring(run: run)
             let task = Task { [self] in
                 do {
@@ -143,7 +146,8 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         let now = ProcessInfo.processInfo.systemUptime
         let check: FrameCheck? = lock.withLock {
             guard !finished, run != nil else { return nil }
-            newestSample = sample
+            newestSample = sample  // It stays here in memory: asked to look again, the agent gets the screen as it is, which may not move.
+            guard !notLooking else { return nil }
             let check = beginCheck(now: now)
             // The system sends nothing once the screen goes still, so the newest skipped sample waits for the monitor.
             heldSample = check == nil ? sample : nil
@@ -167,7 +171,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private func sendHeldSample() {
         let now = ProcessInfo.processInfo.systemUptime
         let ready: (Sample, FrameCheck)? = lock.withLock {
-            guard !finished, let sample = heldSample, let check = beginCheck(now: now) else { return nil }
+            guard !finished, !notLooking, let sample = heldSample, let check = beginCheck(now: now) else { return nil }
             heldSample = nil
             return (sample, check)
         }
@@ -230,6 +234,10 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 check.run.journal.append("Не удалось сжать кадр")
                 return
             }
+            guard isLooking(runID: check.run.id) else {  // Their word can come while the frame is made.
+                skipFrame(runID: check.run.id)
+                return
+            }
             keep(KeptFrame(jpeg: jpeg, thumbnail: thumbnail, size: size, timestamp: timestamp), outside: patch, run: check.run)
             upload(jpeg, sample: sample, thumbnail: thumbnail, size: size, timestamp: timestamp, small: !large, run: check.run)
         }
@@ -272,7 +280,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     }
 
     private func hold(_ sample: Sample, runID id: UUID) {
-        lock.withLock { if runID == id, !finished, heldSample == nil { heldSample = sample } }
+        lock.withLock { if runID == id, !finished, !notLooking, heldSample == nil { heldSample = sample } }
     }
 
     private func keep(_ frame: KeptFrame, outside patch: ScreenPatch?, run: Run) {
@@ -284,6 +292,10 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         }
         do { try run.shelf?.put(frame.jpeg, timestampMS: frame.timestamp, sameScreen: sameScreen) }
         catch { run.journal.append("Не удалось сохранить кадр: \(error.localizedDescription)") }
+        if !isLooking(runID: run.id) {  // Their word came as this went in.
+            lock.withLock { keptFrame = nil }
+            run.shelf?.clear()
+        }
     }
 
     /// The person spoke to the agent, so the app wants the screen as it is now: however little it changed, settled or not.
@@ -293,7 +305,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         let found: (isNew: Bool, sample: Sample?) = lock.withLock {
             guard runID == run.id, !finished, asked != answeredAsk else { return (false, nil) }
             answeredAsk = asked
-            return (true, newestSample)
+            return (true, notLooking ? nil : newestSample)
         }
         guard found.isNew else { return }
         defer { run.store.screenAnswered = asked }
@@ -312,7 +324,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private func answerRead(run: Run) {
         let asked = run.store.textAsked
         let frame: KeptFrame? = lock.withLock {
-            guard runID == run.id, !finished, asked != answeredRead else { return nil }
+            guard runID == run.id, !finished, !notLooking, asked != answeredRead else { return nil }
             if keptFrame?.timestamp != asked { answeredRead = asked }
             return keptFrame?.timestamp == asked ? keptFrame : nil
         }
@@ -372,6 +384,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             windowFinds = 0
             windowMisses = 0
             keptFrame = nil
+            notLooking = false
             screenLang = nil
             heartbeat = nil
             memoryPressure = nil
@@ -431,7 +444,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         let mode = run.store.screenTextMode
         guard mode != .off else { return true }
         let reserved = lock.withLock { () -> Bool in
-            guard runID == run.id, !finished, !textInFlight else { return false }
+            guard runID == run.id, !finished, !notLooking, !textInFlight else { return false }
             textInFlight = true
             return true
         }
@@ -439,7 +452,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         if mode == .app {
             mailboxQueue.async { [self] in
                 defer { completeText(runID: run.id) }
-                guard isActive(runID: run.id), run.store.sessionID == run.sessionID,
+                guard isLooking(runID: run.id), run.store.sessionID == run.sessionID,
                       run.store.screenTextMode == .app else { return }
                 do {
                     guard let mailbox = run.mailbox else { throw BroadcastError.noMailbox }
@@ -449,12 +462,12 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         } else {
             let task = Task { [self] in
                 defer { completeText(runID: run.id) }
-                guard isActive(runID: run.id), !Task.isCancelled else { return }
+                guard isLooking(runID: run.id), !Task.isCancelled else { return }
                 let level: ScreenTextLevel = mode == .extensionFast ? .fast : .accurate
                 let lang = lock.withLock { screenLang }
                 let reading = await textWorker.read(jpegData: jpeg, screenLang: lang, level: level,
                     canRead: { [self] in
-                        guard isActive(runID: run.id), run.store.sessionID == run.sessionID,
+                        guard isLooking(runID: run.id), run.store.sessionID == run.sessionID,
                               run.store.screenTextMode == mode else { return false }
                         guard os_proc_available_memory() >= Capture.textMemoryReserve else {
                             run.journal.append("Текст в расширении пропущен: доступно менее 16 МБ")
@@ -492,6 +505,29 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     }
 
     private func isActive(runID id: UUID) -> Bool { lock.withLock { runID == id && !finished } }
+
+    private func isLooking(runID id: UUID) -> Bool { lock.withLock { runID == id && !finished && !notLooking } }
+
+    /// Frames and reading stop here, and the broadcast itself lives on: stopping it needs the person, and they would have to start it again.
+    /// The words of a frame already read still go out, as they keep a payment screen out of the log.
+    private func followSight(run: Run) {
+        let away = run.store.notLooking
+        let turned = lock.withLock { () -> Bool in
+            guard runID == run.id, away != notLooking else { return false }
+            notLooking = away
+            heldSample = nil
+            keptFrame = nil
+            previousThumbnail = nil
+            stillness.forget()
+            screenMoved = false
+            changeTold = false
+            moveTold = false
+            return true
+        }
+        guard turned else { return }
+        if away { run.shelf?.clear() }
+        run.journal.append(away ? "Не смотрим: кадры и чтение текста остановлены" : "Смотрим снова")
+    }
 
     private func makeThumbnail(_ image: CIImage) -> [UInt8] {
         let side = Capture.thumbnailSide
@@ -672,6 +708,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             return (report, sent, skipped, requestInFlight, "; окно на кадрах: \(windowFinds) из \(windowLooks)")
         }
         guard let statistics else { return }
+        followSight(run: run)
         answerAsk(run: run)
         answerRead(run: run)
         sendHeldSample()

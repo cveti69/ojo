@@ -7,7 +7,7 @@ public struct CreateSessionRequest: Encodable, Sendable {
     public let effort: ThinkingLevel?
     public let character: AgentCharacter
     public let ownCharacter: String
-    public let eyes: Bool?  // Left out when off, so nothing changes for the server.
+    public let eyes = true
     public let signals = true  // The broadcast says when the screen changes, so a still one needs no new frame.
 
     public init(settings: ServerSettings) {
@@ -17,7 +17,6 @@ public struct CreateSessionRequest: Encodable, Sendable {
         effort = settings.thinking == .auto ? nil : settings.thinking
         character = settings.character
         ownCharacter = settings.ownCharacter
-        eyes = settings.eyes ? true : nil
     }
 
     enum CodingKeys: String, CodingKey {
@@ -150,6 +149,10 @@ public struct TurnEvent: Decodable, Sendable {
     public let turn: Int
 }
 
+public struct NotLookingEvent: Decodable, Sendable {
+    public let on: Bool
+}
+
 public enum ServerEvent: Decodable, Sendable {
     case hint(HintEvent)
     case status(StatusEvent)
@@ -162,6 +165,7 @@ public enum ServerEvent: Decodable, Sendable {
     case reading
     case face(FaceEvent)
     case read(ReadEvent)
+    case notLooking(NotLookingEvent)
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -177,6 +181,7 @@ public enum ServerEvent: Decodable, Sendable {
         case "reading": self = .reading
         case "face": self = .face(try FaceEvent(from: decoder))
         case "read": self = .read(try ReadEvent(from: decoder))
+        case "not_looking": self = .notLooking(try NotLookingEvent(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(forKey: .type, in: container, debugDescription: "Unknown event type")
         }

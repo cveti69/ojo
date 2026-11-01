@@ -22,6 +22,7 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -warnings-as-errors \
   "$protocol_ios_dir/App/Sources/Call/PauseWords.swift" \
   "$protocol_ios_dir/App/Sources/HintWindow/EyesDirector.swift" \
   "$protocol_ios_dir/App/Sources/HintWindow/EyesPainter.swift" \
+  "$protocol_ios_dir/App/Sources/HintWindow/EyesFrame.swift" \
   "$protocol_ios_dir/Tests/ProtocolChecks.swift" \
   -o "$protocol_tmp/check-protocol"
 "$protocol_tmp/check-protocol" "$@"

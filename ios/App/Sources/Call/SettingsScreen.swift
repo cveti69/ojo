@@ -1,131 +1,77 @@
 import Shared
 import SwiftUI
 
-@MainActor
-private final class SettingsForm: ObservableObject {
-    @Published var serverAddress = ""
-    @Published var token = ""
-    @Published var targetLang = ""
-    @Published var textEntry: TextEntry = .clipboard
-    @Published var thinking: ThinkingLevel = .auto
-    @Published var character: AgentCharacter = .warm
-    @Published var ownCharacter = ""
-    @Published var message = ""
-}
-
-private extension ThinkingLevel {
-    var title: String {
-        switch self {
-        case .auto: return "Авто"
-        case .minimal: return "Минимальные"
-        case .low: return "Низкие"
-        case .medium: return "Средние"
-        case .high: return "Высокие"
-        case .xhigh: return "Очень высокие"
-        case .max: return "Максимальные"
-        }
-    }
-}
-
-private extension AgentCharacter {
-    var title: String {
-        switch self {
-        case .warm: return "Тёплый"
-        case .strict: return "Строгий"
-        case .brief: return "Очень краткий"
-        case .patient: return "Терпеливый"
-        case .own: return "Свой текст"
-        }
-    }
-}
-
 struct SettingsScreen: View {
     @ObservedObject var model: CallViewModel
-    @StateObject private var form = SettingsForm()
+
+    var body: some View {
+        let words = model.words
+        Form {
+            Section {
+                NavigationLink(words.journal) { JournalScreen(model: model) }
+            }
+            Section {
+                Picker(words.frame, selection: Binding(get: { model.frame }, set: { model.setFrame($0) })) {
+                    Text(words.frameLace).tag(EyesFrame.lace)
+                    Text(words.frameGlow).tag(EyesFrame.glow)
+                    Text(words.frameTicks).tag(EyesFrame.ticks)
+                }
+                Picker(words.language, selection: Binding(get: { model.language }, set: { model.setLanguage($0) })) {
+                    Text(words.phoneLanguage).tag("")
+                    Text("Русский").tag("ru")
+                    Text("English").tag("en")
+                    Text("Español").tag("es")
+                }
+                Picker(words.tone, selection: Binding(get: { model.character }, set: { model.setCharacter($0) })) {
+                    Text(words.toneWarm).tag(AgentCharacter.warm)
+                    Text(words.toneStrict).tag(AgentCharacter.strict)
+                    Text(words.toneBrief).tag(AgentCharacter.brief)
+                    Text(words.tonePatient).tag(AgentCharacter.patient)
+                    Text(words.toneOwn).tag(AgentCharacter.own)
+                }
+                if model.character == .own {
+                    TextField(words.toneOwnHint, text: Binding(get: { model.ownCharacter }, set: { model.setOwnCharacter($0) }), axis: .vertical)
+                        .lineLimit(2...5)
+                }
+                if !model.voices.isEmpty {
+                    Picker(words.voice, selection: Binding(get: { model.voice }, set: { model.setVoice($0) })) {
+                        ForEach(model.voices) { Text($0.name).tag($0.id) }
+                    }
+                }
+            }
+        }
+        .navigationTitle(words.settingsTitle)
+        .task { await model.loadVoices() }
+    }
+}
+
+/// What the phone wrote down about its calls: times and states, with no frames and no words.
+private struct JournalScreen: View {
+    @ObservedObject var model: CallViewModel
+    @State private var log = ""
+    @State private var copied = false
 
     var body: some View {
         Form {
-            Section("Сервер") {
-                TextField("Адрес сервера", text: $form.serverAddress)
-                    .textContentType(.URL).keyboardType(.URL)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                SecureField("Токен X-Token", text: $form.token)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-            }
             Section {
-                TextField("Язык приложения-цели: id, auto, en…", text: $form.targetLang)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                Picker("Способ ввода", selection: $form.textEntry) {
-                    Text("Буфер обмена").tag(TextEntry.clipboard)
-                    Text("Наша клавиатура").tag(TextEntry.keyboard)
-                }
-            } header: {
-                Text("Языки и ввод текста")
-            } footer: {
-                Text("auto — агент определит язык по экрану. Буфер работает везде. Нашу клавиатуру включайте только для приложений, которые её пускают. Новые настройки применяются со следующего звонка.")
-            }
-            Section {
-                Picker("Рассуждения", selection: $form.thinking) {
-                    ForEach(ThinkingLevel.allCases, id: \.self) { Text($0.title).tag($0) }
-                }
-                Picker("Характер", selection: $form.character) {
-                    ForEach(AgentCharacter.allCases, id: \.self) { Text($0.title).tag($0) }
-                }
-                if form.character == .own {
-                    TextField("Каким быть агенту", text: $form.ownCharacter, axis: .vertical)
-                        .lineLimit(2...5)
-                }
-            } header: {
-                Text("Агент")
-            } footer: {
-                Text("Авто: глубину выбирает сервер. Чем глубже рассуждения, тем дольше ждать ответа. Запреты на пароли, карты и оплату характер не меняет. Новые настройки применяются со следующего звонка.")
-            }
-            if !model.voices.isEmpty {
-                Section {
-                    Picker("Голос", selection: Binding(get: { model.voice }, set: { model.setVoice($0) })) {
-                        ForEach(model.voices) { Text($0.name).tag($0.id) }
-                    }
-                } footer: {
-                    Text("Новый голос работает со следующей реплики.")
+                Button(copied ? model.words.journalCopied : model.words.copyJournal) {
+                    UIPasteboard.general.string = log
+                    copied = true
                 }
             }
             Section {
-                Toggle("Глазки", isOn: Binding(get: { model.showsEyes }, set: { model.setShowsEyes($0) }))
-                    .disabled(model.isCallActive)
-                NavigationLink("Показать глазки") { EyesPreviewScreen() }
-            } footer: {
-                Text("Глаза в окне между подсказками: показывают, что агент смотрит, думает или слушает. Включаются со следующего звонка.")
-            }
-            Section {
-                Button("Сохранить") { save() }
-                    .disabled(model.store == nil)
-                if !form.message.isEmpty { Text(form.message) }
-                NavigationLink("Подключить и проверить клавиатуру") {
-                    KeyboardOnboardingScreen(displayName: model.displayName)
-                }
+                Text(log)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
             }
         }
-        .navigationTitle("Настройки")
-        .task { await model.loadVoices() }
-        .onAppear {
-            guard let settings = model.store?.settings else { return }
-            form.serverAddress = settings.serverURL.absoluteString
-            form.token = settings.token
-            form.targetLang = settings.targetLang
-            form.textEntry = settings.textEntry
-            form.thinking = settings.thinking
-            form.character = settings.character
-            form.ownCharacter = settings.ownCharacter
+        .navigationTitle(model.words.journal)
+        .task {
+            while !Task.isCancelled {
+                log = model.journal?.contents() ?? ""
+                do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { break }
+            }
         }
-    }
-
-    private func save() {
-        do {
-            try model.store?.save(serverAddress: form.serverAddress, token: form.token, targetLang: form.targetLang, textEntry: form.textEntry,
-                                  thinking: form.thinking, character: form.character, ownCharacter: form.ownCharacter)
-            form.message = "Сохранено в общей группе приложения"
-            model.journal?.append("Настройки сохранены; text_entry: \(form.textEntry.rawValue); рассуждения: \(form.thinking.rawValue); характер: \(form.character.rawValue)")
-        } catch { form.message = error.localizedDescription }
     }
 }
 

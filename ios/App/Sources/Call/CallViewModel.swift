@@ -22,9 +22,12 @@ final class CallViewModel: ObservableObject {
     @Published private(set) var useVideoCallFallback = false
     @Published private(set) var measuresAppleSpeech = false
     @Published private(set) var hearsOverVoice = false
-    @Published private(set) var showsEyes = false
     @Published private(set) var voices: [Voice] = []
     @Published private(set) var voice = ""
+    @Published private(set) var frame = EyesFrame.lace
+    @Published private(set) var language = ""
+    @Published private(set) var character = AgentCharacter.warm
+    @Published private(set) var ownCharacter = ""
     @Published private(set) var status = CallWords.device.ready
     @Published private(set) var lastInstruction = CallWords.device.noHints
     @Published private(set) var windowState: HintWindowState = .inactive
@@ -119,7 +122,15 @@ final class CallViewModel: ObservableObject {
         voice = store?.voice ?? ""
         measuresAppleSpeech = store?.measuresAppleSpeech ?? false
         hearsOverVoice = store?.hearsOverVoice ?? false
-        showsEyes = store?.eyes ?? false
+        frame = EyesFrame(rawValue: store?.windowFrame ?? "") ?? .lace
+        language = store?.language ?? ""
+        character = store?.character ?? .warm
+        ownCharacter = store?.ownCharacter ?? ""
+        if let store {
+            takeWords(from: store)
+            status = words.ready
+            lastInstruction = words.noHints
+        }
         if let configuration {
             do { shelf = try FrameShelf(configuration: configuration) }
             catch { journal?.append("Полка кадров недоступна: \(error.localizedDescription)") }
@@ -176,6 +187,7 @@ final class CallViewModel: ObservableObject {
         guard !isCallActive, !isWorking, let store else { return }
         let settings = store.settings
         store.sessionID = nil
+        store.notLooking = false
         shelf?.clear()
         if let speaker = speaker as? ServerSpeaker {
             speaker.hearsOverVoice = hearsOverVoice
@@ -183,9 +195,8 @@ final class CallViewModel: ObservableObject {
         }
         textCoordinator?.prepareForCall(targetLang: settings.targetLang)
         isWorking = true
-        words = .device
+        takeWords(from: store)
         status = words.connecting
-        pauseWords = PauseWords(words.pause)
         let id = newWorkflow()
         workflow = Task { [weak self] in
             guard let self else { return }
@@ -200,7 +211,7 @@ final class CallViewModel: ObservableObject {
                 self.client = client
                 self.sessionID = response.sessionID
                 store.sessionID = response.sessionID
-                try self.beginLocalCall(withEyes: settings.eyes)
+                try self.beginLocalCall(withEyes: true)
                 self.speaker.prepare(client: client, journal: self.journal)
                 let own = settings.character == .own ? ", \(settings.ownCharacter.count) знаков" : ""
                 self.journal?.append("Сессия создана; рассуждения: \(settings.thinking.rawValue); характер: \(settings.character.rawValue)\(own)")
@@ -263,6 +274,7 @@ final class CallViewModel: ObservableObject {
         movedAt = 0
         hintOnWindow = false
         if let endingID, store?.sessionID == endingID { store?.sessionID = nil }
+        store?.notLooking = false
         textCoordinator?.stop()
         startWindowWhenReady = false
         testTimer?.invalidate()
@@ -378,9 +390,30 @@ final class CallViewModel: ObservableObject {
         store?.hearsOverVoice = value
     }
 
-    func setShowsEyes(_ value: Bool) {
-        showsEyes = value
-        store?.eyes = value
+    func setFrame(_ value: EyesFrame) {
+        frame = value
+        store?.windowFrame = value.rawValue
+        eyes?.change(frame: value)
+    }
+
+    /// From the next call on: one call keeps one language. With no call the screen changes at once.
+    func setLanguage(_ value: String) {
+        language = value
+        store?.language = value
+        guard let store, !isCallActive, !isWorking else { return }
+        takeWords(from: store)
+        status = words.ready
+        lastInstruction = words.noHints
+    }
+
+    func setCharacter(_ value: AgentCharacter) {
+        character = value
+        store?.character = value
+    }
+
+    func setOwnCharacter(_ value: String) {
+        ownCharacter = value
+        store?.ownCharacter = value
     }
 
     /// The next line sounds in it, in the middle of a call too.
@@ -481,6 +514,11 @@ final class CallViewModel: ObservableObject {
         unwrittenPaste = ClipboardWriter.write(text, reason: reason, journal: journal) ? nil : text
     }
 
+    private func takeWords(from store: SharedStore) {
+        words = .of(store.settings.userLang)
+        pauseWords = PauseWords(words.pause)
+    }
+
     private func newWorkflow() -> UUID {
         workflow?.cancel()
         workflowID = UUID()
@@ -491,7 +529,7 @@ final class CallViewModel: ObservableObject {
         try audioSession.activate()
         window.prepare()
         if withEyes {
-            let stage = EyesStage(surface: window, phrases: words, journal: journal)
+            let stage = EyesStage(surface: window, phrases: words, frame: frame, journal: journal)
             stage.start()
             eyes = stage
         } else { try window.display(image: TestFrameFactory.make(title: words.waitingHint)) }
@@ -803,6 +841,15 @@ final class CallViewModel: ObservableObject {
             eyes?.express(nil, calm: event.calm)
         case .read(let event):
             store?.textAsked = event.frameTS
+        case .notLooking(let event):
+            store?.notLooking = event.on
+            eyes?.notLooking(event.on)
+            journal?.append("Сервер: \(event.on ? "не смотрим" : "смотрим снова")")
+            if event.on {
+                hintOnWindow = false
+                textCoordinator?.stopLooking()
+            }
+            lastInstruction = event.on ? words.notLooking : words.rest
         }
     }
 

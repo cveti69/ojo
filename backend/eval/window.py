@@ -24,6 +24,7 @@ import re
 import shutil
 import statistics
 import subprocess
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -38,6 +39,7 @@ LONG_SIDE = 1000
 WINDOW_AREA = 0.10
 MARGIN = 0.03
 HIDDEN_ENOUGH = 0.6
+PHONE = HERE.parent.parent / "ios" / "App" / "Sources" / "HintWindow"
 SPOTS = {"left-middle": (0, 0.5), "right-middle": (1, 0.5), "left-top": (0, 0.2), "right-top": (1, 0.2),
          "left-bottom": (0, 0.8), "right-bottom": (1, 0.8)}
 MOVE_WORDS = re.compile(r"сдвин|подвин|передвин|отодвин|перетащ|перемест|убери|отведи|оттащи")
@@ -116,25 +118,14 @@ def card(text: str) -> Image.Image:
     return picture
 
 
-def face(text: str) -> Image.Image:
-    """The window between hints as EyesStage draws it, with the nose in the very colour of the border."""
-    scale = 4
-    picture = Image.new("RGB", (hint.SIZE[0] * scale, hint.SIZE[1] * scale), "black")
-    draw = ImageDraw.Draw(picture)
-
-    def round_box(x: float, y: float, across: float, down: float, fill: str | tuple) -> None:
-        draw.ellipse([value * scale for value in (x - across, y - down, x + across, y + down)], fill=fill)
-
-    for x in (255.6, 464.4):
-        round_box(x, 310, 75.6, 117.18, "white")
-        round_box(x, 310, 37.8, 37.8, "black")
-        round_box(x + 17.39, 295.64, 11.34, 11.34, "white")
-    middle = [(360, 420), (360, 482)] + [(329 + 31 * math.cos(step / 30 * math.pi * 5 / 6), 482 + 31 * math.sin(step / 30 * math.pi * 5 / 6)) for step in range(31)]
-    for x, y in middle[:1] + middle[-1:]:
-        round_box(x, y, 17.5, 17.5, window.BORDER)
-    draw.line([value * scale for point in middle for value in point], fill=window.BORDER, width=35 * scale, joint="curve")
-    draw.text((360 * scale, 730 * scale), text, fill="white", anchor="mm", font_size=64 * scale)
-    return picture.resize(hint.SIZE, Image.Resampling.LANCZOS)
+def faces() -> list[tuple[str, Image.Image]]:
+    """The window between hints, drawn by the phone's own code: each frame in each state, at one moment of its motion."""
+    with tempfile.TemporaryDirectory() as folder:
+        tool = Path(folder) / "faces"
+        sources = [HERE / "tools" / "faces.swift", *(PHONE / name for name in ("EyesDirector.swift", "EyesPainter.swift", "EyesFrame.swift"))]
+        subprocess.run(["swiftc", "-parse-as-library", "-O", "-o", tool, *sources], check=True, capture_output=True)
+        subprocess.run([tool, folder], check=True, capture_output=True)
+        return [(path.stem.split("__")[0], Image.open(path).convert("RGB")) for path in sorted(Path(folder).glob("*__*0.png"))]
 
 
 def paste(base: Image.Image, picture: Image.Image, rect: tuple[int, int, int, int]) -> Image.Image:
@@ -205,14 +196,15 @@ def same_place(found: list[float] | None, truth: list[float]) -> bool:
 def detect() -> None:
     _, bases, pictures = load_spec()
     tally: dict[str, dict] = {}
+    drawn = faces()
     for name, base in bases.items():
         width, height = base.size
         for spot_name in SPOTS:
             rect = spot(spot_name, width, height)
             truth = [rect[0] / width, rect[1] / height, rect[2] / width, rect[3] / height]
             known = pictures[name]
-            for state, shown in (("hint", known), ("touched", known), ("card", card("Смотрю экран")),
-                                 ("face", face("Смотрю")), ("face touched", face("Смотрю"))):
+            for state, shown in (("hint", known), ("touched", known), ("card", card("Смотрю экран")), *drawn,
+                                 *((f"{frame} touched", picture) for frame, picture in drawn)):
                 plain = small_jpeg(paste(base, with_controls(shown) if "touched" in state else shown, rect))
                 marked = small_jpeg(paste(base, with_controls(window.add_border(shown)) if "touched" in state
                                           else window.add_border(shown), rect))
@@ -295,8 +287,10 @@ def scenes() -> None:
             count("white card: nothing found", window.find(small_jpeg(card_page(back, wide, ratio))[0]) is None)
         for columns, ratio, gutter in itertools.product((2, 3), (0.66, 0.72, 0.75, 0.78, 0.82), (24, 36, 60)):
             count("sale page: nothing found", window.find(small_jpeg(sale_page(back, columns, ratio, gutter))[0]) is None)
-    plain, nosed = window.add_border(card("Смотрю экран")), window.add_border(face("Смотрю"))
-    for name, picture in (("card", plain), ("card dimmed", with_controls(plain)), ("nose", nosed), ("nose dimmed", with_controls(nosed))):
+    plain = window.add_border(card("Смотрю экран"))
+    drawn = [(frame, window.add_border(picture)) for frame, picture in faces()]
+    for name, picture in (("card", plain), ("card dimmed", with_controls(plain)), *drawn,
+                          *((f"{frame} dimmed", with_controls(picture)) for frame, picture in drawn)):
         for back in BRIGHT_PAGES:
             for columns, wide, place in itertools.product((2, 3), (0.30, 0.39, 0.44), ((0.97, 0.5), (0.97, 0.8), (0.03, 0.6))):
                 rect = window_at(*place, wide)

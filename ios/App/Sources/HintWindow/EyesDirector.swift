@@ -18,6 +18,7 @@ enum EyesMood: String {
     case rest = "покой", reading = "читает", thinking = "думает", listening = "слушает"
     case speaking = "говорит", pointing = "показывает", happy = "радуется"
     case found = "нашёл", doubting = "сомневается", stopped = "стоп"
+    case away = "не смотрит"
 }
 
 /// The model's own word for its face. It chooses by itself, and the eyes only show it.
@@ -40,7 +41,7 @@ enum EyesJoke: CaseIterable {
 /// Decides how the eyes move. Time comes from outside and is never read here, so a whole call can be played through in a check.
 struct EyesDirector {
     static let frame = 1.0 / 30
-    static let givesUpAfter = 9.0  // Eyes must not hide a call that has stalled.
+    static let givesUpAfter = 12.0  // Eyes must not hide a call that has stalled, so a wait this long gets words of its own.
     private static let longestWait = 35.0  // The 30 s the server gives an answer, and the look at the screen.
     private static let jump = 0.04...0.06
     private static let hold = 0.15...0.7
@@ -70,6 +71,7 @@ struct EyesDirector {
     var isSpeaking = false
     var isCalm = false  // Payment, card, password: nothing but rest.
     var isOnNewScreen = false  // Nobody has said yet what this screen is, and it can be a payment. No jokes over it.
+    var isLookingAway = false  // Only the server says so, as shut eyes promise that the agent is really not looking.
     private(set) var mood = EyesMood.rest
     private let random: () -> Double
     private var now = 0.0
@@ -95,7 +97,7 @@ struct EyesDirector {
     private var wink = 1.0
     private var doubt = 0.0
 
-    private var level = 0.0
+    private(set) var level = 0.0
     private var lastHeard = -Double.infinity
     private var readingUntil = -Double.infinity
     private var pointStart = -Double.infinity
@@ -231,15 +233,16 @@ struct EyesDirector {
     }
 
     private func moodNow(at time: TimeInterval) -> EyesMood {
+        if isLookingAway { return .away }
         if isCalm { return .rest }
         if time < happyUntil { return .happy }
         if time < pointStart + Self.pointingFor { return .pointing }
         if time - lastHeard < Self.hearingGap { return .listening }
         if time < faceStart + Self.faceFor { return face }
         if isSpeaking { return .speaking }
+        guard let waitingSince else { return .rest }  // A look of the agent's own shows nothing: only a person can be waiting.
         if time < readingUntil { return .reading }
-        if let waitingSince, time - waitingSince >= Self.thinksAfter { return .thinking }
-        return .rest
+        return time - waitingSince >= Self.thinksAfter ? .thinking : .rest
     }
 
     private var isMoving: Bool {
@@ -274,7 +277,7 @@ struct EyesDirector {
         doubt = Self.approach(doubt, doubtTarget, by: step)
     }
 
-    private static func approach(_ value: Double, _ target: Double, by step: Double) -> Double {
+    static func approach(_ value: Double, _ target: Double, by step: Double) -> Double {
         abs(target - value) <= step ? target : value + (target > value ? step : -step)
     }
 
@@ -307,7 +310,7 @@ struct EyesDirector {
         case .pointing:
             jump(to: pointingAt, at: time)
             nextLook = .infinity
-        case .rest, .listening, .speaking, .happy, .found, .stopped:
+        case .rest, .listening, .speaking, .happy, .found, .stopped, .away:
             jump(to: (0, 0), at: time)
             nextLook = .infinity
         }
@@ -350,6 +353,7 @@ struct EyesDirector {
         case .pointing: return time - pointStart < Self.flareFor ? 1.12 : 1
         case .found: return time - faceStart < Self.foundFor ? 1.12 : 1
         case .stopped: return Self.stoppedOpen
+        case .away: return 0
         default: return 1
         }
     }

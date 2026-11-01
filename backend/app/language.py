@@ -14,6 +14,7 @@ WORDS: Dict[str, Dict[str, str]] = {
         "silent": "(молчит, экран обновился)",
         "unseen": "(экран не показан)",
         "unshown": "(обводка не показана)",
+        "closed": "(человек просил не смотреть, экран не показан)",
     },
     "en": {
         "share": "Share your screen",
@@ -25,6 +26,7 @@ WORDS: Dict[str, Dict[str, str]] = {
         "silent": "(silent, the screen updated)",
         "unseen": "(screen not shown)",
         "unshown": "(outline not shown)",
+        "closed": "(the person asked you not to look, screen not shown)",
     },
     "es": {
         "share": "Comparte tu pantalla",
@@ -36,6 +38,7 @@ WORDS: Dict[str, Dict[str, str]] = {
         "silent": "(en silencio, la pantalla se actualizó)",
         "unseen": "(pantalla no mostrada)",
         "unshown": "(contorno no mostrado)",
+        "closed": "(la persona pidió que no mires, pantalla no mostrada)",
     },
 }
 

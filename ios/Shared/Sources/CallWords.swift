@@ -18,6 +18,7 @@ public struct CallWords: Sendable, Equatable {
     public let speaking: String
     public let noLink: String
     public let longWait: String
+    public let notLooking: String
     public let waitingHint: String
 
     // On the call screen.
@@ -37,6 +38,27 @@ public struct CallWords: Sendable, Equatable {
     public let openWindow: String
     public let call: String
     public let hangUp: String
+
+    // In the settings.
+    public let settingsTitle: String
+    public let journal: String
+    public let copyJournal: String
+    public let journalCopied: String
+    public let frame: String
+    public let frameLace: String
+    public let frameGlow: String
+    public let frameTicks: String
+    public let language: String
+    public let phoneLanguage: String
+    public let tone: String
+    public let toneWarm: String
+    public let toneStrict: String
+    public let toneBrief: String
+    public let tonePatient: String
+    public let toneOwn: String
+    public let toneOwnHint: String
+    public let voice: String
+    public let done: String
 
     public static var device: CallWords { of(Locale.preferredLanguages.first ?? "en") }
 
@@ -60,7 +82,8 @@ public struct CallWords: Sendable, Equatable {
         thinking: "Думаю",
         speaking: "Говорю",
         noLink: "Нет связи",
-        longWait: "Жду ответа дольше обычного",
+        longWait: "Всё ещё думаю",
+        notLooking: "Не смотрю",
         waitingHint: "Ожидание подсказки",
         ready: "Позвоните и скажите, что нужно. Нажимаете всегда вы.",
         noHints: "Подсказок пока нет",
@@ -77,7 +100,26 @@ public struct CallWords: Sendable, Equatable {
         showScreen: "Покажи экран",
         openWindow: "Открыть окно",
         call: "Позвонить",
-        hangUp: "Завершить"
+        hangUp: "Завершить",
+        settingsTitle: "Настройки",
+        journal: "Журнал",
+        copyJournal: "Скопировать журнал",
+        journalCopied: "Журнал скопирован",
+        frame: "Рамка",
+        frameLace: "Кружево",
+        frameGlow: "Мягкий свет",
+        frameTicks: "Чёрточки",
+        language: "Язык",
+        phoneLanguage: "Как на телефоне",
+        tone: "Тон разговора",
+        toneWarm: "Тёплый",
+        toneStrict: "Строгий",
+        toneBrief: "Очень краткий",
+        tonePatient: "Терпеливый",
+        toneOwn: "Свой текст",
+        toneOwnHint: "Каким быть агенту",
+        voice: "Голос",
+        done: "Готово"
     )
 
     public static let english = CallWords(
@@ -92,7 +134,8 @@ public struct CallWords: Sendable, Equatable {
         thinking: "Thinking",
         speaking: "Speaking",
         noLink: "No connection",
-        longWait: "Taking longer than usual",
+        longWait: "Still thinking",
+        notLooking: "Not looking",
         waitingHint: "Waiting for a hint",
         ready: "Call and say what you need. You always do the tapping.",
         noHints: "No hints yet",
@@ -109,7 +152,26 @@ public struct CallWords: Sendable, Equatable {
         showScreen: "Show your screen",
         openWindow: "Open the window",
         call: "Call",
-        hangUp: "End call"
+        hangUp: "End call",
+        settingsTitle: "Settings",
+        journal: "Log",
+        copyJournal: "Copy the log",
+        journalCopied: "Log copied",
+        frame: "Frame",
+        frameLace: "Lace",
+        frameGlow: "Soft light",
+        frameTicks: "Ticks",
+        language: "Language",
+        phoneLanguage: "Same as the phone",
+        tone: "Tone of the call",
+        toneWarm: "Warm",
+        toneStrict: "Strict",
+        toneBrief: "Very brief",
+        tonePatient: "Patient",
+        toneOwn: "My own words",
+        toneOwnHint: "What the agent should be like",
+        voice: "Voice",
+        done: "Done"
     )
 
     public static let spanish = CallWords(
@@ -124,7 +186,8 @@ public struct CallWords: Sendable, Equatable {
         thinking: "Pensando",
         speaking: "Hablando",
         noLink: "Sin conexión",
-        longWait: "Está tardando más de lo normal",
+        longWait: "Sigo pensando",
+        notLooking: "No estoy mirando",
         waitingHint: "Esperando una pista",
         ready: "Llama y di lo que necesitas. Siempre tocas tú.",
         noHints: "Aún no hay pistas",
@@ -141,6 +204,25 @@ public struct CallWords: Sendable, Equatable {
         showScreen: "Muestra tu pantalla",
         openWindow: "Abrir la ventana",
         call: "Llamar",
-        hangUp: "Colgar"
+        hangUp: "Colgar",
+        settingsTitle: "Ajustes",
+        journal: "Registro",
+        copyJournal: "Copiar el registro",
+        journalCopied: "Registro copiado",
+        frame: "Marco",
+        frameLace: "Encaje",
+        frameGlow: "Luz suave",
+        frameTicks: "Rayitas",
+        language: "Idioma",
+        phoneLanguage: "Como en el teléfono",
+        tone: "Tono de la llamada",
+        toneWarm: "Cálido",
+        toneStrict: "Estricto",
+        toneBrief: "Muy breve",
+        tonePatient: "Paciente",
+        toneOwn: "Texto propio",
+        toneOwnHint: "Cómo debe ser el agente",
+        voice: "Voz",
+        done: "Listo"
     )
 }

@@ -189,6 +189,7 @@ private enum ProtocolChecks {
         let create = requests.first { $0.url!.path == "/api/sessions" }!
         var createBody = try JSONSerialization.jsonObject(with: body(of: create)) as! [String: Any]
         try check(createBody.removeValue(forKey: "signals") as? Bool == true, "the phone promises the signals")
+        try check(createBody.removeValue(forKey: "eyes") as? Bool == true, "the eyes are always on")
         try check(createBody as! [String: String] == ["user_lang": "ru", "target_lang": "auto", "text_entry": "clipboard",
                                                       "character": "warm", "own_character": ""], "create-session body leaves the level to the server")
         var chosen = settings
@@ -261,6 +262,9 @@ private enum ProtocolChecks {
               read.frameTS == 1_761_000_000_123 else { throw CheckFailure(description: "read event") }
         guard case .heard(let heard) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"heard","turn":4}"#.utf8)), heard.turn == 4 else {
             throw CheckFailure(description: "heard event")
+        }
+        guard case .notLooking(let sight) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"not_looking","on":true}"#.utf8)), sight.on else {
+            throw CheckFailure(description: "not_looking event")
         }
         guard case .left = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"left"}"#.utf8)) else {
             throw CheckFailure(description: "left event")
@@ -603,11 +607,24 @@ private enum ProtocolChecks {
         var moves = 0
         for (one, two) in zip(thoughts, thoughts.dropFirst()) where abs(one.pose.x - two.pose.x) > 0.01 && two.pose.left > 0.99 { moves += 1 }
         try check(moves < 12, "jumps are short: a side change takes a couple of pictures, not a slide")
-        try check(!thinking.hasGivenUp(at: 9.9) && thinking.hasGivenUp(at: 10.1), "after nine seconds the eyes give way to words")
+        try check(!thinking.hasGivenUp(at: 12.9) && thinking.hasGivenUp(at: 13.1), "after twelve seconds the wait gets words of its own")
         try check(!thinking.hasWaitedOut(at: 35.9) && thinking.hasWaitedOut(at: 36.1), "no wait lasts past the longest answer")
+
+        var alone = EyesDirector(random: sameRandom())
+        _ = alone.advance(to: 1)
+        alone.screenChanged(at: 1)
+        let unasked = play(&alone, from: 1, to: 12)
+        try check(alone.mood == .rest && unasked.allSatisfy { $0.pose.x == 0 && $0.pose.y == 0 && $0.pose.brow == 0 }, "a screen nobody asked about leaves the eyes at rest")
+        alone.screenChanged(at: 12)
+        alone.beginWaiting(at: 13)
+        _ = alone.advance(to: 13.1)
+        try check(alone.mood == .reading, "until the person speaks while the agent looks")
+        _ = alone.advance(to: 14.8)
+        try check(alone.mood == .thinking && !alone.hasGivenUp(at: 24.9) && alone.hasGivenUp(at: 25.1), "and the wait counts from their words")
 
         var reader = EyesDirector(random: sameRandom())
         _ = reader.advance(to: 1)
+        reader.beginWaiting(at: 1)
         reader.screenChanged(at: 1)
         let reading = play(&reader, from: 1, to: 3.5)
         try check(reader.mood == .reading, "a new screen is read")
@@ -654,6 +671,7 @@ private enum ProtocolChecks {
         _ = moved.advance(to: 1)
         moved.rejoice(at: 1)
         moved.express(.found, at: 1)
+        moved.beginWaiting(at: 1)
         moved.screenChanged(at: 1.2)
         let carried = moved.advance(to: 1.3)
         try check(moved.mood == .reading && !carried.isHappy, "a face stays on its own screen")
@@ -760,6 +778,164 @@ private enum ProtocolChecks {
         let raised = (0..<720).contains { painted[(250 * 720 + $0) * 4] > 128 }
         _ = try inked(EyePose(brow: 1))
         try check(raised && !(0..<720).contains { painted[(250 * 720 + $0) * 4] > 128 }, "the brow goes up in doubt")
+        try checkNose()
+        try checkFrames()
+        try checkLookingAway()
+    }
+
+    /// The pictures of a frame in every state it has, with the eyes over it. The numbers are the peaks of a real call.
+    private static func framePictures(of frame: EyesFrame) throws -> [(name: String, pixels: [UInt8])] {
+        var pictures: [(name: String, pixels: [UInt8])] = []
+        let states: [(String, EyesFrameMotion)] = [
+            ("speaking", EyesFrameMotion(speak: 1)), ("thinking", EyesFrameMotion(think: 1, gaze: 0.7)), ("thinking left", EyesFrameMotion(think: 1, gaze: -0.7)),
+            ("reading", EyesFrameMotion(look: 1, gaze: 0.75)), ("listening", EyesFrameMotion(level: 1)),
+            ("all at once", EyesFrameMotion(speak: 1, think: 1, look: 1, level: 1, gaze: 1)),
+        ]
+        for (name, motion) in states {
+            for time in [0.4, 1.7, 3.1] {
+                var moving = motion
+                moving.time = time
+                pictures.append(("\(name) at \(time)", try paintedWindow(frame, moving)))
+            }
+        }
+        return pictures
+    }
+
+    private static func paintedWindow(_ frame: EyesFrame, _ motion: EyesFrameMotion, nose: Bool = false) throws -> [UInt8] {
+        var pixels = [UInt8](repeating: 0, count: 720 * 960 * 4)
+        try pixels.withUnsafeMutableBytes { bytes in
+            guard let context = CGContext(data: bytes.baseAddress, width: 720, height: 960, bitsPerComponent: 8, bytesPerRow: 2880,
+                                          space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                throw CheckFailure(description: "frame context")
+            }
+            context.setFillColor(red: 0, green: 0, blue: 0, alpha: 1)
+            context.fill(CGRect(x: 0, y: 0, width: 720, height: 960))
+            context.translateBy(x: 0, y: 960)
+            context.scaleBy(x: 1, y: -1)
+            let box = CGRect(x: 180, y: 170, width: 360, height: 360)
+            frame.draw(motion, on: context)
+            if nose { EyesPainter.drawNose(in: box, on: context) }
+            EyesPainter.draw(EyePose(), in: box, on: context)
+            context.setStrokeColor(red: 150.0 / 255, green: 40.0 / 255, blue: 245.0 / 255, alpha: 1)
+            context.setLineWidth(25)
+            context.stroke(CGRect(x: 12.5, y: 12.5, width: 695, height: 935))
+        }
+        return pixels
+    }
+
+    private static func windowOnScreen(_ window: [UInt8], at spot: (x: Int, y: Int, width: Int), screen: (width: Int, height: Int)) throws -> [UInt8] {
+        var pixels = picture(width: screen.width, height: screen.height, window: nil)
+        let source = try require(window.withUnsafeBytes { bytes -> CGImage? in
+            guard let context = CGContext(data: UnsafeMutableRawPointer(mutating: bytes.baseAddress), width: 720, height: 960, bitsPerComponent: 8, bytesPerRow: 2880,
+                                          space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+            return context.makeImage()
+        }, "a picture of the window")
+        try pixels.withUnsafeMutableBytes { bytes in
+            guard let context = CGContext(data: bytes.baseAddress, width: screen.width, height: screen.height, bitsPerComponent: 8, bytesPerRow: screen.width * 4,
+                                          space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                throw CheckFailure(description: "screen context")
+            }
+            let tall = spot.width * 4 / 3
+            context.interpolationQuality = .medium
+            context.draw(source, in: CGRect(x: spot.x, y: screen.height - spot.y - tall, width: spot.width, height: tall))
+        }
+        return pixels
+    }
+
+    private static func checkFrames() throws {
+        var still = EyesFrameMotion()
+        for mood in [EyesMood.rest, .pointing, .happy, .found, .doubting, .stopped] {
+            try check(!still.settle(by: 0.033, mood: mood, level: 0.8, gaze: 0.5), "a mood of its own moves nothing in the drawing: \(mood)")
+        }
+        var calm = EyesFrameMotion()
+        try check(calm.settle(by: 0.033, mood: .listening, level: 0.8, gaze: 0) && calm.level > 0, "a voice moves the drawing")
+        var settling = 0
+        while calm.settle(by: 0.033, mood: .rest, level: 0.8, gaze: 0) { settling += 1 }
+        try check((1...12).contains(settling) && calm == EyesFrameMotion(), "it comes back to rest, and then asks for no more pictures")
+        var walking = EyesFrameMotion()
+        _ = walking.settle(by: 0.1, mood: .thinking, level: 0, gaze: 0.7)
+        try check(walking.think == 0.5 && walking.gaze == 0.7 * 1 && walking.time > 0, "thinking follows the eyes")
+        var looking = EyesFrameMotion()
+        _ = looking.settle(by: 0.1, mood: .speaking, level: 1, gaze: 0.7)
+        try check(looking.speak == 0.5 && looking.level == 0 && looking.gaze == 0, "speaking takes no voice and no gaze")
+
+        let box = (screen: (width: 185, height: 400), spot: (x: 10, y: 150, width: 74))
+        for frame in EyesFrame.allCases {
+            let rest = try paintedWindow(frame, EyesFrameMotion())
+            let pictures = try framePictures(of: frame)
+            let still = pictures.filter { $0.pixels == rest }.map(\.name)
+            try check(still.allSatisfy { frame == .glow && $0.hasPrefix("reading") }, "\(frame): every state moves it, but for the soft light, which keeps calm while reading: \(still)")
+            for (name, pixels) in pictures + [("rest", rest)] {
+                try pixels.withUnsafeBufferPointer { bytes in
+                    for y in 25..<935 {
+                        for x in 25..<695 {
+                            let at = (y * 720 + x) * 4
+                            let (red, green, blue) = (Int(bytes[at]), Int(bytes[at + 1]), Int(bytes[at + 2]))
+                            if min(red - green, blue - green) > 30 { throw CheckFailure(description: "\(frame) \(name): (\(x), \(y)) can pass for the border") }
+                        }
+                    }
+                }
+                let screen = try windowOnScreen(pixels, at: box.spot, screen: box.screen)
+                let patch = try require(WindowFinder.find(screen, width: box.screen.width, height: box.screen.height, side: 64), "\(frame) \(name): found by the phone")
+                try check(abs(Double(patch.left) / 64 - 10.0 / 185) < 0.05 && abs(Double(patch.top) / 64 - 150.0 / 400) < 0.05, "\(frame) \(name): found in its place")
+            }
+            let nosed = try paintedWindow(frame, EyesFrameMotion(), nose: true)
+            let screen = try windowOnScreen(nosed, at: box.spot, screen: box.screen)
+            try check(WindowFinder.find(screen, width: box.screen.width, height: box.screen.height, side: 64) != nil, "\(frame): found with the nose")
+            var back = EyesFrameMotion()
+            _ = back.settle(by: 0.1, mood: .listening, level: 1, gaze: 0)
+            _ = back.settle(by: 0.1, mood: .speaking, level: 0, gaze: 0)
+            while back.settle(by: 0.1, mood: .rest, level: 0, gaze: 0) {}
+            let settled = try paintedWindow(frame, back)
+            try check(settled == rest, "\(frame): after moving it is the same bytes as at rest")
+        }
+    }
+
+    private static func checkLookingAway() throws {
+        var eyes = EyesDirector(random: sameRandom())
+        _ = eyes.advance(to: 1)
+        eyes.isLookingAway = true
+        for mood in [EyesFace.happy, .found, .stopped] {
+            eyes.express(mood, at: 1.1)
+            let pose = eyes.advance(to: 1.2)
+            try check(eyes.mood == .away && pose.left == 0 && pose.right == 0, "shut eyes stay shut through a face")
+        }
+        eyes.hear(level: 1, at: 1.3)
+        eyes.isSpeaking = true
+        eyes.isCalm = true
+        eyes.beginWaiting(at: 1.3)
+        eyes.perform(.circle, at: 1.3)
+        let shut = play(&eyes, from: 1.3, to: 20)
+        try check(eyes.mood == .away && shut.allSatisfy { $0.pose.left == 0 && $0.pose.right == 0 }, "whatever happens in the call, and on a payment screen too")
+        eyes.isCalm = false
+        eyes.isSpeaking = false
+        eyes.isLookingAway = false
+        eyes.endWaiting()
+        let open = eyes.advance(to: 21)
+        try check(eyes.mood == .rest && open.left > 0, "the server's word opens them")
+        var idle = EyesDirector(random: sameRandom())
+        let everyPose = play(&idle, from: 0, to: 300).map(\.pose)
+        try check(everyPose.allSatisfy { !($0.left == 0 && $0.right == 0) || $0.isHappy } , "nothing else keeps both eyes shut: a blink passes in a picture or two")
+        var mood = EyesFrameMotion()
+        try check(!mood.settle(by: 0.033, mood: .away, level: 1, gaze: 1), "the drawing keeps still under shut eyes")
+    }
+
+    private static func checkNose() throws {
+        var pixels = [UInt8](repeating: 0, count: 720 * 960 * 4)
+        try pixels.withUnsafeMutableBytes { bytes in
+            guard let context = CGContext(data: bytes.baseAddress, width: 720, height: 960, bitsPerComponent: 8, bytesPerRow: 2880,
+                                          space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                throw CheckFailure(description: "nose context")
+            }
+            context.translateBy(x: 0, y: 960)
+            context.scaleBy(x: 1, y: -1)
+            EyesPainter.drawNose(in: CGRect(x: 180, y: 170, width: 360, height: 360), on: context)
+        }
+        let solid = (0..<(720 * 960)).filter { pixels[$0 * 4 + 3] == 255 }
+        try check(solid.allSatisfy { Array(pixels[$0 * 4..<$0 * 4 + 3]) == [150, 40, 245] }, "the nose is the colour of the border")
+        let (xs, ys) = (solid.map { $0 % 720 }, solid.map { $0 / 720 })
+        try check(xs.min() == 285 && xs.max() == 376 && ys.min() == 443 && ys.max() == 569,
+                  "the nose stands where the page has it: \(xs.min() ?? 0)-\(xs.max() ?? 0), \(ys.min() ?? 0)-\(ys.max() ?? 0)")
     }
 
     private static func checkShelf() throws {
@@ -908,12 +1084,23 @@ private enum ProtocolChecks {
         let store = try SharedStore(configuration: configuration, defaults: defaults)
         try check(store.screenTextMode == .extension, "default screenTextMode")
         try check(store.voice == nil, "the server's voice by default")
-        try check(!store.eyes && !store.settings.eyes, "the eyes are off by default")
         store.voice = "voice-1"
         try check(defaults.string(forKey: "voice") == "voice-1", "a chosen voice stays")
         try check(store.settings.thinking == .auto && store.settings.character == .warm, "default level and manner")
         defaults.set("zz", forKey: "userLang")  // An older build saved one.
-        try check(store.settings.userLang == Locale.preferredLanguages.first ?? "en", "the language is the phone's at every call")
+        try check(store.settings.userLang == Locale.preferredLanguages.first ?? "en", "with none chosen the language is the phone's at every call")
+        for chosen in ["ru", "en", "es"] {
+            store.language = chosen
+            try check(store.settings.userLang == chosen && CallWords.of(store.settings.userLang) == .of(chosen), "the chosen language wins: \(chosen)")
+        }
+        store.language = ""
+        try check(store.settings.userLang == Locale.preferredLanguages.first ?? "en", "and back to the phone's")
+        try check(store.windowFrame.isEmpty, "no frame chosen yet")
+        store.character = .patient
+        store.ownCharacter = "  спокойно  "
+        try check(store.character == .patient && store.ownCharacter == "спокойно" && store.settings.character == .patient, "the tone stays, with no spaces around it")
+        store.ownCharacter = String(repeating: "я", count: 600)
+        try check(store.ownCharacter.count == 500, "the server takes 500 characters")
         try store.save(serverAddress: "https://example.invalid", token: "", targetLang: "id", textEntry: .clipboard,
                        thinking: .medium, character: .brief, ownCharacter: "")
         try check(store.settings.thinking == .medium && store.settings.character == .brief, "saved level and manner")

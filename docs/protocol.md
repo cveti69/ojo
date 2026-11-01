@@ -9,9 +9,9 @@ Without it, or with a wrong value, the answer is `401`. Sessions live in the ser
 
 | Method and path | Caller | Body | Answer |
 |---|---|---|---|
-| `POST /sessions` | app | `{"user_lang": "es-MX", "target_lang": "id", "text_entry": "clipboard", "effort": "medium", "character": "warm", "own_character": "", "eyes": true, "signals": true}`, `eyes` only when the eyes are on, `signals` if the phone sends `/changed` | `201 {"session_id": "s_ab12cd34"}` |
+| `POST /sessions` | app | `{"user_lang": "es-MX", "target_lang": "id", "text_entry": "clipboard", "effort": "medium", "character": "warm", "own_character": "", "eyes": true, "signals": true}`, `eyes` is always `true` from the eleventh build on, `signals` if the phone sends `/changed` | `201 {"session_id": "s_ab12cd34"}` |
 | `POST /transcribe` | app | `audio/wav`: mono, 16 bit, 16 kHz | `200 {"text": "..."}` |
-| `POST /sessions/{id}/frames` | broadcast extension | `image/jpeg` | `202 {"accepted": true}` if the frame became a turn, or `202 {"accepted": false, "reason": "same"}`. `reason`: `same` the same screen, `small` a small change the next turn will see, `looking` the phone is sending the screen for a line, `busy` the answer was restarted twice already, `old` a newer frame has come. `lang`, once the model has named the language of the screen, two letters: the extension reads the next screens with it |
+| `POST /sessions/{id}/frames` | broadcast extension | `image/jpeg` | `202 {"accepted": true}` if the frame became a turn, or `202 {"accepted": false, "reason": "same"}`. `reason`: `same` the same screen, `small` a small change the next turn will see, `looking` the phone is sending the screen for a line, `busy` the answer was restarted twice already, `old` a newer frame has come, `not_looking` the person asked the agent not to watch and the frame goes nowhere. `lang`, once the model has named the language of the screen, two letters: the extension reads the next screens with it |
 | `POST /sessions/{id}/changed` | broadcast extension, once for a change and once for a move until the next frame is delivered | `{"at": 1793436844526, "moved": true}`: `at` on the clock of `X-Frame-Ts`, `moved` if the person is leaving the screen | `200 {"ok": true}` |
 | `POST /sessions/{id}/text` | broadcast extension or app | `{"frame_ts": 1793436844526, "lines": [{"text": "Beli sekarang", "words": [{"text": "Beli", "box": [0.1, 0.8, 0.2, 0.83]}]}]}` | `200 {"ok": true}` |
 | `GET /sessions/{id}/suggestions` | keyboard | | `200 {"step_id": "s3", "texts": ["sampo anti ketombe"], "hint_ru": ""}` |
@@ -31,7 +31,7 @@ Without it, or with a wrong value, the answer is `401`. Sessions live in the ser
 | `GET /debug/{id}?token=...` | developer | | a page that refreshes once a second |
 | `GET /health` | anyone | no token | `200 {"ok": true}` |
 
-`user_lang` is the first language of the phone at the moment of the call, as the phone writes it: letters, digits, `-` and `_`, anything else gets a 422. `ru` leaves the call as it always was.
+`user_lang` is the language chosen in settings, or with "Same as the phone" the first language of the phone at the moment of the call, as the phone writes it: letters, digits, `-` and `_`, anything else gets a 422. `ru` leaves the call as it always was.
 Any other language adds that language to the rule about the spoken line, and the status words come in `ru`, `en` or `es`, English for
 the rest. So despite their names `text_ru` and `instruction_ru` can hold any language.
 
@@ -78,6 +78,22 @@ cancels an answer at most 2 times in a row. With no line in 8 seconds, or a brok
 one and the main one is not cancelled. The first whole line has the say, and the other call changes neither the voice nor the chat.
 Silence from the spare model waits for the main one. Nothing by 30 seconds ends the turn.
 
+The answer can carry `look`, and no list of phrases decides it: the model understands. `false` means the person asked the agent not to
+watch the screen at all, in any words and any language. The rules list the field first, and an answer that writes it first sends no
+early line: ahead of the line that says so the server sends `not_looking` with `on: true`. An answer that writes it after `say` speaks
+first, and the state comes with the end of that answer. From then on the server takes no frame for a turn and keeps none:
+`/frames` answers with `reason: not_looking`, `/changed` does nothing, and the frame of that turn leaves the chat and the log. The phone
+stops sending frames and reading text, and the broadcast stays on. Text read before that can still reach `/text`: it keeps a payment
+screen out of the log.
+
+With the eyes shut the person's words reach the model with no picture and a note that they asked it not to look, and talk changes
+nothing. `look: true` in that state means they asked it to look again. That answer goes unsaid, the server sends `not_looking` with
+`on: false`, and their words wait for a fresh frame, with one line in reply. No older frame is left, so the wait is 6.5 seconds, and
+with no frame by then the model gets the note that the screen is not shown.
+
+A new call starts with the eyes open, and a lost connection changes nothing. The last `not_looking` is the only record of this state,
+and the phone shuts the eyes on this event alone.
+
 The Meta stream hears the line and finds the end of the phrase by itself. The server answers at once, and the app does not start the
 voice until the person has finished. If the person goes on before the first sound (`/played`), the new words count as the same line:
 the last answer is dropped, and a new one comes with a higher `turn`.
@@ -102,13 +118,14 @@ The server sends JSON strings over the WebSocket.
  "frame_ts": 1793436844526, "timings": {"model_ms": 2710, "box_ms": 3, "box_source": "text", "window": true}}
 {"type": "left"}
 {"type": "read", "frame_ts": 1793436844526}
+{"type": "not_looking", "on": true}
 {"type": "status", "state": "broadcasting", "text_ru": "Демонстрация экрана включена"}
 {"type": "done", "text_ru": "Сессия завершена"}
 ```
 
 `status.state`: `waiting_frames`, `broadcasting`, `broadcast_stopped`. `done` comes only at the end of a call. `timings` are for the log.
 
-On a new connection the server repeats `status`, the last `hint` and `done`. If no sound of the answer to the last words has played
+On a new connection the server repeats `status`, the last `not_looking` if there was one, the last `hint` and `done`. If no sound of the answer to the last words has played
 (`/played`), it also repeats `heard` and `say`, because that line may have gone to a dead socket.
 
 `heard` means the server heard a phrase. On it the phone drops older lines and, with no answer in 1.5 seconds, says a waiting phrase.
@@ -127,10 +144,11 @@ turn.
 
 In a call with `eyes` the window has two states. With a hint it shows the picture with no eyes: a piece of the screen, the outline
 and one short line, the first sentence as far as it fits. With no hint it shows the eyes and a word for what is really going on:
-Слушаю, Смотрю, Думаю, Говорю, Я рядом. The phone takes these from real events, not from the model. The hint event has one more
-field, `calm`: a payment, card or password screen, the eyes only rest.
+Слушаю, Смотрю, Думаю, Говорю, Я рядом, Всё ещё думаю after 12 seconds with no answer, Не смотрю. Смотрю and Думаю come only while
+the person waits for an answer: a new screen nobody asked about leaves the window at rest. The phone takes these from real events, not
+from the model. The hint event has one more field, `calm`: a payment, card or password screen, the eyes only rest.
 
-A call with `eyes` has two more events. `reading`: a new screen came, and the eyes read it while the answer is on its way. `face`, at
+A call with `eyes` has two more events. `reading`: a new screen came. `face`, at
 the end of every answer: `{"type":"face","turn":3,"face":null,"calm":false}`. `face` is always `null`, and a build before 2 November
 reads it as no face. `calm`: a payment, card or password screen. Such an event also comes ahead of the answer if payment words were
 found in the text of a frame the server already has.
@@ -147,5 +165,6 @@ whose words have not come by the end of its answer is logged with neither the pi
 
 ## App Group
 
-`UserDefaults` keys of the group: `serverURL`, `token`, `sessionId`, `userLang`, `targetLang`. The app writes them, and the broadcast
-extension and the keyboard read them.
+`UserDefaults` keys of the group: `serverURL`, `token`, `sessionId`, `userLang`, `targetLang`, `language`, `windowFrame`, `agentManner`,
+`ownCharacter`, `notLooking`. The app writes them, and the broadcast extension and the keyboard read them. `notLooking` is the last
+`not_looking` event, and the extension checks it four times a second.

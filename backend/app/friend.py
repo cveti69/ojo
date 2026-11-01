@@ -35,6 +35,7 @@ RULES = """Не проси пароли и данные карт. Оплату �
 Серый прямоугольник на экране это твоё окошко: в нём человек видит то, что ты обвёл.
 
 Ответ только JSON:
+look: false, если человек просит совсем не смотреть на экран: тогда в say коротко скажи, что не смотришь. true, если ты не смотришь и он прямо просит посмотреть снова. Иначе не пиши look.
 say: что скажешь вслух, можно ничего.
 show: что обвести на последнем экране: label, текст этого места дословно, как на экране, на языке экрана, object, что это, коротко по-английски, и box, [x1, y1, x2, y2] от 0 до 1000 от левого верхнего угла. Обводить нечего, не пиши show.
 paste: готовый текст, если человеку надо его вставить. Иначе не пиши paste.
@@ -165,7 +166,7 @@ def _rules(session: Session) -> str:
 def messages_of(session: Session) -> List[dict]:
     """A plain chat. The words stay for the whole call, and a turn that was never answered joins the next one."""
     messages: List[dict] = [{"role": "system", "content": ROLE + session.character + "\n\n" + _rules(session)}]
-    pictures = _pictures(session.chat)
+    pictures = set() if session.not_looking else _pictures(session.chat)
     for index, turn in enumerate(session.chat):
         if turn["role"] == "assistant":
             messages.append({"role": "assistant", "content": turn["text"]})
@@ -278,15 +279,18 @@ class Friend:
         self._stop(session)
         session.note("heard", turn=session.turn, said=said)
         session.publish({"type": "heard", "turn": session.turn})
-        if not session.broadcasting:
-            self._start(session, said + " " + session.words["unseen"], None)
+        self._see(session, said)
+
+    def _see(self, session: Session, said: str, patient: bool = False) -> None:
+        if session.not_looking or not session.broadcasting:
+            self._start(session, said + " " + session.words["closed" if session.not_looking else "unseen"], None)
             return
-        session.heard, session.settling = said, False
+        session.heard, session.settling = said, patient
         if _still(session):
             self.look(session, session.last_frame)
             return
         session.publish({"type": "look", "turn": session.turn})
-        self._run(self._no_look(session, session.turn))
+        self._run(self._no_look(session, session.turn, patient))
 
     async def _no_look(self, session: Session, turn: int, settling: bool = False) -> None:
         await asyncio.sleep(SETTLE_SECONDS if settling else LOOK_SECONDS)
@@ -300,6 +304,9 @@ class Friend:
         may be here already, otherwise the next one brings the answer."""
         about = next((turn["frame"] for turn in session.chat[session.open_mark:] if turn.get("frame")), None)
         del session.chat[session.open_mark:]
+        if session.not_looking:
+            self._see(session, session.open_words)
+            return
         session.heard, session.settling = session.open_words, True
         if about and _gone(session, about) and _still(session):
             self.look(session, session.last_frame)
@@ -319,7 +326,7 @@ class Friend:
         """The phone saw the screen change, ahead of the frame that will show it. Moved means they are leaving it, so what
         was being said about it stops. Their words stay, and their answer waits for the new screen. A screen that keeps
         moving, like a video, stops an answer no more often than one that keeps sending new frames."""
-        if session.last_frame and at <= session.last_frame.timestamp_ms:  # That frame got here first.
+        if session.not_looking or (session.last_frame and at <= session.last_frame.timestamp_ms):  # That frame got here first.
             return
         session.changed_at = max(at, session.changed_at or 0)
         if not moved:
@@ -340,6 +347,8 @@ class Friend:
     def screen(self, session: Session, frame: Frame) -> tuple:
         """A frame from the broadcast. Only a new screen is a turn: a video or a banner on the page is not."""
         session.touch()
+        if session.not_looking:  # The phone stops on its word, and until then what it sends goes nowhere.
+            return False, "not_looking"
         last = session.last_frame
         if last and 0 < last.timestamp_ms - frame.timestamp_ms < LATE_SECONDS * 1000:  # A look or the next frame got here first.
             return False, "old"
@@ -365,6 +374,21 @@ class Friend:
             session.restarts += 1
         self._start(session, session.words["silent"], frame)
         return True, None
+
+    def _turn_away(self, session: Session) -> None:
+        """From here on no frame is taken for a turn or kept. The phone hears of it ahead of the line that says so."""
+        self._left(session)
+        session.seen_gray = session.last_frame = session.changed_at = None
+        session.note("not looking", on=True)
+        session.publish({"type": "not_looking", "on": True})
+
+    def _look_again(self, session: Session) -> None:
+        """They asked for it. This answer came without the screen and goes unsaid: their words go on to a fresh frame."""
+        session.note("not looking", on=False)
+        session.publish({"type": "not_looking", "on": False})
+        del session.chat[session.open_mark:]
+        session.answer = None  # This one is done, and it is what would be stopped.
+        self._see(session, session.open_words, patient=True)  # No older frame is left to answer with.
 
     def _left(self, session: Session) -> None:
         """What is outlined belongs to the old screen."""
@@ -439,7 +463,8 @@ class Friend:
         dropped: List[bool] = []
 
         def deliver(line: str) -> None:
-            if session.answer is not task or session.ended or early or dropped or (frame and _gone(session, frame)):
+            # With the eyes shut the answer can be one that wants to look, and that one must not speak ahead of the screen.
+            if session.answer is not task or session.ended or early or dropped or session.not_looking or (frame and _gone(session, frame)):
                 return
             early.update(line=line, ms=_ms(started), model=model, turn={"role": "assistant", "text": json.dumps({"say": line}, ensure_ascii=False)})
             session.chat.append(early["turn"])
@@ -516,6 +541,9 @@ class Friend:
         early: dict = {}
         tied = None if session.restarts >= MAX_RESTARTS else frame  # A screen that keeps changing still gets an answer, whatever it shows by then.
         got = await self._ask(session, turn, tied, started, early)
+        away = bool(got) and got[2].get("look") is False and not session.not_looking
+        if away:
+            tied = None  # Their wish holds on any screen, and the phone would drop a line about one it has left.
         if got and tied and not early and _gone(session, tied):  # Nothing in it is about what they see now, and their words go on to that.
             session.restarts += 1
             session.held = session.held or bool(session.open_words)
@@ -531,6 +559,9 @@ class Friend:
                 session.publish({"type": "quiet", "turn": turn})
             return
         model, reply, answer = got
+        if session.not_looking and answer.get("look") is True:
+            self._look_again(session)
+            return
         ms = _ms(started)
         private = _private(session, frame, answer)
         if early:
@@ -546,13 +577,17 @@ class Friend:
         lang = _text(answer.get("lang")).lower()
         if re.fullmatch("[a-z]{2}", lang):
             session.app_lang = lang
-        if frame and private:  # It is not sent again, and what the model noted is enough for the next turns.
+        if frame and (private or away):  # It is not sent again, and what the model noted is enough for the next turns.
             for kept in session.chat:
                 if kept.get("frame") is frame:
                     kept["frame"] = None
-        hidden = private or _unread(session, frame)
+        if frame and away and session.call_log:  # The screen can have stood there since an earlier turn that kept it.
+            session.call_log.forget(frame.timestamp_ms)
+        hidden = private or away or _unread(session, frame)
         session.note("answer", turn=turn, model=model, ms=ms, first_ms=early.get("ms"), tokens=reply["usage"].get("completion_tokens"), private=private,
                      frame=session.keep_picture(frame, hidden) if frame else None, **({} if hidden else {"answer": answer}))
+        if away:
+            self._turn_away(session)
         said, paste = _line(answer.get("say")), _text(answer.get("paste"))
         self._hand_over(session, paste)
         paste_text = paste if session.text_entry == "clipboard" else None
@@ -567,7 +602,7 @@ class Friend:
         if session.eyes:
             session.publish({"type": "face", "turn": turn, "face": None, "calm": private})
         target = _target(answer.get("show"))
-        if target and frame:
+        if target and frame and not away:
             await self._show(session, frame, said or target["label"], target, answer, ms)
 
     def _hand_over(self, session: Session, paste: str) -> None:

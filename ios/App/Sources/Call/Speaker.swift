@@ -72,6 +72,7 @@ final class ServerSpeaker: Speaker {
     func prepare(client: ServerClient, journal: SharedJournal?) {
         self.client = client
         self.journal = journal
+        fallback.prepare(client: client, journal: journal)
         if hearsOverVoice != filtersVoice, !engine.isRunning {
             do {
                 try engine.inputNode.setVoiceProcessingEnabled(hearsOverVoice)
@@ -331,12 +332,15 @@ final class SystemSpeaker: NSObject, Speaker, AVSpeechSynthesizerDelegate {
     private var currentUtterance: AVSpeechUtterance?
     private var completion: CheckedContinuation<Void, Never>?
     private var waitingID: UUID?
+    private var language = Locale.preferredLanguages.first
 
     override init() {
         super.init()
         synthesizer.delegate = self
         synthesizer.usesApplicationAudioSession = true
     }
+
+    func prepare(client: ServerClient, journal: SharedJournal?) { language = client.settings.userLang }
 
     func speak(_ text: String) {
         stop()
@@ -377,7 +381,7 @@ final class SystemSpeaker: NSObject, Speaker, AVSpeechSynthesizerDelegate {
             return
         }
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: Locale.preferredLanguages.first)
+        utterance.voice = AVSpeechSynthesisVoice(language: language)
         currentUtterance = utterance
         synthesizer.speak(utterance)
     }

@@ -8,6 +8,8 @@ enum EyesPainter {
     private static let pupilWidth = 0.5  // Of the eye's width.
     private static let thinnest: CGFloat = 12
     private static let smallestShine: CGFloat = 14
+    private static let iconBox: CGFloat = 720  // The eyes and the nose share this box on the icon.
+    private static let iconMiddle = CGPoint(x: 512, y: 400)
 
     static func draw(_ pose: EyePose, in box: CGRect, on context: CGContext) {
         let width = box.width * eyeWidth
@@ -36,6 +38,25 @@ enum EyesPainter {
             context.addLine(to: CGPoint(x: right.x + width * 0.46, y: top - thick * 0.55))
             context.strokePath()
         }
+    }
+
+    /// The nose of the app's icon, at half its size there, in the very colour of the window's border. It is drawn below the eyes.
+    static func drawNose(in box: CGRect, on context: CGContext) {
+        let scale = box.width / iconBox
+        context.saveGState()
+        context.translateBy(x: box.midX, y: box.midY)
+        context.scaleBy(x: scale, y: scale)
+        context.translateBy(x: -iconMiddle.x, y: -iconMiddle.y)
+        context.move(to: CGPoint(x: 477, y: 620))
+        context.addArc(center: CGPoint(x: 512, y: 620), radius: 35, startAngle: .pi, endAngle: 0, clockwise: false)
+        context.addLine(to: CGPoint(x: 547, y: 744))
+        context.addArc(center: CGPoint(x: 450, y: 744), radius: 97, startAngle: 0, endAngle: .pi * 5 / 6, clockwise: false)
+        context.addArc(center: CGPoint(x: 396.31, y: 775), radius: 35, startAngle: .pi * 5 / 6, endAngle: .pi * 11 / 6, clockwise: false)
+        context.addArc(center: CGPoint(x: 450, y: 744), radius: 27, startAngle: .pi * 5 / 6, endAngle: 0, clockwise: true)
+        context.closePath()
+        context.setFillColor(red: 150.0 / 255, green: 40.0 / 255, blue: 245.0 / 255, alpha: 1)
+        context.fillPath()
+        context.restoreGState()
     }
 
     private static func eye(at center: CGPoint, width: CGFloat, height: CGFloat, open: Double, inward: Double,

@@ -14,7 +14,7 @@ struct CallScreen: View {
                 Button { showsMore = true } label: {
                     Image(systemName: "ellipsis.circle").font(.title2)
                 }
-                .accessibilityLabel("Ещё")
+                .accessibilityLabel(model.words.settingsTitle)
             }
             Spacer(minLength: 0)
             Hosted(view: model.window.inlineView)
@@ -102,57 +102,21 @@ private extension View {
     }
 }
 
-/// Everything a call can do without being needed in a usual one.
+/// The settings over the call.
 private struct MoreScreen: View {
     @ObservedObject var model: CallViewModel
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Написать текстом") {
-                    TextField("Что сказать агенту", text: $model.typed, axis: .vertical)
-                        .lineLimit(1...4)
-                    Button("Отправить") {
-                        model.sendTyped()
-                        dismiss()
-                    }
-                    .disabled(
-                        !model.isCallActive || model.isTestingWindow
-                            || model.typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                Section {
-                    HStack {
-                        BroadcastPicker(isEnabled: model.isGreeted)
-                            .frame(width: 44, height: 44)
-                        Text("Трансляция экрана")
-                    }
-                    Button("Открыть окно") { model.openWindow() }
-                        .disabled(!model.canOpenWindow)
-                    Text(model.windowState.message)
-                        .font(.footnote).foregroundStyle(.secondary)
-                } header: {
-                    Text("Звонок")
-                } footer: {
-                    Text("Все нажатия и подтверждения делаете вы.")
-                }
-                Section {
-                    NavigationLink("Настройки") {
-                        SettingsScreen(model: model)
-                    }
-                    NavigationLink("Проверка") {
-                        DiagnosticsScreen(model: model)
+            SettingsScreen(model: model)
+                .scrollDismissesKeyboard(.interactively)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(model.words.done) { dismiss() }
                     }
                 }
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Ещё")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Готово") { dismiss() }
-                }
-            }
         }
     }
 }
