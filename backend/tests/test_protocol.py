@@ -392,7 +392,7 @@ def test_our_window_is_grey_for_the_model_and_changes_nothing(backend):
     assert post_frame(client, session_id, windowed((40, 200, 40))).json() == {"accepted": False, "reason": "same"}
 
 
-def test_payment_words_under_our_window_count_only_without_their_frame(backend):
+def test_payment_words_under_our_window_stop_nothing(backend):
     client = backend.client
     session_id = sharing(client, eyes=True)
     post_frame(client, session_id, windowed((200, 40, 40)), timestamp=7)
@@ -401,7 +401,7 @@ def test_payment_words_under_our_window_count_only_without_their_frame(backend):
     seen = []
     session.publish = seen.append
     box = session.last_frame.window
-    middle = [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2] * 2
+    middle = [box[0] + 0.01, box[1] + 0.01, box[2] - 0.01, box[3] - 0.01]
     under, beside = [[{"text": "Bayar", "words": [{"text": "Bayar", "box": place}]}] for place in (middle, [0.8, 0.02, 0.9, 0.05])]
 
     def read(frame_ts, lines):
@@ -409,7 +409,7 @@ def test_payment_words_under_our_window_count_only_without_their_frame(backend):
 
     read(7, under)
     assert session.chat[0]["frame"] is not None and not seen
-    read(8, under)  # Its frame has not come, so there is nothing to take the window out of.
+    read(8, under)  # Its frame has not come, and its answer will take the window out.
     assert not seen and session.chat[0]["frame"] is not None
     read(7, beside)
     assert session.chat[0]["frame"] is None
@@ -423,8 +423,7 @@ def test_our_own_words_ahead_of_the_frame_stop_nothing(backend, monkeypatch, tmp
     backend.store.sessions[session_id].publish = seen.append
     picture = windowed((200, 40, 40))
     box = window.find(picture)
-    middle = [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2] * 2
-    middle = [middle[0] - 0.01, middle[1] - 0.01, middle[2] + 0.01, middle[3] + 0.01]
+    middle = [box[0] + 0.01, box[1] + 0.01, box[2] - 0.01, box[3] - 0.01]
     assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={
         "frame_ts": 7, "lines": [{"text": "Вот сама карта", "words": [{"text": "карта", "box": middle}]}]}).status_code == 200
     post_frame(client, session_id, picture, timestamp=7)
@@ -445,7 +444,7 @@ def test_our_window_comes_out_of_the_words_of_a_look_too(backend):
     kept = next(turn["frame"] for turn in reversed(session.chat) if turn.get("frame"))
     assert kept.timestamp_ms == 9 and session.last_frame.timestamp_ms == 7
     box = kept.window
-    middle = [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2] * 2
+    middle = [box[0] + 0.01, box[1] + 0.01, box[2] - 0.01, box[3] - 0.01]
     assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={
         "frame_ts": 9, "lines": [{"text": "Bayar", "words": [{"text": "Bayar", "box": middle}]}]}).status_code == 200
     assert next(turn["frame"] for turn in reversed(session.chat) if turn.get("frame")) is kept
@@ -458,6 +457,24 @@ def test_words_under_our_window_do_not_count(backend):
     kept = window.outside(lines, [0.5, 0.4, 0.9, 0.7])
     assert kept == [{"text": "Beli sekarang", "words": [lines[0]["words"][0]]}, lines[1]]
     assert window.outside(lines, [0.0, 0.0, 1.0, 1.0]) == []
+
+
+def test_a_line_with_no_place_for_its_words_stays_beside_our_window(backend):
+    lines = [{"text": "CVV", "words": []}]
+    assert window.outside(lines, [0.0, 0.0, 1.0, 1.0]) == lines
+
+
+def test_a_payment_word_with_no_place_still_keeps_the_frame_out_of_the_log(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    client = backend.client
+    session_id = sharing(client)
+    backend.meta.replies = [line("Проверь сумму.")]
+    assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={
+        "frame_ts": 7, "lines": [{"text": "CVV", "words": [{"text": "CVV", "box": [0, 0, 0, 0]}]}]}).status_code == 200
+    post_frame(client, session_id, windowed((200, 40, 40)), timestamp=7)
+    idle(backend, session_id)
+    assert backend.store.sessions[session_id].chat[0]["frame"] is None
+    assert not list((next((tmp_path / "calls").iterdir()) / "frames").iterdir())
 
 
 def test_debug_escapes_model_text(backend):

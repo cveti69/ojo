@@ -90,12 +90,13 @@ def gaze(box: Optional[List[float]], target: Optional[List[float]], width: int, 
 
 
 def outside(lines: Sequence[dict], box: List[float]) -> List[dict]:
-    """The words read off the frame, without the ones that sit under the window."""
+    """The words read off the frame, without the ones that sit under the window. A line with no place for its words stays:
+    nothing says it is ours, and its text still guards a payment screen."""
     def under(word: dict) -> bool:
         x, y = (word["box"][0] + word["box"][2]) / 2, (word["box"][1] + word["box"][3]) / 2
         return box[0] <= x <= box[2] and box[1] <= y <= box[3]
-    kept = [dict(line, words=[word for word in line["words"] if not under(word)]) for line in lines]
-    return [line for line in kept if line["words"]]
+    return [dict(line, words=[word for word in line["words"] if not under(word)]) for line in lines
+            if not line["words"] or not all(under(word) for word in line["words"])]
 
 
 def hide(jpeg: bytes, box: List[float]) -> bytes:

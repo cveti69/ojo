@@ -64,7 +64,7 @@ class CallLog:
         name = str(timestamp_ms) + ".jpg"
         log_file = self.folder / "call.log"
         try:
-            (self.folder / "frames" / name).unlink()
+            (self.folder / "frames" / name).unlink(missing_ok=True)
             lines = log_file.read_text(encoding="utf-8").splitlines(True)
             log_file.write_text("".join(line for line in lines if json.loads(line).get("frame") != name), encoding="utf-8")
         except (OSError, ValueError) as error:

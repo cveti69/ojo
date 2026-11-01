@@ -1327,6 +1327,30 @@ def test_payment_words_ahead_of_their_frame_wait_for_its_answer(backend, monkeyp
     assert backend.store.sessions[session_id].chat[0]["frame"] is None
 
 
+def test_payment_words_of_a_frame_gone_with_its_turn_take_it_out_of_the_log(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    client = backend.client
+    session_id = sharing(client, eyes=True)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Проверь сумму."), line("Хорошо.")]
+    words(client, session_id)
+    assert look(client, session_id, [SCREENS[0]], first_taken=7).status_code == 200
+    idle(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    assert [picture.name for picture in (folder / "frames").iterdir()] == ["7.jpg"]
+    words(client, session_id, "и ещё")
+    assert look(client, session_id, [SCREENS[3]], first_taken=9).status_code == 200
+    idle(backend, session_id)
+    assert all(turn["frame"].timestamp_ms == 9 for turn in session.chat if turn.get("frame"))
+    assert session.last_frame.timestamp_ms == 9
+    calm = len([event for event in seen if event.get("calm")])
+    assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={"frame_ts": 7, "lines": [{"text": "Bayar Sekarang", "words": []}]}).status_code == 200
+    assert [picture.name for picture in (folder / "frames").iterdir()] == ["9.jpg"]
+    assert "Проверь сумму" not in (folder / "call.log").read_text(encoding="utf-8")
+    assert len([event for event in seen if event.get("calm")]) == calm  # They are on another screen by now.
+
+
 def test_payment_words_after_the_outline_take_it_out_of_the_log(backend, monkeypatch, tmp_path):
     monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
     client = backend.client

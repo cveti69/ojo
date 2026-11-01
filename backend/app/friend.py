@@ -302,16 +302,20 @@ class Friend:
 
     def text_read(self, session: Session, timestamp_ms: int) -> None:
         """The words on a screen can come after its answer, and a payment screen leaves the log and the chat all the same.
-        Ahead of the frame nothing is done: its answer reads these words with our window taken out, and without one the frame is not kept."""
+        A frame not known here is ahead, and its answer reads these words with our window taken out, or it went with a turn
+        they talked over, and then only its picture can be left to take away. A wrong guess costs that picture and nothing else."""
         known = [session.last_frame] + [kept.get("frame") for kept in session.chat]
         frame = next((seen for seen in known if seen and seen.timestamp_ms == timestamp_ms), None)
-        if not frame or not _PRIVATE_SCREEN.search(" ".join(line["text"] for line in _text_on(session, frame) or [])):
+        lines = (_text_on(session, frame) if frame else session.frame_text.get(timestamp_ms)) or []
+        if not _PRIVATE_SCREEN.search(" ".join(line["text"] for line in lines)):
+            return
+        if session.call_log:
+            session.call_log.forget(timestamp_ms)
+        if not frame:
             return
         for kept in session.chat:
             if kept.get("frame") and kept["frame"].timestamp_ms == timestamp_ms:
                 kept["frame"] = None
-        if session.call_log:
-            session.call_log.forget(timestamp_ms)
         if session.eyes:
             if session.last_hint and session.last_hint["frame_ts"] == timestamp_ms:
                 session.last_hint["calm"] = True  # A phone that reconnects gets it again.
