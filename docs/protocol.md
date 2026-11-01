@@ -30,7 +30,7 @@ Without it, or with a wrong value, the answer is `401`. Sessions live in the ser
 | `GET /health` | anyone | no token | `200 {"ok": true}` |
 
 `target_lang` can be `"auto"`: the model names the app's language from the screen, and until the first screen a translation into it
-gets `409`. `text_entry` takes `"keyboard"` or `"clipboard"`. A frame comes with the headers `X-Frame-Width` and `X-Frame-Height` (the
+gets `409`. Once the model has named it, a translation goes into that language, whatever `to` says. `text_entry` takes `"keyboard"` or `"clipboard"`. A frame comes with the headers `X-Frame-Width` and `X-Frame-Height` (the
 source screen size in pixels) and `X-Frame-Ts` (the frame time in milliseconds). The extension sends no new frame while the last
 request is in flight, and gives up on `/frames`, `/text` and `/look` after 5 seconds without an answer. After a timeout or a lost
 network the phone opens a new connection for the next request. `X-Frame-Small: 1` means the change is small and has settled, such as

@@ -685,6 +685,19 @@ def test_the_screen_gives_the_app_language(backend, target_lang):
     assert json.loads(backend.meta.text_calls[-1][-1]["content"])["to"] == "th"
 
 
+def test_a_translation_goes_into_the_language_of_the_screen_whatever_the_settings_say(backend):
+    client = backend.client
+    session_id = sharing(client)
+    backend.meta.replies = [line(lang="zh")]
+    payload = {"text": "Подождите здесь", "from": "ru", "to": "id", "session_id": session_id}
+    assert client.post("/translate", headers=AUTH, json=payload).status_code == 200
+    assert json.loads(backend.meta.text_calls[-1][-1]["content"])["to"] == "id"
+    post_frame(client, session_id, SCREENS[0])
+    idle(backend, session_id)
+    assert client.post("/translate", headers=AUTH, json=payload).status_code == 200
+    assert json.loads(backend.meta.text_calls[-1][-1]["content"])["to"] == "zh"
+
+
 def test_the_language_of_the_screen_goes_back_with_the_frames(backend):
     client = backend.client
     session_id = sharing(client, target_lang="id")

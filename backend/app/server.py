@@ -266,11 +266,9 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
     @router.post("/translate")
     async def translate(body: Translate):
         session = session_or_404(body.session_id) if body.session_id else None
-        target_lang = body.target_lang
+        target_lang = session.app_lang if session and session.app_lang else body.target_lang  # The screen outranks the settings.
         if target_lang == "auto":
-            if not session or not session.app_lang:
-                raise HTTPException(409, "Язык приложения ещё не определён. Включи демонстрацию экрана.")
-            target_lang = session.app_lang
+            raise HTTPException(409, "Язык приложения ещё не определён. Включи демонстрацию экрана.")
         translated = await text_reply(
             json.dumps({"from": body.source_lang, "to": target_lang, "text": body.text}, ensure_ascii=False),
             "Переведи поле text с языка from на язык to. Верни только перевод без кавычек, "
