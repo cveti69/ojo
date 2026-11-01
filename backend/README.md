@@ -25,8 +25,8 @@ More settings:
 | `APP_NAME` | `OjO`, the only place for the product name, see `app/config.py` |
 | `META_API_BASE` | `https://api.meta.ai/v1` |
 | `META_TALK_MODEL` | `muse-wonder-1.0`, the model of the call |
-| `META_TALK_REASONING` | `medium` |
-| `META_SPARE_MODEL` | `muse-spark-1.3`, one try when the call's model gives no answer in 15 seconds |
+| `META_TALK_REASONING` | `low`, for both models of the call |
+| `META_SPARE_MODEL` | `muse-spark-1.3`, runs beside the call's model when it has no line after 8 seconds |
 | `META_TEXT_MODEL` | empty, translation for the keyboard needs one |
 | `META_TRANSCRIBE_MODEL` | `muse-voice-transcribe-1.0` |
 | `META_SAM_MODEL` | `sam-3.1` |

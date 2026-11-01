@@ -37,7 +37,7 @@ network the phone opens a new connection for the next request. `X-Frame-Small: 1
 a check mark or a price digit. It starts no turn, and the frame stays the latest one.
 
 `effort` picks the model's reasoning depth for the whole call: `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Without it the
-server's value applies. `character` picks the agent's manner: `warm`, `strict`, `brief`, `patient`, or `own` with its text in
+server's value applies, `low` for now. `character` picks the agent's manner: `warm`, `strict`, `brief`, `patient`, or `own` with its text in
 `own_character`, up to 500 characters. The manner changes the tone only: the prohibitions and the answer format stay on the server.
 
 ## The call loop

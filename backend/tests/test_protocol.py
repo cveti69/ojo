@@ -354,7 +354,7 @@ def test_default_level_stays_the_servers(backend):
     session_id = new_session(backend.client)
     words(backend.client, session_id)
     idle(backend, session_id)
-    assert backend.meta.calls[0].effort == config.META_TALK_REASONING
+    assert backend.meta.calls[0].effort == config.META_TALK_REASONING == "low"
 
 
 @pytest.mark.parametrize("pictures,status", [([b"not a picture"], 422), ([jpeg()] * 5, 400), ([], 415)])

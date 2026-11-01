@@ -15,7 +15,7 @@ META_SPARE_MODEL = os.environ.get("META_SPARE_MODEL", "muse-spark-1.3")
 META_TRANSCRIBE_MODEL = os.environ.get("META_TRANSCRIBE_MODEL", "muse-voice-transcribe-1.0")
 META_SAM_MODEL = os.environ.get("META_SAM_MODEL", "sam-3.1")
 META_REASONING = os.environ.get("META_REASONING", "minimal")
-META_TALK_REASONING = os.environ.get("META_TALK_REASONING", "medium")
+META_TALK_REASONING = os.environ.get("META_TALK_REASONING", "low")
 
 ELEVENLABS_API_BASE = os.environ.get("ELEVENLABS_API_BASE", "https://api.elevenlabs.io/v1").rstrip("/")
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
