@@ -44,6 +44,7 @@ FACES = ("думаю", "нашёл", "сомневаюсь", "рад", "стоп
 FACE_RULE = "\nface: какое у тебя сейчас лицо, одно слово: " + ", ".join(FACES) + "."
 SILENT_TURN = "(молчит, экран обновился)"
 UNSEEN = "(экран не показан)"
+UNSHOWN = "(обводка не показана)"
 FAILED_LINE = "Не получилось ответить, повтори, пожалуйста."
 
 GRAY_SIZE = (64, 96)
@@ -58,10 +59,13 @@ MAX_REPLY = 500
 MAX_LABEL = 200
 _SAY_FIRST = re.compile(r'\s*\{\s*"say"\s*:\s*"((?:[^"\\]|\\.)*)"', re.S)
 # Broad on purpose: a screen wrongly taken for a payment costs one picture in the log, the other way round costs a card number.
-_PRIVATE_SCREEN = re.compile(
-    r"парол|\bкарт[аыуе]\b|\bкартой\b|пин-код|оплат|заплат|плат[её]ж|код подтверждения|код из смс"
+_PAYMENT = (
+    r"парол|\bкартой\b|пин-код|оплат|заплат|плат[её]ж|код подтверждения|код из смс"
     r"|password|\bpin\b|cvv|cvc|(credit|debit|bank) card|card (number|details)|payment|billing|\bpay\b|verification code|\botp\b"
-    r"|sandi|kartu|bayar|rekening|transfer bank|kode verifikasi", re.I)
+    r"|sandi|kartu|bayar|rekening|transfer bank|kode verifikasi")
+_PRIVATE_SCREEN = re.compile(_PAYMENT + r"|\bкарт[аыуе]\b", re.I)
+# The model can name a map app, so in its own words "карты" alone is not a payment.
+_PRIVATE_WORDS = re.compile(_PAYMENT + r"|(номер|данн|банковск)\w*\s+(\w+\s+)?карт(а|ы|у|е|ой)?\b", re.I)
 
 
 def prepare_frame(jpeg: bytes, source_width: int, source_height: int, timestamp_ms: int,
@@ -105,6 +109,12 @@ def _new_screen(session: Session, frame: Frame) -> bool:
 def _gone(session: Session, frame: Frame) -> bool:
     """They are on another screen by now. A video on the page is not a reason to take an outline away."""
     return bool(session.last_frame) and changed_share(session.last_frame.gray, frame.gray) >= NEW_SCREEN_SHARE
+
+
+def _ahead(session: Session, frame: Frame) -> bool:
+    """A look shows the screen as it is now, so what follows is measured against it. The same screen keeps the frame that has its words."""
+    last = session.last_frame
+    return not last or (frame.timestamp_ms > last.timestamp_ms and not same_frame(frame.gray, last.gray))
 
 
 def _pictures(chat: List[dict]) -> Set[int]:
@@ -204,8 +214,9 @@ def _private(session: Session, frame: Optional[Frame], answer: dict) -> bool:
     if answer.get("private") is True:
         return True
     target = answer.get("show") if isinstance(answer.get("show"), dict) else {}
+    said = " ".join((_text(answer.get("say")), _text(target.get("label")), _text(target.get("object"))))
     on_screen = " ".join(line["text"] for line in (_text_on(session, frame) or [])) if frame else ""
-    return bool(_PRIVATE_SCREEN.search(" ".join((_text(answer.get("say")), _text(target.get("label")), _text(target.get("object")), on_screen))))
+    return bool(_PRIVATE_WORDS.search(said) or _PRIVATE_SCREEN.search(on_screen))
 
 
 def _ms(started: float) -> int:
@@ -251,6 +262,8 @@ class Friend:
         said, session.heard = session.heard, ""
         if frame and _new_screen(session, frame):
             self._left(session)
+        if frame and _ahead(session, frame):
+            session.last_frame = frame
         self._start(session, said if frame else said + " " + UNSEEN, frame)
 
     def screen(self, session: Session, frame: Frame) -> tuple:
@@ -282,9 +295,11 @@ class Friend:
             session.publish({"type": "left"})
 
     def text_read(self, session: Session, timestamp_ms: int) -> None:
-        """The words on a screen can come after its answer, and a payment screen leaves the log and the chat all the same."""
+        """The words on a screen can come after its answer, and a payment screen leaves the log and the chat all the same.
+        They can also come ahead of their frame or without it. Our window hardly moves, so the last frame shows where it is."""
         lines = session.frame_text.get(timestamp_ms) or []
-        if not _PRIVATE_SCREEN.search(" ".join(line["text"] for line in lines)):
+        box = session.last_frame.window if session.last_frame else None
+        if not _PRIVATE_SCREEN.search(" ".join(line["text"] for line in (window.outside(lines, box) if box else lines))):
             return
         for kept in session.chat:
             if kept.get("frame") and kept["frame"].timestamp_ms == timestamp_ms:
@@ -386,7 +401,7 @@ class Friend:
         session.last_answer = answer
         session.timings = {"model_ms": ms}
         lang = _text(answer.get("lang")).lower()
-        if session.target_lang == "auto" and re.fullmatch("[a-z]{2}", lang):
+        if re.fullmatch("[a-z]{2}", lang):
             session.app_lang = lang
         if frame and private:  # It is not sent again, and what the model noted is enough for the next turns.
             for kept in session.chat:
@@ -417,6 +432,11 @@ class Friend:
             session.step_id = "s" + str(session.step_sequence)
             session.texts = [paste]
 
+    def _unshown(self, session: Session, outcome: str, **written: object) -> None:
+        """The voice has gone ahead of the outline. The model hears on its next turn that none came."""
+        session.chat.append({"role": "user", "text": UNSHOWN, "frame": None})
+        session.note("show", outcome=outcome, **written)
+
     async def _show(self, session: Session, frame: Frame, text: str, target: dict, answer: dict, model_ms: int) -> None:
         started = time.perf_counter()
 
@@ -424,18 +444,18 @@ class Friend:
             return {"target": None} if _private(session, frame, answer) else {"target": target, "frame": str(frame.timestamp_ms) + ".jpg"}
 
         if _gone(session, frame):  # Over a screen they have left it would only send them back.
-            session.note("show", outcome="left", **written())
+            self._unshown(session, "left", **written())
             return
         location = await run_in_threadpool(grounding.locate, frame.jpeg, frame.width, frame.height,
                                            {"action": "tap", "target": target}, _text_on(session, frame))
         box_ms = _ms(started)
         session.grounding = location
         if not location["box"]:
-            session.note("show", outcome="not found", box_ms=box_ms, **written())
+            self._unshown(session, "not found", box_ms=box_ms, **written())
             return
         image = await run_in_threadpool(hint.render, frame.jpeg, location["box"], text, session.eyes)
         if _gone(session, frame):  # A screen that came while the answer was busy stops nothing, so it can only be seen here.
-            session.note("show", outcome="left", box_ms=box_ms, **written())
+            self._unshown(session, "left", box_ms=box_ms, **written())
             return
         session.step_sequence += 1
         session.step_id = "s" + str(session.step_sequence)

@@ -11,7 +11,7 @@ Without it, or with a wrong value, the answer is `401`. Sessions live in the ser
 |---|---|---|---|
 | `POST /sessions` | app | `{"user_lang": "ru", "target_lang": "id", "text_entry": "clipboard", "effort": "medium", "character": "warm", "own_character": "", "eyes": true}`, `eyes` only when the eyes are on | `201 {"session_id": "s_ab12cd34"}` |
 | `POST /transcribe` | app | `audio/wav`: mono, 16 bit, 16 kHz | `200 {"text": "..."}` |
-| `POST /sessions/{id}/frames` | broadcast extension | `image/jpeg` | `202 {"accepted": true}` if the frame became a turn, or `202 {"accepted": false, "reason": "same"}`. `reason`: `same` the same screen, `small` a small change the next turn will see, `looking` the phone is sending the screen for a line, `busy` the answer was restarted twice already |
+| `POST /sessions/{id}/frames` | broadcast extension | `image/jpeg` | `202 {"accepted": true}` if the frame became a turn, or `202 {"accepted": false, "reason": "same"}`. `reason`: `same` the same screen, `small` a small change the next turn will see, `looking` the phone is sending the screen for a line, `busy` the answer was restarted twice already. `lang`, once the model has named the language of the screen, two letters: the extension reads the next screens with it |
 | `POST /sessions/{id}/text` | broadcast extension or app | `{"frame_ts": 1793436844526, "lines": [{"text": "Beli sekarang", "words": [{"text": "Beli", "box": [0.1, 0.8, 0.2, 0.83]}]}]}` | `200 {"ok": true}` |
 | `GET /sessions/{id}/suggestions` | keyboard | | `200 {"step_id": "s3", "texts": ["sampo anti ketombe"], "hint_ru": ""}` |
 | `GET /sessions/{id}/hint?after=s3` | app, the fallback without a WebSocket, once a second | | `200` with a `hint` event newer than `after`, otherwise `204` |
@@ -97,7 +97,8 @@ screen comes with the `turn` of the last words, or `0` if there were none yet.
 `hint` carries the picture for the window: what is outlined, and a caption. `image_jpeg_base64` is always 720×960, and `frame_ts` equals
 the `X-Frame-Ts` of the frame. If the person moved to another screen while the model was thinking, no outline goes out: the button is
 gone. `left` means a new screen came while something on the old one was outlined: the window goes back to its card. A video on the
-page does not count as a new screen.
+page does not count as a new screen. The voice does not wait for the outline, so when none goes out, the model is told so on its next
+turn.
 
 In a call with `eyes` the hint picture leaves room in its bottom strip, and the event has three more fields. `eyes_box`: where the
 phone draws small eyes, `[x1, y1, x2, y2]` in shares of the picture. `gaze`: where to look, a unit step `[x, y]` from the centre of our
@@ -115,9 +116,9 @@ clipboard only while the window is open, so if the write failed, the app repeats
 `paste_text` is `null`, and the keyboard takes the text from `/suggestions`.
 
 A payment, card, password or code screen is not written to the log and does not go to the model again: the model says so in its
-`private` field, or the words on the screen do. A line goes out before the end of the answer, and the log decision is made only on the
-whole answer: if the answer breaks off after the line, neither the frame nor the answer is logged. Screen text that comes after the
-answer removes both the frame and the answer line from the log.
+`private` field, or the words on the screen do, or its own words about a card or a payment. A line goes out before the end of the
+answer, and the log decision is made only on the whole answer: if the answer breaks off after the line, neither the frame nor the
+answer is logged. Screen text that comes after the answer removes both the frame and the answer line from the log.
 
 ## App Group
 

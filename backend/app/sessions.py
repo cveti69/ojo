@@ -48,7 +48,7 @@ class Session:
     held: bool = False
     answer: Optional[asyncio.Task] = None
     ears: Any = None
-    app_lang: Optional[str] = None
+    app_lang: Optional[str] = None  # What the model says the screen is written in.
     texts: List[str] = field(default_factory=list)
     step_id: Optional[str] = None
     step_sequence: int = 0
@@ -147,7 +147,7 @@ class SessionStore:
                character: str = "", eyes: bool = False) -> Session:
         session = Session(
             id="s_" + uuid.uuid4().hex[:16], user_lang=user_lang, target_lang=target_lang, text_entry=text_entry,
-            effort=effort, character=character, eyes=eyes, app_lang=None if target_lang == "auto" else target_lang,
+            effort=effort, character=character, eyes=eyes,
         )
         session.call_log = CallLog.start(session.id)
         session.note("call", user_lang=user_lang, target_lang=target_lang, text_entry=text_entry, eyes=eyes,

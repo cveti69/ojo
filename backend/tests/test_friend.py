@@ -359,6 +359,51 @@ def test_the_same_phrase_by_its_second_road_is_one_turn(backend):
     assert len(backend.meta.calls) == 1 and backend.store.sessions[session_id].turn == 1
 
 
+def test_an_outline_on_a_fresh_look_at_another_screen_goes_out(backend):
+    client = backend.client
+    session_id = sharing(client)
+    seen = events_of(backend, session_id)
+    post_frame(client, session_id, SCREENS[0], timestamp=100)
+    idle(backend, session_id)
+    backend.meta.replies = [line("Жми.", show=SHOW)]
+    words(client, session_id)
+    look(client, session_id, [SCREENS[1]], first_taken=200)
+    idle(backend, session_id)
+    assert kinds(seen)[-1] == "hint" and "left" not in kinds(seen)
+    assert backend.store.sessions[session_id].last_frame.timestamp_ms == 200
+
+
+def test_a_screen_after_the_look_still_takes_the_outline_away(backend):
+    client = backend.client
+    session_id = sharing(client)
+    seen = events_of(backend, session_id)
+    session = backend.store.sessions[session_id]
+    post_frame(client, session_id, SCREENS[0], timestamp=100)
+    idle(backend, session_id)
+    session.restarts = friend.MAX_RESTARTS
+    backend.meta.replies = [line("Жми.", show=SHOW)]
+    backend.meta.hook = lambda index: post_frame(client, session_id, SCREENS[2], timestamp=300)
+    words(client, session_id)
+    look(client, session_id, [SCREENS[1]], first_taken=200)
+    idle(backend, session_id)
+    assert "hint" not in kinds(seen) and session.last_frame.timestamp_ms == 300
+
+
+def test_a_look_older_than_the_last_frame_does_not_replace_it(backend):
+    client = backend.client
+    session_id = sharing(client)
+    seen = events_of(backend, session_id)
+    session = backend.store.sessions[session_id]
+    post_frame(client, session_id, SCREENS[0], timestamp=100)
+    idle(backend, session_id)
+    words(client, session_id)
+    assert post_frame(client, session_id, SCREENS[2], timestamp=300).json()["reason"] == "looking"
+    backend.meta.replies = [line("Жми.", show=SHOW)]
+    look(client, session_id, [SCREENS[1]], first_taken=200)
+    idle(backend, session_id)
+    assert "hint" not in kinds(seen) and session.last_frame.timestamp_ms == 300
+
+
 def test_a_look_that_comes_too_late_is_told_so(backend, monkeypatch):
     client = backend.client
     session_id = sharing(client)
@@ -597,17 +642,28 @@ def test_a_reply_over_the_limit_ends_with_a_whole_sentence(words_in, cut):
     assert friend._line(words_in) == cut
 
 
-@pytest.mark.parametrize("target_lang,app_lang", [("auto", "th"), ("id", "id")])
-def test_the_screen_gives_the_app_language_only_when_asked_for(backend, target_lang, app_lang):
+@pytest.mark.parametrize("target_lang", ["auto", "id"])
+def test_the_screen_gives_the_app_language(backend, target_lang):
     client = backend.client
     session_id = sharing(client, target_lang=target_lang)
     backend.meta.replies = [line(lang="TH"), line(lang="не язык")]
     payload = {"text": "Подождите здесь", "from": "ru", "to": "auto", "session_id": session_id}
-    assert client.post("/translate", headers=AUTH, json=payload).status_code == (409 if target_lang == "auto" else 200)
-    post_frame(client, session_id)
+    assert client.post("/translate", headers=AUTH, json=payload).status_code == 409
+    post_frame(client, session_id, SCREENS[0])
+    idle(backend, session_id)
+    post_frame(client, session_id, SCREENS[1])
     idle(backend, session_id)
     assert client.post("/translate", headers=AUTH, json=payload).status_code == 200
-    assert json.loads(backend.meta.text_calls[-1][-1]["content"])["to"] == app_lang
+    assert json.loads(backend.meta.text_calls[-1][-1]["content"])["to"] == "th"
+
+
+def test_the_language_of_the_screen_goes_back_with_the_frames(backend):
+    client = backend.client
+    session_id = sharing(client, target_lang="id")
+    backend.meta.replies = [line(lang="zh")]
+    assert post_frame(client, session_id).json() == {"accepted": True}
+    idle(backend, session_id)
+    assert post_frame(client, session_id, timestamp=124).json() == {"accepted": False, "reason": "same", "lang": "zh"}
 
 
 def test_what_is_outlined_goes_when_they_leave_the_screen(backend):
@@ -696,6 +752,66 @@ def test_a_button_nobody_finds_stays_only_in_words(backend):
     post_frame(backend.client, session_id)
     idle(backend, session_id)
     assert kinds(seen) == ["say"]
+
+
+def test_the_model_hears_on_its_next_turn_that_no_outline_came(backend):
+    client = backend.client
+    session_id = sharing(client)
+    backend.meta.replies = [line("Она вверху.", show={"label": "Lanjut", "object": "", "box": []}), line("Вот тут."), line("Да.")]
+    post_frame(client, session_id, SCREENS[0])
+    idle(backend, session_id)
+    words(client, session_id, "Где?")
+    look(client, session_id, [SCREENS[0]], first_taken=200)
+    idle(backend, session_id)
+    assert texts(backend.meta.calls[1].messages[-1]) == [friend.UNSHOWN, "Где?"]
+    played(backend, session_id, 1)
+    words(client, session_id, "Вижу")
+    look(client, session_id, [SCREENS[0]], first_taken=300)
+    idle(backend, session_id)
+    assert texts(backend.meta.calls[2].messages[-1]) == ["Вижу"]
+
+
+def test_the_model_hears_that_they_left_before_the_outline_came(backend):
+    entered, release = blocked(backend, only=1)
+    client = backend.client
+    session_id = sharing(client)
+    backend.store.sessions[session_id].restarts = friend.MAX_RESTARTS
+    backend.meta.replies = [line("Жми вот сюда.", show=SHOW), line("Вижу.")]
+    post_frame(client, session_id, SCREENS[0], timestamp=1)
+    assert entered.wait(2)
+    post_frame(client, session_id, SCREENS[1], timestamp=2)
+    release.set()
+    assert wait_until(lambda: len(backend.meta.calls) == 2)
+    idle(backend, session_id)
+    assert texts(backend.meta.calls[1].messages[-1]) == [friend.UNSHOWN, friend.SILENT_TURN]
+
+
+def test_an_outline_that_came_leaves_nothing_to_hear(backend):
+    client = backend.client
+    session_id = sharing(client)
+    backend.meta.replies = [line("Жми.", show=SHOW), line("Да.")]
+    post_frame(client, session_id, SCREENS[0])
+    idle(backend, session_id)
+    words(client, session_id, "Где?")
+    look(client, session_id, [SCREENS[0]], first_taken=200)
+    idle(backend, session_id)
+    assert texts(backend.meta.calls[1].messages[-1]) == ["Где?"]
+
+
+def test_words_before_the_first_sound_take_the_fact_away_with_the_answer(backend):
+    client = backend.client
+    session_id = sharing(client)
+    post_frame(client, session_id, SCREENS[0])
+    idle(backend, session_id)
+    backend.meta.replies = [line("Она вверху.", show={"label": "Lanjut", "object": "", "box": []}), line("Да.")]
+    words(client, session_id, "Где")
+    look(client, session_id, [SCREENS[0]], first_taken=200)
+    idle(backend, session_id)
+    assert backend.store.sessions[session_id].chat[-1]["text"] == friend.UNSHOWN
+    words(client, session_id, "кнопка")
+    look(client, session_id, [SCREENS[0]], first_taken=300)
+    idle(backend, session_id)
+    assert texts(backend.meta.calls[-1].messages[-1]) == ["Где кнопка"]
 
 
 def test_the_outline_does_not_hold_up_the_server(backend, monkeypatch):
@@ -987,6 +1103,42 @@ def test_a_product_card_is_not_a_bank_card(backend, monkeypatch, tmp_path):
     folder = next((tmp_path / "calls").iterdir())
     assert list((folder / "frames").iterdir())
     assert next(line for line in lines_of(folder) if line["kind"] == "answer")["private"] is False
+
+
+@pytest.mark.parametrize("reply,private", [
+    (line("Это Baidu Карты."), False),
+    (line("Открой Яндекс Карты.", show={"label": "Карты", "object": "map app icon", "box": [100, 100, 200, 200]}), False),
+    (line("Введите номер карты."), True),
+    (line("Введите номер вашей карты."), True),
+    (line("Проверьте данные карты."), True),
+    (line("Подойдёт банковская карта."), True),
+    (line("Подойдёт банковскую карту."), True),
+    (line("Это можно картой."), True),
+    (line("Проверь сумму.", show={"label": "Номер карты", "object": "field", "box": [100, 100, 200, 200]}), True),
+    (line("Это Baidu Карты.", private=True), True),
+])
+def test_the_words_of_the_model_tell_a_map_app_from_a_bank_card(backend, monkeypatch, tmp_path, reply, private):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    session_id = sharing(backend.client)
+    backend.meta.replies = [reply]
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    assert next(row for row in lines_of(folder) if row["kind"] == "answer")["private"] is private
+    assert bool(list((folder / "frames").iterdir())) is not private
+
+
+@pytest.mark.parametrize("seen_there", ["Карта", "Карты", "Оплата картой", "Bayar"])
+def test_on_the_screen_a_card_stays_private_whatever_the_model_says(backend, monkeypatch, tmp_path, seen_there):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    session_id = sharing(backend.client)
+    backend.store.sessions[session_id].remember_text(123, [{"text": seen_there, "box": [0.1, 0.1, 0.3, 0.2], "words": []}])
+    backend.meta.replies = [line("Это Baidu Карты.")]
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    assert next(row for row in lines_of(folder) if row["kind"] == "answer")["private"] is True
+    assert not list((folder / "frames").iterdir())
 
 
 def test_the_words_on_the_screen_make_it_private_without_the_model(backend, monkeypatch, tmp_path):

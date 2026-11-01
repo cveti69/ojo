@@ -238,6 +238,8 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
         result = {"accepted": accepted}
         if reason:
             result["reason"] = reason
+        if session.app_lang:
+            result["lang"] = session.app_lang
         return result
 
     @router.post("/sessions/{session_id}/text")

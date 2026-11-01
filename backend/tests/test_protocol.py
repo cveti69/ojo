@@ -24,7 +24,7 @@ def test_health_and_session_defaults(backend):
     response = client.post("/sessions", headers=AUTH, json={})
     assert response.status_code == 201
     session = backend.store.sessions[response.json()["session_id"]]
-    assert (session.user_lang, session.target_lang, session.text_entry, session.app_lang) == ("ru", "id", "clipboard", "id")
+    assert (session.user_lang, session.target_lang, session.text_entry, session.app_lang) == ("ru", "id", "clipboard", None)
     assert client.get("/sessions/" + session.id + "/suggestions", headers=AUTH).json() == {
         "step_id": None, "texts": [], "hint_ru": ""
     }
@@ -390,6 +390,22 @@ def test_our_window_is_grey_for_the_model_and_changes_nothing(backend):
     grey = Image.open(io.BytesIO(session.last_frame.jpeg)).convert("RGB")
     assert all(abs(value - 128) < 12 for value in grey.getpixel((90, 380)))
     assert post_frame(client, session_id, windowed((40, 200, 40))).json() == {"accepted": False, "reason": "same"}
+
+
+def test_payment_words_read_under_our_window_leave_the_screen_alone(backend):
+    client = backend.client
+    session_id = sharing(client)
+    post_frame(client, session_id, windowed((200, 40, 40)), timestamp=7)
+    idle(backend, session_id)
+    session = backend.store.sessions[session_id]
+    box = session.last_frame.window
+    middle = [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2] * 2
+    under, beside = [[{"text": "Bayar", "words": [{"text": "Bayar", "box": place}]}] for place in (middle, [0.8, 0.02, 0.9, 0.05])]
+    for frame_ts in (7, 8):  # Its own frame, and one that never came.
+        assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={"frame_ts": frame_ts, "lines": under}).status_code == 200
+    assert session.chat[0]["frame"] is not None
+    assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={"frame_ts": 7, "lines": beside}).status_code == 200
+    assert session.chat[0]["frame"] is None
 
 
 def test_words_under_our_window_do_not_count(backend):
