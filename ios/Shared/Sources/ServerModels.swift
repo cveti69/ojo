@@ -8,6 +8,7 @@ public struct CreateSessionRequest: Encodable, Sendable {
     public let character: AgentCharacter
     public let ownCharacter: String
     public let eyes: Bool?  // Left out when off, so nothing changes for the server.
+    public let signals = true  // The broadcast says when the screen changes, so a still one needs no new frame.
 
     public init(settings: ServerSettings) {
         userLang = settings.userLang
@@ -21,7 +22,7 @@ public struct CreateSessionRequest: Encodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case userLang = "user_lang", targetLang = "target_lang", textEntry = "text_entry"
-        case effort, character, ownCharacter = "own_character", eyes
+        case effort, character, ownCharacter = "own_character", eyes, signals
     }
 }
 
@@ -32,6 +33,14 @@ public struct SessionResponse: Decodable, Sendable {
 
 public struct WordsRequest: Encodable, Sendable { public let text: String }
 public struct PlayedRequest: Encodable, Sendable { public let turn: Int }
+public struct LineSpoken: Encodable, Sendable {
+    public let line: Int
+    public let said: String
+}
+public struct ScreenChange: Encodable, Sendable {
+    public let at: Int64
+    public let moved: Bool
+}
 public struct SpokenReply: Decodable, Sendable {
     public let heard: Bool
     public let speechMS: Int
@@ -82,13 +91,11 @@ public struct HintEvent: Decodable, Sendable {
     public let imageJPEGBase64: String
     public let frameTS: Int64?
     public let timings: HintTimings?
-    public let eyesBox: [Double]?
-    public let gaze: [Double]?
     public let calm: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case stepID = "step_id", instructionRU = "instruction_ru", timings, gaze, calm
-        case eyesBox = "eyes_box", imageJPEGBase64 = "image_jpeg_base64", frameTS = "frame_ts"
+        case stepID = "step_id", instructionRU = "instruction_ru", timings, calm
+        case imageJPEGBase64 = "image_jpeg_base64", frameTS = "frame_ts"
     }
 }
 
@@ -115,10 +122,17 @@ public struct DoneEvent: Decodable, Sendable {
 
 public struct SayEvent: Decodable, Sendable {
     public let turn: Int
+    public let line: Int?  // What the phone calls it if it does not sound to its end.
+    public let frameTS: Int64?  // The screen it is about. None means it goes with any screen.
     public let textRU: String
     public let pasteText: String?
     public let timings: SayTimings
-    enum CodingKeys: String, CodingKey { case turn, textRU = "text_ru", pasteText = "paste_text", timings }
+    enum CodingKeys: String, CodingKey { case turn, line, frameTS = "frame_ts", textRU = "text_ru", pasteText = "paste_text", timings }
+}
+
+public struct ReadEvent: Decodable, Sendable {
+    public let frameTS: Int64
+    enum CodingKeys: String, CodingKey { case frameTS = "frame_ts" }
 }
 
 public struct FaceEvent: Decodable, Sendable {
@@ -147,6 +161,7 @@ public enum ServerEvent: Decodable, Sendable {
     case left
     case reading
     case face(FaceEvent)
+    case read(ReadEvent)
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -161,6 +176,7 @@ public enum ServerEvent: Decodable, Sendable {
         case "left": self = .left
         case "reading": self = .reading
         case "face": self = .face(try FaceEvent(from: decoder))
+        case "read": self = .read(try ReadEvent(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(forKey: .type, in: container, debugDescription: "Unknown event type")
         }

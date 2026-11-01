@@ -9,9 +9,10 @@ Without it, or with a wrong value, the answer is `401`. Sessions live in the ser
 
 | Method and path | Caller | Body | Answer |
 |---|---|---|---|
-| `POST /sessions` | app | `{"user_lang": "ru", "target_lang": "id", "text_entry": "clipboard", "effort": "medium", "character": "warm", "own_character": "", "eyes": true}`, `eyes` only when the eyes are on | `201 {"session_id": "s_ab12cd34"}` |
+| `POST /sessions` | app | `{"user_lang": "ru", "target_lang": "id", "text_entry": "clipboard", "effort": "medium", "character": "warm", "own_character": "", "eyes": true, "signals": true}`, `eyes` only when the eyes are on, `signals` if the phone sends `/changed` | `201 {"session_id": "s_ab12cd34"}` |
 | `POST /transcribe` | app | `audio/wav`: mono, 16 bit, 16 kHz | `200 {"text": "..."}` |
 | `POST /sessions/{id}/frames` | broadcast extension | `image/jpeg` | `202 {"accepted": true}` if the frame became a turn, or `202 {"accepted": false, "reason": "same"}`. `reason`: `same` the same screen, `small` a small change the next turn will see, `looking` the phone is sending the screen for a line, `busy` the answer was restarted twice already, `old` a newer frame has come. `lang`, once the model has named the language of the screen, two letters: the extension reads the next screens with it |
+| `POST /sessions/{id}/changed` | broadcast extension, once for a change and once for a move until the next frame is delivered | `{"at": 1793436844526, "moved": true}`: `at` on the clock of `X-Frame-Ts`, `moved` if the person is leaving the screen | `200 {"ok": true}` |
 | `POST /sessions/{id}/text` | broadcast extension or app | `{"frame_ts": 1793436844526, "lines": [{"text": "Beli sekarang", "words": [{"text": "Beli", "box": [0.1, 0.8, 0.2, 0.83]}]}]}` | `200 {"ok": true}` |
 | `GET /sessions/{id}/suggestions` | keyboard | | `200 {"step_id": "s3", "texts": ["sampo anti ketombe"], "hint_ru": ""}` |
 | `GET /sessions/{id}/hint?after=s3` | app, the fallback without a WebSocket, once a second | | `200` with a `hint` event newer than `after`, otherwise `204` |
@@ -20,6 +21,7 @@ Without it, or with a wrong value, the answer is `401`. Sessions live in the ser
 | `POST /sessions/{id}/words` | app, a typed line | `{"text": "Что это за кнопка?"}` | `200 {"ok": true}`, then the same as a spoken line |
 | `POST /sessions/{id}/look` | app, in reply to a `look` event | `multipart/form-data`: part `frame`, `image/jpeg`, the file name is the capture time in milliseconds, `1793436844526.jpg`. Up to 4 parts, oldest first, the server looks at the last one | `200 {"ok": true}` at once. `409` if the line that needed the screen is out of date |
 | `POST /sessions/{id}/played` | app, on the first sound of a line | `{"turn": 3}` | `200 {"ok": true}` |
+| `POST /sessions/{id}/spoken` | app, for a line that did not sound to its end | `{"line": 2, "said": "Первая фраза."}`, `said` is empty if no sound of it played | `200 {"ok": true}` |
 | `POST /speech` | app | `{"text": "Нажми на поиск", "voice": "JBFqnCBsd6RMkjVDRZzb"}`, `voice` is optional, an unknown voice is replaced with the server's | `200 audio/pcm`: 24 kHz, 16 bit, mono, as it is ready. `502` if the voice is unavailable: the system voice reads the line |
 | `GET /voices` | app, settings | | `200 {"voices": [{"id": "JBFqnCBsd6RMkjVDRZzb", "name": "George"}], "default": "JBFqnCBsd6RMkjVDRZzb"}` |
 | `POST /translate` | keyboard | `{"text": "...", "from": "ru", "to": "id", "session_id": "s_ab12cd34"}` | `200 {"text": "..."}` |
@@ -46,9 +48,22 @@ A call is an ordinary chat with one model. A turn is the person's words or a new
 to say, what to outline, what text to paste, and notes to itself. The whole conversation and the last 4 different screens go to the
 model on every turn.
 
-Words come from the `/listen` stream, from `/say` or from `/words`. During a broadcast the server sends `look`, the app asks the
-extension for the screen as it is and sends it to `/look`. There is no point waiting for a frame longer than a second: after 2 seconds
-the server takes the latest frame it has. With no broadcast or no frames, the model gets a note that the screen is not shown.
+Words come from the `/listen` stream, from `/say` or from `/words`. With `signals` and no change since the last delivered frame, that
+frame is the screen as it is now and the answer starts on it at once. Otherwise the server sends `look`, the app asks the extension
+for the screen as it is and sends it to `/look`. There is no point waiting for a frame longer than a second: after 2 seconds the server
+takes the latest frame it has. With no broadcast or no frames, the model gets a note that the screen is not shown.
+
+`/changed` comes at the first change after a delivered frame, without a frame and without waiting for the screen to settle: 8 pixels of
+256×256 are a change, and 40% of them, past the keyboard's 33%, are a move. A frame from `at` on ends the change. A move does this at
+once: what is outlined goes, the answer in flight stops, and words with no answer heard wait for the next delivered frame, however
+little it differs, or for 6.5 seconds with no frame. A line that has gone out stands until the phone reports it.
+
+Every line and every ready text names its frame in `frame_ts`. The server does not send what it has about a screen the person has
+left, and the phone checks it again against the moment of the move before it shows, plays or pastes anything. A line that has not
+begun to sound is dropped, one that has ends with its sentence, and `/spoken` leaves the model with what the person heard. A dropped
+line takes the rest of its answer with it. If that leaves words with no answer, they go to the frame of the new screen if it is here,
+and wait for the next frame if not. An answer that cannot be put off any more, after 2 stops in a row, comes
+with `frame_ts: null` and goes with any screen, or a video on the whole screen would never get one.
 
 A frame counts as a new screen if at least 38% of the picture changed since the frame of the last turn: a video, a banner or the
 keyboard do not change that much, and a transition does. Such a frame reaches the model with a note that the person is silent, and
@@ -77,11 +92,12 @@ The server sends JSON strings over the WebSocket.
 ```json
 {"type": "heard", "turn": 3}
 {"type": "look", "turn": 3}
-{"type": "say", "turn": 3, "text_ru": "Жми зелёную кнопку внизу.", "paste_text": null, "timings": {"model_ms": 2710}}
+{"type": "say", "turn": 3, "line": 2, "frame_ts": 1793436844526, "text_ru": "Жми зелёную кнопку внизу.", "paste_text": null, "timings": {"model_ms": 2710}}
 {"type": "quiet", "turn": 3}
 {"type": "hint", "step_id": "s3", "instruction_ru": "Жми зелёную кнопку внизу.", "image_jpeg_base64": "...",
  "frame_ts": 1793436844526, "timings": {"model_ms": 2710, "box_ms": 3, "box_source": "text", "window": true}}
 {"type": "left"}
+{"type": "read", "frame_ts": 1793436844526}
 {"type": "status", "state": "broadcasting", "text_ru": "Демонстрация экрана включена"}
 {"type": "done", "text_ru": "Сессия завершена"}
 ```
@@ -92,7 +108,9 @@ On a new connection the server repeats `status`, the last `hint` and `done`. If 
 (`/played`), it also repeats `heard` and `say`, because that line may have gone to a dead socket.
 
 `heard` means the server heard a phrase. On it the phone drops older lines and, with no answer in 1.5 seconds, says a waiting phrase.
-`say` carries the agent's line ahead of the outline: it goes out as soon as the model has written it, without waiting for the end of
+After a reconnect the server can repeat `heard` and the `say` that has not sounded: the phone keeps the line it already has.
+`read` means a small frame went to the model with no words read on it: the extension reads small frames only then, and the words are
+needed to keep a payment screen out of the log. `say` carries the agent's line ahead of the outline: it goes out as soon as the model has written it, without waiting for the end of
 the answer. `text_ru` can be empty if there is only `paste_text`: that is how ready text follows a line that has already gone out, as
 a second `say` of the same turn. `quiet` means the model chose to stay silent. A screen turn does not change `turn`: a line about a
 screen comes with the `turn` of the last words, or `0` if there were none yet.
@@ -103,16 +121,15 @@ gone. `left` means a new screen came while something on the old one was outlined
 page does not count as a new screen. The voice does not wait for the outline, so when none goes out, the model is told so on its next
 turn.
 
-In a call with `eyes` the hint picture leaves room in its bottom strip, and the event has three more fields. `eyes_box`: where the
-phone draws small eyes, `[x1, y1, x2, y2]` in shares of the picture. `gaze`: where to look, a unit step `[x, y]` from the centre of our
-window to the centre of the target, `null` if the window is not on the frame or there is no target. `calm`: a payment, card or password
-screen, the eyes only rest.
+In a call with `eyes` the window has two states. With a hint it shows the picture with no eyes: a piece of the screen, the outline
+and one short line, the first sentence as far as it fits. With no hint it shows the eyes and a word for what is really going on:
+Слушаю, Смотрю, Думаю, Говорю, Я рядом. The phone takes these from real events, not from the model. The hint event has one more
+field, `calm`: a payment, card or password screen, the eyes only rest.
 
-A call with `eyes` has two more events. Without `eyes` they do not exist and the model's prompt stays the same. `reading`: a new screen
-came, and the eyes read it while the answer is on its way. `face`, at the end of every answer:
-`{"type":"face","turn":3,"face":"нашёл","calm":false}`. `face` is the word the model chose by itself: думаю (thinking), нашёл (found),
-сомневаюсь (doubting), рад (glad), стоп (stop), or `null`. `calm`: a payment, card or password screen, no face. Such a `face` also
-comes ahead of the answer if payment words were found in the text of a frame the server already has.
+A call with `eyes` has two more events. `reading`: a new screen came, and the eyes read it while the answer is on its way. `face`, at
+the end of every answer: `{"type":"face","turn":3,"face":null,"calm":false}`. `face` is always `null`, and a build before 2 November
+reads it as no face. `calm`: a payment, card or password screen. Such an event also comes ahead of the answer if payment words were
+found in the text of a frame the server already has.
 
 If `text_entry` is `clipboard`, the app puts `paste_text` on the clipboard as soon as it gets `say`. iOS lets a background app reach the
 clipboard only while the window is open, so if the write failed, the app repeats it when the person comes back. With `keyboard`,
@@ -121,7 +138,8 @@ clipboard only while the window is open, so if the write failed, the app repeats
 A payment, card, password or code screen is not written to the log and does not go to the model again: the model says so in its
 `private` field, or the words on the screen do, or its own words about a card or a payment. A line goes out before the end of the
 answer, and the log decision is made only on the whole answer: if the answer breaks off after the line, neither the frame nor the
-answer is logged. Screen text that comes after the answer removes both the frame and the answer line from the log.
+answer is logged. Screen text that comes after the answer removes both the frame and the answer line from the log. A small frame
+whose words have not come by the end of its answer is logged with neither the picture nor the answer.
 
 ## App Group
 

@@ -13,6 +13,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         static let thumbnailSide = 256  // At 64 a price digit or a thin check mark changes nothing.
         static let changeThreshold = 0.025
         static let movedShare = 0.3  // With our window left out. On public pages a banner or a video reaches 0.29, the keyboard 0.33, a new screen 0.63.
+        static let leftShare = 0.4  // Past the keyboard: the person is leaving this screen.
         static let memoryReserve = 8 * 1024 * 1024
         static let textMemoryReserve = 16 * 1024 * 1024
         static let windowGoneAfter = 6  // Looks in a row without it: they closed it, and the place counts again.
@@ -26,12 +27,14 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         let client: ServerClient
         let mailbox: ScreenTextMailbox?
         let shelf: FrameShelf?
+        let movedName: String
     }
 
     private struct FrameCheck {
         let run: Run
         let previousThumbnail: [UInt8]?
         let previousSize: CGSize
+        let isSending: Bool
     }
 
     private struct Sample {
@@ -68,8 +71,11 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private var heldSample: Sample?
     private var newestSample: Sample?
     private var answeredAsk = 0
+    private var answeredRead: Int64 = 0
     private var stillness = ScreenStillness()
     private var screenMoved = false
+    private var changeTold = false
+    private var moveTold = false
     private var windowPatch: ScreenPatch?
     private var windowLooks = 0
     private var windowFinds = 0
@@ -97,12 +103,14 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             guard !settings.token.isEmpty else { throw ClientError.missingToken }
             let run = Run(id: id, sessionID: sessionID, store: store, journal: journal,
                           client: ServerClient(settings: settings, journal: { journal.append($0) }), mailbox: try? ScreenTextMailbox(configuration: configuration),
-                          shelf: try? FrameShelf(configuration: configuration))
+                          shelf: try? FrameShelf(configuration: configuration), movedName: configuration.screenMovedName)
             let ticket = UUID()
             let asked = store.screenAsked
+            let read = store.textAsked
             lock.withLock {
                 self.run = run
                 answeredAsk = asked
+                answeredRead = read
                 requestInFlight = true
                 requestID = ticket
             }
@@ -145,12 +153,15 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         if let check { process(sample, check: check) }
     }
 
-    /// Call with the lock held.
+    /// Call with the lock held. With a frame on its way the look is against that frame, and only to tell that they left it.
     private func beginCheck(now: TimeInterval) -> FrameCheck? {
-        guard let run, !requestInFlight, !processingFrame, now - lastCheck >= Capture.interval else { return nil }
+        guard let run, !processingFrame, now - lastCheck >= Capture.interval else { return nil }
         lastCheck = now
         processingFrame = true
-        return FrameCheck(run: run, previousThumbnail: previousThumbnail, previousSize: previousSize)
+        if requestInFlight {
+            return FrameCheck(run: run, previousThumbnail: keptFrame?.thumbnail, previousSize: keptFrame?.size ?? .zero, isSending: true)
+        }
+        return FrameCheck(run: run, previousThumbnail: previousThumbnail, previousSize: previousSize, isSending: false)
     }
 
     private func sendHeldSample() {
@@ -182,6 +193,14 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             let thumbnail = makeThumbnail(image)
             let patch = findWindow(image)
             let previous = size == check.previousSize ? check.previousThumbnail : nil
+            if check.isSending {
+                if let previous, ScreenStillness.changedShare(thumbnail, previous, outside: patch) >= Capture.leftShare {
+                    tellChange(at: timestamp, moved: true, run: check.run)
+                }
+                hold(sample, runID: check.run.id)
+                skipFrame(runID: check.run.id)
+                return
+            }
             let change = previous.map { ScreenStillness.difference(thumbnail, $0, outside: patch) }
             let cells = previous.map { ScreenStillness.changedCells(thumbnail, $0, outside: patch) } ?? 0
             let now = ProcessInfo.processInfo.systemUptime
@@ -193,9 +212,11 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 skipFrame(runID: check.run.id)
                 return
             }
+            let share = previous.map { ScreenStillness.changedShare(thumbnail, $0, outside: patch) } ?? 0
+            tellChange(at: timestamp, moved: share >= Capture.leftShare, run: check.run)
             guard large ? settled : isQuiet else {
                 hold(sample, runID: check.run.id)  // Frames stop with the screen, so the monitor looks at this one again.
-                if large, let previous, ScreenStillness.changedShare(thumbnail, previous, outside: patch) >= Capture.movedShare {
+                if large, share >= Capture.movedShare {
                     lock.withLock { if runID == check.run.id { screenMoved = true } }
                 }
                 skipFrame(runID: check.run.id)
@@ -211,6 +232,29 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             }
             keep(KeptFrame(jpeg: jpeg, thumbnail: thumbnail, size: size, timestamp: timestamp), outside: patch, run: check.run)
             upload(jpeg, sample: sample, thumbnail: thumbnail, size: size, timestamp: timestamp, small: !large, run: check.run)
+        }
+    }
+
+    /// Comes ahead of the frame, which waits for the screen to settle. Once for a change and once for a move, until a frame is delivered.
+    private func tellChange(at timestamp: Int64, moved: Bool, run: Run) {
+        let tell = lock.withLock { () -> Bool in
+            guard runID == run.id, !finished, !changeTold || (moved && !moveTold) else { return false }
+            changeTold = true
+            moveTold = moved
+            return true
+        }
+        guard tell else { return }
+        if moved {
+            run.store.screenMovedAt = timestamp
+            GroupNotification.post(run.movedName)
+            run.journal.append("Экран сдвинулся")
+        }
+        Task { [self] in
+            do { _ = try await run.client.screenChanged(at: timestamp, moved: moved, sessionID: run.sessionID) }
+            catch {
+                lock.withLock { if runID == run.id { changeTold = false; moveTold = false } }  // The next look says it again.
+                run.journal.append("Ошибка /changed: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -264,6 +308,18 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         }
     }
 
+    /// A small frame is read only if it goes to the model, and its words have to come: they keep a payment screen out of the log.
+    private func answerRead(run: Run) {
+        let asked = run.store.textAsked
+        let frame: KeptFrame? = lock.withLock {
+            guard runID == run.id, !finished, asked != answeredRead else { return nil }
+            if keptFrame?.timestamp != asked { answeredRead = asked }
+            return keptFrame?.timestamp == asked ? keptFrame : nil
+        }
+        guard let frame, scheduleScreenText(jpeg: frame.jpeg, timestamp: frame.timestamp, run: run) else { return }
+        lock.withLock { if runID == run.id { answeredRead = asked } }
+    }
+
     override func broadcastPaused() { currentJournal?.append("Трансляция приостановлена системой") }
 
     override func broadcastResumed() {
@@ -306,8 +362,11 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             heldSample = nil
             newestSample = nil
             answeredAsk = 0
+            answeredRead = 0
             stillness = ScreenStillness()
             screenMoved = false
+            changeTold = false
+            moveTold = false
             windowPatch = nil
             windowLooks = 0
             windowFinds = 0
@@ -354,7 +413,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             completeRequest(runID: run.id, ticket: ticket)
         }
         installRequest(task, runID: run.id, ticket: ticket)
-        scheduleScreenText(jpeg: jpeg, timestamp: timestamp, run: run)
+        if !small { scheduleScreenText(jpeg: jpeg, timestamp: timestamp, run: run) }
     }
 
     private func installRequest(_ task: Task<Void, Never>, runID id: UUID, ticket: UUID) {
@@ -366,15 +425,17 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         if cancel { task.cancel() }
     }
 
-    private func scheduleScreenText(jpeg: Data, timestamp: Int64, run: Run) {
+    /// False means the reader is busy, and this frame is worth another try.
+    @discardableResult
+    private func scheduleScreenText(jpeg: Data, timestamp: Int64, run: Run) -> Bool {
         let mode = run.store.screenTextMode
-        guard mode != .off else { return }
+        guard mode != .off else { return true }
         let reserved = lock.withLock { () -> Bool in
             guard runID == run.id, !finished, !textInFlight else { return false }
             textInFlight = true
             return true
         }
-        guard reserved else { return }
+        guard reserved else { return false }
         if mode == .app {
             mailboxQueue.async { [self] in
                 defer { completeText(runID: run.id) }
@@ -421,6 +482,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             }
             if cancel { task.cancel() }
         }
+        return true
     }
 
     private func completeText(runID id: UUID) {
@@ -497,6 +559,8 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 previousThumbnail = thumbnail
                 previousSize = size
                 screenMoved = false
+                changeTold = false
+                moveTold = false
             } else { skipped += 1 }
         }
     }
@@ -609,6 +673,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         }
         guard let statistics else { return }
         answerAsk(run: run)
+        answerRead(run: run)
         sendHeldSample()
         if run.store.sessionID != run.sessionID {
             run.journal.append("Сессия закрыта приложением, останавливаем трансляцию")

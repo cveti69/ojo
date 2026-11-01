@@ -56,19 +56,25 @@ def test_long_instruction_wraps_and_keeps_target_visible():
         assert len(rows_with_text) > 70
 
 
-@pytest.mark.parametrize("instruction", ["Нажми на поиск", "Проверь выбранный адрес доставки, затем нажми на зелёную кнопку внизу экрана"])
-def test_room_for_the_eyes_stays_empty(instruction):
+@pytest.mark.parametrize("instruction,shown", [
+    ("Нажми на поиск", "Нажми на поиск"),
+    ("Вот она. Проверь цену внизу.", "Вот она."),
+    ("Проверь выбранный адрес доставки, затем нажми на зелёную кнопку внизу экрана", "Проверь выбранный…"),
+    ("Проверьвыбранныйадресдоставкизатемнажминазелёнуюкнопкувнизу", "Проверьвыбранныйадрес…"),
+])
+def test_with_the_eyes_one_short_line_is_left(instruction, shown):
+    assert hint._short_layout(instruction)[1] == [shown]
+
+
+def test_with_the_eyes_the_line_leaves_the_picture_more_room():
+    instruction = "Проверь выбранный адрес доставки, затем нажми на зелёную кнопку внизу экрана"
+    panel_top = hint.SIZE[1] - hint._short_layout(instruction)[3] - 12
+    assert hint._short_layout(instruction)[3] < hint._text_layout(instruction)[3]
     result = hint.render(source_image(), [0.01, 0.81, 0.99, 0.89], instruction, eyes=True)
-    left, top, right, bottom = hint.eyes_box(instruction)
-    box = (round(left * 720), round(top * 960), round(right * 720), round(bottom * 960))
-    assert box[2] - box[0] == box[3] - box[1] == hint.EYES_SIDE
     with Image.open(io.BytesIO(result)) as image:
-        assert max(max(pixel) for pixel in image.crop(box).getdata()) < 40
-        strip = image.crop((box[2], box[1], 708, box[3]))
-        assert sum(1 for pixel in strip.getdata() if min(pixel) > 200) > 300
-        yellow = [y for y in range(image.height) for x in range(0, image.width, 3)
-                  if (lambda c: c[0] > 190 and c[1] > 160 and c[2] < 80)(image.getpixel((x, y)))]
-        assert yellow and max(yellow) < box[1]
+        assert max(image.getpixel((hint.SIZE[0] // 2, panel_top - 30))) > 60
+        rows = [y for y in range(panel_top, 950) if sum(1 for pixel in image.crop((40, y, 680, y + 1)).getdata() if min(pixel) > 210) > 8]
+        assert rows and max(rows) - min(rows) < 70
 
 
 def test_without_the_eyes_the_picture_stays_the_same():

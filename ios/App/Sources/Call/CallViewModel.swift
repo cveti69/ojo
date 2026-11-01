@@ -42,6 +42,8 @@ final class CallViewModel: ObservableObject {
         let text: String
         var kind = Kind.reply
         var turn: Int?
+        var id: Int?
+        var frameTS: Int64?
     }
 
     private static let restWords = "Я рядом"
@@ -91,6 +93,9 @@ final class CallViewModel: ObservableObject {
     private var pause: Task<Void, Never>?
     private var wordsThisTurn = 0
     private var eyes: EyesStage?
+    private var movedNotice: GroupNotification?
+    private var movedAt: Int64 = 0
+    private var hintOnWindow = false
     private var subscriptions = Set<AnyCancellable>()
 
     init(speaker: (any Speaker)? = nil) {
@@ -119,6 +124,9 @@ final class CallViewModel: ObservableObject {
         if let configuration {
             do { shelf = try FrameShelf(configuration: configuration) }
             catch { journal?.append("Полка кадров недоступна: \(error.localizedDescription)") }
+            movedNotice = GroupNotification(name: configuration.screenMovedName) { [weak self] in
+                Task { @MainActor [weak self] in self?.screenMoved() }
+            }
         }
         if let configuration, let store, let journal {
             do { textCoordinator = try ScreenTextCoordinator(configuration: configuration, store: store, journal: journal) }
@@ -251,6 +259,8 @@ final class CallViewModel: ObservableObject {
         heardTurn = 0
         lastHeard = .distantPast
         droppedSounds = 0
+        movedAt = 0
+        hintOnWindow = false
         if let endingID, store?.sessionID == endingID { store?.sessionID = nil }
         textCoordinator?.stop()
         startWindowWhenReady = false
@@ -601,8 +611,10 @@ final class CallViewModel: ObservableObject {
         speaking = Task { [weak self] in
             while let self, !Task.isCancelled, let line = self.takeLine() {
                 self.currentLine = line
-                await self.speaker.speakAndWait(line.text)
+                let parts = Sentences.of(line.text)
+                let heard = await self.speaker.speakAndWait(parts)
                 self.currentLine = nil
+                if heard < parts.count { self.tellCut(line.id, said: parts.prefix(heard).joined(separator: " ")) }
             }
             self?.speaking = nil
         }
@@ -610,14 +622,42 @@ final class CallViewModel: ObservableObject {
 
     /// Lines that have not sounded yet and that no longer say what is needed.
     private func dropLines(where isOutdated: (Line) -> Bool) {
+        for line in lines where isOutdated(line) { tellCut(line.id, said: "") }
         lines.removeAll(where: isOutdated)
         if !isSounding, let currentLine, isOutdated(currentLine) { speaker.stop() }
     }
 
     private func silence() {
-        lines.removeAll()
+        dropLines { _ in true }
         waitingHint = nil
         speaker.stop()
+    }
+
+    /// The model is left with what the person heard.
+    private func tellCut(_ line: Int?, said: String) {
+        guard let line, let client, let sessionID else { return }
+        let journal = journal
+        Task {
+            do { _ = try await client.spoken(line: line, said: said, sessionID: sessionID) }
+            catch { journal?.append("Ошибка /spoken: \(error.localizedDescription)") }
+        }
+    }
+
+    private func isAboutOldScreen(_ line: Line) -> Bool {
+        line.frameTS.map { $0 < movedAt } ?? false
+    }
+
+    /// The person is leaving this screen. What is shown goes at once, nothing about it sounds from here on, and a line that
+    /// is already sounding ends with its sentence. The server takes their question on to the next frame.
+    private func screenMoved() {
+        guard isCallActive, let at = store?.screenMovedAt, at > movedAt else { return }
+        movedAt = at
+        journal?.append("Экран сдвинулся")
+        if let eyes { eyes.newScreen() } else if hintOnWindow { showRestCard() }
+        if hintOnWindow { lastInstruction = Self.restWords }
+        hintOnWindow = false
+        dropLines(where: isAboutOldScreen)
+        if isSounding, let currentLine, isAboutOldScreen(currentLine) { speaker.endSentence() }
     }
 
     private func soundChanged(_ sounding: Bool) {
@@ -710,14 +750,19 @@ final class CallViewModel: ObservableObject {
                     "; модель \($0.modelMS) мс, рамка \($0.boxMS) мс, \($0.boxSource); окно на кадре: \($0.window == true ? "да" : "нет")"
                 } ?? ""
                 journal?.append("Подсказка \(hint.stepID) через \(seconds) с после кадра\(timings)")
+                guard timestamp >= movedAt else {
+                    journal?.append("Подсказка \(hint.stepID) о прежнем экране не показана")
+                    return
+                }
             }
             lastInstruction = hint.instructionRU
             do {
                 guard let data = Data(base64Encoded: hint.imageJPEGBase64) else { throw CallError.image }
                 if let eyes {
-                    try eyes.show(hint: data, box: hint.eyesBox, gaze: hint.gaze, calm: hint.calm == true)
+                    try eyes.show(hint: data, calm: hint.calm == true)
                 } else { try window.display(jpegData: data) }
                 lastJPEG = data
+                hintOnWindow = true
                 journal?.append("Показана подсказка")
             } catch { journal?.append("Ошибка картинки подсказки: \(error.localizedDescription)") }
         case .status(let status):
@@ -728,6 +773,7 @@ final class CallViewModel: ObservableObject {
             status = done.textRU
             journal?.append("Сервер закрыл сессию")
         case .heard(let event):
+            guard event.turn != heardTurn else { break }  // A reconnect names the turn again, and the line it brings back is the same.
             heardTurn = event.turn
             lastHeard = Date()
             let voice = microphone?.lastVoice ?? lastHeard
@@ -748,19 +794,32 @@ final class CallViewModel: ObservableObject {
             eyes?.stopWaiting(for: .screen)
             dropLines { $0.kind == .filler }
         case .left:
+            hintOnWindow = false
             if let eyes { eyes.newScreen() } else { showRestCard() }
             lastInstruction = Self.restWords
         case .reading:
             eyes?.newScreen()
             eyes?.wait(for: .screen)
         case .face(let event):
-            eyes?.express(event.face.flatMap(EyesFace.init(rawValue:)), calm: event.calm)
+            eyes?.express(nil, calm: event.calm)
+        case .read(let event):
+            store?.textAsked = event.frameTS
         }
     }
 
     private func hear(_ say: SayEvent) {
+        if let line = say.line, currentLine?.id == line || lines.contains(where: { $0.id == line }) { return }  // Back from a reconnect.
         journal?.append("Ход \(say.turn): ответ через \(sinceVoiceEnded()) мс после конца речи; модель \(say.timings.modelMS) мс")
-        guard say.turn == heardTurn else { return }  // The person has said more since.
+        guard say.turn == heardTurn else {  // The person has said more since.
+            tellCut(say.line, said: "")
+            return
+        }
+        if let frame = say.frameTS, frame < movedAt {  // A question goes on to the next frame, so the eyes go on waiting for its answer.
+            journal?.append("Ход \(say.turn): ответ о прежнем экране не сказан")
+            eyes?.stopWaiting(for: .screen)
+            tellCut(say.line, said: "")
+            return
+        }
         pause?.cancel()
         eyes?.stopWaiting(for: .reply)
         eyes?.stopWaiting(for: .screen)
@@ -770,7 +829,7 @@ final class CallViewModel: ObservableObject {
         lastInstruction = say.textRU
         lastSpokenHint = say.textRU
         if say.textRU.hasSuffix("?") { eyes?.ask(say.textRU) }
-        enqueue(Line(text: say.textRU, turn: say.turn))
+        enqueue(Line(text: say.textRU, turn: say.turn, id: say.line, frameTS: say.frameTS))
     }
 
     /// The screen as it is now for the line just heard. If it does not come, the server goes on with the last frame it has.

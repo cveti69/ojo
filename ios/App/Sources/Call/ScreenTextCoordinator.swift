@@ -7,7 +7,7 @@ final class ScreenTextCoordinator {
     private let journal: SharedJournal
     private let mailbox: ScreenTextMailbox
     private let worker = ScreenTextWorker()
-    private var notification: ScreenTextNotification?
+    private var notification: GroupNotification?
     private var sessionID: String?
     private var client: ServerClient?
     private var task: Task<Void, Never>?
@@ -21,7 +21,7 @@ final class ScreenTextCoordinator {
         self.store = store
         self.journal = journal
         mailbox = try ScreenTextMailbox(configuration: configuration)
-        notification = ScreenTextNotification(name: mailbox.notificationName) { [weak self] in
+        notification = GroupNotification(name: mailbox.notificationName) { [weak self] in
             Task { @MainActor [weak self] in self?.consumeLatest() }
         }
     }

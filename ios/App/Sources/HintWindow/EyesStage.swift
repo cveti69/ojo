@@ -9,25 +9,21 @@ protocol EyesSurface: AnyObject {
     func display(background: CGImage, drawing: (CGContext) -> Void) throws -> Bool
 }
 
-/// Keeps the window alive between hints. Draws only when the picture changes: up to 30 pictures a second in motion, none at rest.
+/// Keeps the window alive between hints: the eyes and the word for what is really going on, which real events decide and not the
+/// model. A hint takes the whole window. Draws only when the picture changes: up to 30 pictures a second in motion, none at rest.
 /// It runs on a plain timer, as a screen timer stops once the app is in the background.
 @MainActor
 final class EyesStage {
     enum Wait { case reply, screen }
 
     private enum Scene: Equatable { case pause, hint }
-    private struct Hint {
-        let picture: CGImage
-        let box: CGRect?
-    }
 
     private static let size = CGSize(width: 720, height: 960)
-    private static let pauseBox = CGRect(x: 108, y: 228, width: 504, height: 504)  // About 70 % of the window's width.
     private static let wordsBox = CGRect(x: 180, y: 90, width: 360, height: 360)
     private static let wordsArea = CGRect(x: 60, y: 470, width: 600, height: 420)
     private static let longWaitWords = "Жду ответа дольше обычного"
     private static let noLinkWords = "Нет связи"
-    private static let black = canvas { _ in }
+    private static let restWords = "Я рядом"
     private static let slowestRetry = 8  // In frames: a window that keeps refusing is not worth 30 tries a second.
 
     private let surface: any EyesSurface
@@ -36,13 +32,14 @@ final class EyesStage {
     private var timer: DispatchSourceTimer?
     private var startedAt: TimeInterval = 0
     private var scene = Scene.pause
-    private var hint: Hint?
+    private var hint: CGImage?
     private var words: String?
     private var question: String?
     private var isLinkDown = false
     private var notice: String?
     private var backdrop: CGImage?
     private var eyesBox: CGRect?
+    private var composedWords: String?
     private var needsComposing = true
     private var shown: EyePose?
     private var mood = EyesMood.rest
@@ -83,17 +80,16 @@ final class EyesStage {
     // MARK: What happens in the call
 
     /// The hint goes out in this very call, so the eyes do not hold it back.
-    func show(hint jpeg: Data, box: [Double]?, gaze: [Double]?, calm: Bool) throws {
+    func show(hint jpeg: Data, calm: Bool) throws {
         guard let image = UIImage(data: jpeg),
               let picture = Self.canvas({ _ in image.draw(in: CGRect(origin: .zero, size: Self.size)) }) else { throw StageError.picture }
-        hint = Hint(picture: picture, box: box.flatMap(Self.place))
+        hint = picture
         scene = .hint
         question = nil
         needsComposing = true
         director.isCalm = calm
+        director.stopReading()
         stopWaiting(for: .screen, redraw: false)
-        let way = gaze?.count == 2 ? gaze : nil
-        director.point(x: way?[0] ?? 0, y: way?[1] ?? 0, at: clock)
         tick()
     }
 
@@ -105,7 +101,7 @@ final class EyesStage {
         tick()
     }
 
-    /// A pause with no hint to go back to. Words stay under the eyes until the next change.
+    /// A pause with no hint to go back to. These words stand for rest, until the next change.
     func pause(words: String?) {
         hint = nil
         scene = .pause
@@ -116,7 +112,7 @@ final class EyesStage {
         tick()
     }
 
-    /// The face the model chose for what it said. On a payment screen there is none, and the eyes keep still.
+    /// On a payment screen the eyes keep still.
     func express(_ face: EyesFace?, calm: Bool) {
         director.isCalm = calm
         if let face { director.express(face, at: clock) }
@@ -188,38 +184,47 @@ final class EyesStage {
             director.isOnNewScreen = false
             director.endWaiting()
         }
-        let wanted = isLinkDown ? Self.noLinkWords : director.hasGivenUp(at: now) ? Self.longWaitWords : nil
-        if wanted != notice || needsComposing {
-            if wanted != notice { journal?.append("Глаза: \(wanted == nil ? "снова на месте" : "убраны, текст на чёрном")") }
-            notice = wanted
-            compose()
-        }
         let pose = director.advance(to: now)
         if director.mood != mood {
             journal?.append("Глаза: \(director.mood.rawValue), до этого \(mood.rawValue) \(Self.number(now - moodSince)) с")
             mood = director.mood
             moodSince = now
         }
+        let wanted = isLinkDown ? Self.noLinkWords : director.hasGivenUp(at: now) ? Self.longWaitWords : nil
+        if wanted != notice || needsComposing || underEyes != composedWords {
+            if wanted != notice { journal?.append("Глаза: \(wanted == nil ? "снова на месте" : "убраны, текст на чёрном")") }
+            notice = wanted
+            compose()
+        }
         if pose != shown { draw(pose) }
         let next = pose == shown ? director.nextChange : now + EyesDirector.frame * Double(min(max(refused, 1), Self.slowestRetry))
         timer.schedule(deadline: .now() + max(0, next - now), leeway: .milliseconds(3))
     }
 
+    private var underEyes: String {
+        if let question { return question }
+        switch mood {
+        case .listening: return "Слушаю"
+        case .reading: return "Смотрю"
+        case .thinking: return "Думаю"
+        case .speaking: return "Говорю"
+        default: return words ?? Self.restWords
+        }
+    }
+
     private func compose() {
         needsComposing = false
         shown = nil
+        composedWords = underEyes
         if scene == .hint, let hint {
-            backdrop = hint.picture
-            eyesBox = notice == nil ? hint.box : nil
+            backdrop = hint
+            eyesBox = nil
         } else if let notice {
             backdrop = Self.wordsPicture(notice, in: CGRect(x: 60, y: 200, width: 600, height: 560))
             eyesBox = nil
-        } else if let text = question ?? words {
-            backdrop = Self.wordsPicture(text, in: Self.wordsArea)
-            eyesBox = Self.wordsBox
         } else {
-            backdrop = Self.black
-            eyesBox = Self.pauseBox
+            backdrop = Self.wordsPicture(underEyes, in: Self.wordsArea)
+            eyesBox = Self.wordsBox
         }
     }
 
@@ -241,12 +246,6 @@ final class EyesStage {
             }
         } catch { journal?.append("Глаза: кадр не собран: \(error.localizedDescription)") }
         drawing += ProcessInfo.processInfo.systemUptime - started
-    }
-
-    private static func place(_ box: [Double]) -> CGRect? {
-        guard box.count == 4 else { return nil }
-        return CGRect(x: box[0] * size.width, y: box[1] * size.height,
-                      width: (box[2] - box[0]) * size.width, height: (box[3] - box[1]) * size.height)
     }
 
     /// The same bytes as the window's own pictures, so it only has to copy them.

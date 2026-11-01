@@ -41,7 +41,7 @@ enum EyesJoke: CaseIterable {
 struct EyesDirector {
     static let frame = 1.0 / 30
     static let givesUpAfter = 9.0  // Eyes must not hide a call that has stalled.
-    private static let longestWait = 35.0  // Two tries of 15 s on the server and the look at the screen.
+    private static let longestWait = 35.0  // The 30 s the server gives an answer, and the look at the screen.
     private static let jump = 0.04...0.06
     private static let hold = 0.15...0.7
     private static let readingHold = 0.15...0.2

@@ -44,6 +44,11 @@ public final class ServerClient: Sendable {
         try await json("POST", ["sessions", sessionID, "text"], body: ScreenTextRequest(frameTS: frameTS, lines: lines), timeout: Self.screenTimeout)
     }
 
+    /// The screen went on from the last frame, which waits for it to settle. Moved means the person is leaving it.
+    public func screenChanged(at timestampMS: Int64, moved: Bool, sessionID: String) async throws -> OKResponse {
+        try await json("POST", ["sessions", sessionID, "changed"], body: ScreenChange(at: timestampMS, moved: moved), timeout: Self.screenTimeout)
+    }
+
     public func end(sessionID: String) async throws -> OKResponse {
         try await getJSON(request("POST", ["sessions", sessionID, "end"]))
     }
@@ -102,10 +107,14 @@ public final class ServerClient: Sendable {
         return try JSONDecoder().decode(OKResponse.self, from: data)
     }
 
-    /// The screen started to change, so a hint for the old one is no use.
     /// The first sound of a reply: from here on, new words are a new line, not the end of the old one.
     public func played(turn: Int, sessionID: String) async throws -> OKResponse {
         try await json("POST", ["sessions", sessionID, "played"], body: PlayedRequest(turn: turn))
+    }
+
+    /// A line that did not sound to its end. The model is left with what the person heard.
+    public func spoken(line: Int, said: String, sessionID: String) async throws -> OKResponse {
+        try await json("POST", ["sessions", sessionID, "spoken"], body: LineSpoken(line: line, said: said))
     }
 
     /// Keeps the connection warm, so the voice's first request does not pay for opening it.

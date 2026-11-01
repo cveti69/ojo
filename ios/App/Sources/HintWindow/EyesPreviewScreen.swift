@@ -80,15 +80,8 @@ private final class EyesPreview: ObservableObject, EyesSurface {
         await step("Говорит", 2)
         stage.speaks(false)
         guard !Task.isCancelled, let jpeg = Self.sampleHint() else { return }
-        try? stage.show(hint: jpeg, box: [0.0375, 0.8, 0.2736, 0.9771], gaze: [0.8, -0.6], calm: false)
-        await step("Подсказка: смотрит на кнопку", 2.5)
-        guard !Task.isCancelled else { return }
-        stage.pause(words: nil)
-        for face in EyesFace.allCases {
-            guard !Task.isCancelled else { return }
-            stage.express(face, calm: false)
-            await step("Лицо: \(face.rawValue)", 2.2)
-        }
+        try? stage.show(hint: jpeg, calm: false)
+        await step("Подсказка: глаз нет", 2.5)
         guard !Task.isCancelled else { return }
         stage.pause(words: "Я на связи")
         await step("Пауза с текстом", 1.5)
@@ -110,7 +103,7 @@ private final class EyesPreview: ObservableObject, EyesSurface {
             UIColor.black.setFill()
             context.fill(CGRect(x: 0, y: 0, width: 720, height: 960))
             UIColor.white.setFill()
-            context.fill(CGRect(x: 32, y: 24, width: 656, height: 710))
+            context.fill(CGRect(x: 32, y: 24, width: 656, height: 785))
             UIColor.systemGray5.setFill()
             for top in [90, 270, 450] as [CGFloat] { context.fill(CGRect(x: 60, y: top, width: 600, height: 140)) }
             UIColor.systemGreen.setFill()
@@ -119,8 +112,8 @@ private final class EyesPreview: ObservableObject, EyesSurface {
             let outline = UIBezierPath(roundedRect: CGRect(x: 170, y: 610, width: 380, height: 100), cornerRadius: 22)
             outline.lineWidth = 10
             outline.stroke()
-            ("Нажми на зелёную кнопку" as NSString).draw(in: CGRect(x: 240, y: 790, width: 440, height: 130), withAttributes: [
-                .font: UIFont.systemFont(ofSize: 46, weight: .regular), .foregroundColor: UIColor.white
+            ("Нажми на зелёную…" as NSString).draw(in: CGRect(x: 40, y: 860, width: 640, height: 60), withAttributes: [
+                .font: UIFont.systemFont(ofSize: 44, weight: .regular), .foregroundColor: UIColor.white
             ])
         }
         return picture.jpegData(compressionQuality: 0.8)

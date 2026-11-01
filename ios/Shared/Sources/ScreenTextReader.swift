@@ -61,7 +61,7 @@ public struct ScreenTextReader: Sendable {
     }
 
     public static func word(_ text: String, box: CGRect?, lineBox: CGRect) -> ScreenTextWord {
-        ScreenTextWord(text: text, box: topLeftBox(box ?? lineBox))
+        ScreenTextWord(text: text, box: topLeftBox(box.flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil } ?? lineBox))
     }
 
     /// Detection reads any language on its own. The language of the screen only keeps a rare word of it among the Latin ones,
@@ -93,7 +93,7 @@ public struct ScreenTextReader: Sendable {
             let text = candidate.string
             var words: [ScreenTextWord] = []
             text.enumerateSubstrings(in: text.startIndex..., options: .byWords) { word, range, _, _ in
-                guard let word else { return }
+                guard let word, !word.trimmingCharacters(in: .whitespaces).isEmpty else { return }  // Vision makes them in mixed text.
                 let box = try? candidate.boundingBox(for: range)?.boundingBox
                 words.append(Self.word(word, box: box, lineBox: observation.boundingBox))
             }

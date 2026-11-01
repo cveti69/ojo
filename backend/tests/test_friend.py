@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 
-from app import config, friend, grounding, hint, meta, server
+from app import config, friend, grounding, hint, meta, server, sessions
 from conftest import AUTH, idle, jpeg, line, look, new_session, post_frame, real_locate, say, sharing, words
 
 SHOW = {"label": "Beli Langsung", "object": "green button", "box": [600, 900, 950, 960]}
@@ -515,7 +515,7 @@ def test_new_words_replace_the_answer_under_way_and_its_turn_stays(backend):
         post_frame(client, session_id)
         assert entered.wait(2)
         words(client, session_id, "Подожди")
-        assert look(client, session_id, [SCREENS[0]]).status_code == 200
+        assert look(client, session_id, [SCREENS[0]], first_taken=200).status_code == 200
         assert wait_until(lambda: len(backend.meta.calls) == 2)
         idle(backend, session_id)
     finally:
@@ -591,9 +591,9 @@ def test_a_new_look_at_a_screen_replaces_the_old_one_and_the_page_before_stays(b
     post_frame(client, session_id, SCREENS[1], timestamp=2)
     idle(backend, session_id)
     again = covered((0, 0, 40, 40), (90, 90, 90))
-    for screen in (again, again):
+    for index, screen in enumerate((again, again)):
         words(client, session_id)
-        assert look(client, session_id, [screen]).status_code == 200
+        assert look(client, session_id, [screen], first_taken=10 + index).status_code == 200
         idle(backend, session_id)
         played(backend, session_id, backend.store.sessions[session_id].turn)
     messages = backend.meta.calls[-1].messages
@@ -1460,20 +1460,11 @@ def test_the_words_on_the_screen_make_it_private_without_the_model(backend, monk
     assert answer["private"] is True and "answer" not in answer
 
 
-def test_the_face_is_asked_for_only_with_the_eyes_on(backend):
+def test_the_eyes_ask_nothing_of_the_model(backend):
     plain = new_session(backend.client)
     eyes = new_session(backend.client, eyes=True)
     prompt = lambda session_id: friend.messages_of(backend.store.sessions[session_id])[0]["content"]
-    assert "face" not in prompt(plain) and prompt(eyes) == prompt(plain) + friend.FACE_RULE
-
-
-def test_the_model_chooses_its_face_and_the_eyes_get_it(backend):
-    session_id = new_session(backend.client, eyes=True)
-    seen = events_of(backend, session_id)
-    backend.meta.replies = [line("Вот оно.", face="нашёл")]
-    words(backend.client, session_id)
-    idle(backend, session_id)
-    assert [event for event in seen if event["type"] == "face"] == [{"type": "face", "turn": 1, "face": "нашёл", "calm": False}]
+    assert "face" not in prompt(plain) and prompt(eyes) == prompt(plain)
 
 
 def test_the_voice_does_not_wait_for_the_face(backend):
@@ -1485,13 +1476,13 @@ def test_the_voice_does_not_wait_for_the_face(backend):
     assert kinds(seen).index("say") < kinds(seen).index("face")
 
 
-def test_an_unknown_face_is_no_face(backend):
+def test_a_face_from_the_model_goes_nowhere(backend):
     session_id = new_session(backend.client, eyes=True)
     seen = events_of(backend, session_id)
-    backend.meta.replies = [line("Хм.", face="ого")]
+    backend.meta.replies = [line("Хм.", face="рад")]
     words(backend.client, session_id)
     idle(backend, session_id)
-    assert [event["face"] for event in seen if event["type"] == "face"] == [None]
+    assert [event for event in seen if event["type"] == "face"] == [{"type": "face", "turn": 1, "face": None, "calm": False}]
 
 
 def test_a_payment_screen_has_no_face_and_keeps_the_eyes_calm(backend):
@@ -1585,3 +1576,701 @@ def test_a_silent_answer_leaves_nothing_to_get_back(backend):
     words(backend.client, session_id)
     idle(backend, session_id)
     assert missed(backend, session_id) == ["status"]
+
+
+def changed(client, session_id, at, moved=False):
+    assert client.post("/sessions/" + session_id + "/changed", headers=AUTH, json={"at": at, "moved": moved}).status_code == 200
+
+
+def cut(client, session_id, number, said=""):
+    assert client.post("/sessions/" + session_id + "/spoken", headers=AUTH, json={"line": number, "said": said}).status_code == 200
+
+
+def said_lines(session):
+    return [json.loads(turn["text"])["say"] for turn in session.chat if turn["role"] == "assistant"]
+
+
+def still_screen(backend, session_id, timestamp=1000):
+    post_frame(backend.client, session_id, SCREENS[0], timestamp=timestamp)
+    idle(backend, session_id)
+    played(backend, session_id, 0)
+
+
+def test_with_no_change_since_the_last_frame_the_model_starts_at_once(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    seen = events_of(backend, session_id)
+    words(client, session_id, "Это что?")
+    assert "look" not in kinds(seen) and wait_until(lambda: len(backend.meta.calls) == 2)
+    idle(backend, session_id)
+    message = backend.meta.calls[1].messages[-1]
+    assert texts(message) == ["Это что?"] and pictures(message) == [meta.data_url(SCREENS[0])]
+
+
+def test_a_phone_that_promised_no_signals_still_sends_the_screen(backend):
+    client = backend.client
+    session_id = sharing(client)
+    still_screen(backend, session_id)
+    seen = events_of(backend, session_id)
+    words(client, session_id, "Это что?")
+    assert "look" in kinds(seen) and len(backend.meta.calls) == 1
+
+
+def test_a_changed_screen_is_looked_at_first(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    changed(client, session_id, 2000)
+    seen = events_of(backend, session_id)
+    words(client, session_id, "Это что?")
+    assert "look" in kinds(seen) and len(backend.meta.calls) == 1
+
+
+def test_a_small_change_stops_nothing(backend):
+    entered, release = blocked(backend, only=1)
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    seen = events_of(backend, session_id)
+    try:
+        post_frame(client, session_id, SCREENS[0], timestamp=1000)
+        assert entered.wait(2)
+        changed(client, session_id, 2000)
+    finally:
+        release.set()
+    idle(backend, session_id)
+    assert spoken(seen) == ["Это кнопка поиска."] and "quiet" not in kinds(seen)
+
+
+def test_a_change_the_last_frame_already_shows_is_no_change(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    changed(client, session_id, 1000, moved=True)
+    seen = events_of(backend, session_id)
+    words(client, session_id, "Это что?")
+    assert "look" not in kinds(seen)
+    idle(backend, session_id)
+
+
+def test_only_a_frame_from_after_the_change_ends_it(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    session = backend.store.sessions[session_id]
+    changed(client, session_id, 2000)
+    post_frame(client, session_id, SCREENS[0], timestamp=1500)
+    assert session.changed_at == 2000
+    post_frame(client, session_id, SCREENS[0], timestamp=2500)
+    assert session.changed_at is None
+
+
+def test_a_frame_of_an_old_broadcast_is_not_the_screen_now(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    assert client.post("/sessions/" + session_id + "/broadcast", headers=AUTH, json={"state": "finished"}).status_code == 200
+    assert client.post("/sessions/" + session_id + "/broadcast", headers=AUTH, json={"state": "started"}).status_code == 200
+    seen = events_of(backend, session_id)
+    words(client, session_id, "Это что?")
+    assert "look" in kinds(seen)
+
+
+def test_a_moved_screen_takes_the_outline_and_a_turn_with_no_words(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Жми сюда.", show=SHOW), line("Уже не нужно.")]
+    post_frame(client, session_id, SCREENS[0], timestamp=1000)
+    idle(backend, session_id)
+    assert "hint" in kinds(seen)
+    entered, release = blocked(backend, only=2)
+    try:
+        post_frame(client, session_id, SCREENS[1], timestamp=2000)
+        assert entered.wait(2)
+        changed(client, session_id, 3000, moved=True)
+        assert kinds(seen)[-1] == "quiet" and client.get("/sessions/" + session_id + "/hint", headers=AUTH).status_code == 204
+    finally:
+        release.set()
+    idle(backend, session_id)
+    assert spoken(seen) == ["Жми сюда."] and said_lines(backend.store.sessions[session_id]) == ["Жми сюда."]
+
+
+def test_a_moved_screen_with_nothing_under_way_says_nothing_more(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    seen = events_of(backend, session_id)
+    changed(client, session_id, 2000, moved=True)
+    assert not seen
+
+
+def test_their_question_goes_on_to_the_screen_they_moved_to(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    session = backend.store.sessions[session_id]
+    entered, release = blocked(backend, only=2)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Про старый экран."), line("Про новый экран.")]
+    try:
+        words(client, session_id, "Что тут?")
+        assert entered.wait(2)
+        changed(client, session_id, 2000, moved=True)
+        assert post_frame(client, session_id, SCREENS[1], timestamp=1500).json() == {"accepted": False, "reason": "looking"}
+        assert post_frame(client, session_id, SCREENS[1], timestamp=2500).json() == {"accepted": True}
+        assert wait_until(lambda: len(backend.meta.calls) == 3)
+    finally:
+        release.set()
+    idle(backend, session_id)
+    message = backend.meta.calls[2].messages[-1]
+    assert texts(message) == ["Что тут?"] and pictures(message) == [meta.data_url(SCREENS[1])]
+    assert spoken(seen) == ["Про новый экран."] and said_lines(session)[-1] == "Про новый экран."
+
+
+def test_their_question_is_answered_even_if_they_came_back_to_the_same_screen(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    entered, release = blocked(backend, only=2)
+    try:
+        words(client, session_id, "Что тут?")
+        assert entered.wait(2)
+        changed(client, session_id, 2000, moved=True)
+        assert post_frame(client, session_id, SCREENS[0], timestamp=2500).json() == {"accepted": True}
+        assert wait_until(lambda: len(backend.meta.calls) == 3)
+    finally:
+        release.set()
+    idle(backend, session_id)
+
+
+def test_with_no_frame_after_the_move_their_question_still_gets_an_answer(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SETTLE_SECONDS", 0.01)
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    entered, release = blocked(backend, only=2)
+    try:
+        words(client, session_id, "Что тут?")
+        assert entered.wait(2)
+        changed(client, session_id, 2000, moved=True)
+        assert wait_until(lambda: len(backend.meta.calls) == 3)
+    finally:
+        release.set()
+    idle(backend, session_id)
+
+
+def test_with_no_frame_after_the_move_the_answer_goes_with_any_screen(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SETTLE_SECONDS", 0.01)
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    seen = events_of(backend, session_id)
+    words(client, session_id, "Что тут?")
+    idle(backend, session_id)
+    cut(client, session_id, next(event["line"] for event in seen if event["type"] == "say"))
+    assert wait_until(lambda: len(backend.meta.calls) == 3)
+    idle(backend, session_id)
+    assert [event["frame_ts"] for event in seen if event["type"] == "say"] == [1000, None]
+
+
+def test_new_words_while_the_screen_settles_join_their_question(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    session = backend.store.sessions[session_id]
+    entered, release = blocked(backend, only=2)
+    seen = events_of(backend, session_id)
+    try:
+        words(client, session_id, "Что тут?")
+        assert entered.wait(2)
+        changed(client, session_id, 2000, moved=True)
+        words(client, session_id, "И сколько стоит?")
+        assert session.heard == "Что тут? И сколько стоит?" and not session.settling and kinds(seen)[-1] == "look"
+    finally:
+        release.set()
+    assert look(client, session_id, [SCREENS[1]], first_taken=3000).status_code == 200
+    idle(backend, session_id)
+    assert texts(backend.meta.calls[-1].messages[-1]) == ["Что тут? И сколько стоит?"]
+
+
+def test_a_line_that_has_gone_out_stands_when_the_screen_moves(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    session = backend.store.sessions[session_id]
+    words(client, session_id, "Что тут?")
+    idle(backend, session_id)
+    changed(client, session_id, 2000, moved=True)
+    assert not session.heard and said_lines(session)[-1] == "Это кнопка поиска."
+
+
+def test_a_question_whose_line_never_sounded_goes_on_to_the_new_screen(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Про старый экран."), line("Про новый экран.")]
+    words(client, session_id, "Что тут?")
+    idle(backend, session_id)
+    changed(client, session_id, 2000, moved=True)
+    cut(client, session_id, next(event["line"] for event in seen if event["type"] == "say"))
+    assert session.heard == "Что тут?" and session.settling
+    post_frame(client, session_id, SCREENS[1], timestamp=2500)
+    idle(backend, session_id)
+    assert texts(backend.meta.calls[-1].messages[-1]) == ["Что тут?"] and said_lines(session)[-1] == "Про новый экран."
+    assert "Про старый экран." not in json.dumps(backend.meta.calls[-1].messages, ensure_ascii=False)
+
+
+def test_the_phone_can_say_so_before_the_server_hears_of_the_move(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    words(client, session_id, "Что тут?")
+    idle(backend, session_id)
+    cut(client, session_id, next(event["line"] for event in seen if event["type"] == "say"))
+    assert session.heard == "Что тут?" and session.settling
+    changed(client, session_id, 2000, moved=True)
+    assert session.heard == "Что тут?" and session.changed_at == 2000
+    assert post_frame(client, session_id, SCREENS[1], timestamp=2500).json() == {"accepted": True}
+    idle(backend, session_id)
+    assert texts(backend.meta.calls[-1].messages[-1]) == ["Что тут?"]
+
+
+def test_a_line_cut_short_stays_in_the_chat_as_far_as_it_sounded(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Первая фраза. Вторая фраза.", show=SHOW)]
+    words(client, session_id, "Что тут?")
+    idle(backend, session_id)
+    cut(client, session_id, next(event["line"] for event in seen if event["type"] == "say"), "Первая фраза.")
+    assert not session.heard and said_lines(session)[-1] == "Первая фраза."
+    assert "Вторая" not in json.dumps([turn.get("text") for turn in session.chat], ensure_ascii=False)
+
+
+def test_a_line_cut_short_before_the_rest_of_its_answer_came_stays_cut(backend):
+    client = backend.client
+    session_id = new_session(client)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    release = threading.Event()
+    backend.meta.after_text = lambda index: release.wait(5)
+    backend.meta.replies = [line("Первая фраза. Вторая фраза.")]
+    words(client, session_id, "Что тут?")
+    assert wait_until(lambda: "say" in kinds(seen))
+    cut(client, session_id, next(event["line"] for event in seen if event["type"] == "say"), "Первая фраза.")
+    release.set()
+    idle(backend, session_id)
+    assert said_lines(session) == ["Первая фраза."] and json.loads(session.chat[-1]["text"])["notes"] == "заметка"
+
+
+def test_a_line_on_its_own_that_never_sounded_leaves_nothing(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Смотри.", show=SHOW)]
+    post_frame(client, session_id, SCREENS[0], timestamp=1000)
+    idle(backend, session_id)
+    cut(client, session_id, next(event["line"] for event in seen if event["type"] == "say"))
+    assert not session.heard and said_lines(session) == [""] and json.loads(session.chat[1]["text"]) == {"say": ""}
+
+
+def test_a_line_cut_by_new_words_does_not_stop_their_answer(backend):
+    client = backend.client
+    session_id = new_session(client)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Старое."), line("Новое.")]
+    words(client, session_id, "Что тут?")
+    idle(backend, session_id)
+    entered, release = blocked(backend, only=2)
+    try:
+        words(client, session_id, "И сколько стоит?")
+        assert entered.wait(2)
+        cut(client, session_id, next(event["line"] for event in seen if event["type"] == "say"))
+        assert not session.answer.done() and not session.heard
+    finally:
+        release.set()
+    idle(backend, session_id)
+    assert spoken(seen) == ["Старое.", "Новое."]
+
+
+def test_a_line_someone_else_cut_is_not_known(backend):
+    session_id = new_session(backend.client)
+    cut(backend.client, session_id, 7)
+    assert not backend.store.sessions[session_id].chat
+
+
+def test_a_line_names_its_screen_and_its_number(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    seen = events_of(backend, session_id)
+    post_frame(client, session_id, SCREENS[0], timestamp=1000)
+    idle(backend, session_id)
+    say_event = next(event for event in seen if event["type"] == "say")
+    assert say_event["frame_ts"] == 1000 and say_event["line"] == 1
+
+
+def test_a_line_with_no_screen_is_about_no_screen(backend):
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    say_event = next(event for event in seen if event["type"] == "say")
+    assert say_event["frame_ts"] is None and say_event["line"] == 1
+
+
+def test_a_failed_line_is_not_cut_and_goes_with_any_screen(backend):
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [OSError("down"), OSError("down")]
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    say_event = next(event for event in seen if event["type"] == "say")
+    assert say_event["text_ru"] == friend.FAILED_LINE and "line" not in say_event and "frame_ts" not in say_event
+
+
+def test_a_ready_text_names_its_screen(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [{"paste": "Готово", "notes": "x"}]
+    post_frame(client, session_id, SCREENS[0], timestamp=1000)
+    idle(backend, session_id)
+    say_event = next(event for event in seen if event["type"] == "say")
+    assert say_event["paste_text"] == "Готово" and say_event["frame_ts"] == 1000 and say_event["line"] is None
+
+
+def test_an_answer_about_a_screen_they_left_goes_unsaid(backend):
+    entered, release = blocked(backend, only=1)
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Жми сюда.", paste="Текст", show=SHOW)]
+    try:
+        post_frame(client, session_id, SCREENS[0], timestamp=1000)
+        assert entered.wait(2)
+        post_frame(client, session_id, SCREENS[3], timestamp=2000, small=True)
+    finally:
+        release.set()
+    idle(backend, session_id)
+    assert not spoken(seen) and kinds(seen)[-1] == "quiet" and not said_lines(session) and not session.texts
+
+
+def test_an_answer_about_a_screen_they_left_is_not_said_ahead_of_the_rest(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    seen = events_of(backend, session_id)
+    backend.meta.hook = lambda index: post_frame(client, session_id, SCREENS[3], timestamp=2000, small=True) if index == 1 else None
+    post_frame(client, session_id, SCREENS[0], timestamp=1000)
+    idle(backend, session_id)
+    assert not spoken(seen)
+
+
+def test_their_question_goes_on_past_an_answer_about_a_screen_they_left(backend):
+    entered, release = blocked(backend, only=1)
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Про старый экран."), line("Про новый экран.")]
+    try:
+        words(client, session_id, "Что тут?")
+        assert look(client, session_id, [SCREENS[0]], first_taken=1000).status_code == 200
+        assert entered.wait(2)
+        post_frame(client, session_id, SCREENS[3], timestamp=2000, small=True)
+    finally:
+        release.set()
+    assert wait_until(lambda: len(backend.meta.calls) == 2)
+    idle(backend, session_id)
+    assert spoken(seen) == ["Про новый экран."] and said_lines(still) == ["Про новый экран."]
+    assert texts(backend.meta.calls[1].messages[-1]) == ["Что тут?", friend.SILENT_TURN]
+    assert pictures(backend.meta.calls[1].messages[-1])[-1] == meta.data_url(SCREENS[3])
+    assert next(event for event in seen if event["type"] == "read")["frame_ts"] == 2000
+
+
+def test_a_screen_that_keeps_moving_still_gets_an_answer_tied_to_nothing(backend):
+    entered, release = blocked(backend, only=1)
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    session = backend.store.sessions[session_id]
+    session.restarts = friend.MAX_RESTARTS
+    seen = events_of(backend, session_id)
+    try:
+        post_frame(client, session_id, SCREENS[0], timestamp=1000)
+        assert entered.wait(2)
+        changed(client, session_id, 2000, moved=True)
+        post_frame(client, session_id, SCREENS[3], timestamp=3000, small=True)
+    finally:
+        release.set()
+    idle(backend, session_id)
+    say_event = next(event for event in seen if event["type"] == "say")
+    assert say_event["text_ru"] == "Это кнопка поиска." and say_event["frame_ts"] is None and session.restarts == 0
+
+
+def test_a_move_counts_as_a_restart(backend):
+    entered, release = blocked(backend, only=1)
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    session = backend.store.sessions[session_id]
+    try:
+        post_frame(client, session_id, SCREENS[0], timestamp=1000)
+        assert entered.wait(2)
+        changed(client, session_id, 2000, moved=True)
+        assert session.restarts == 1
+    finally:
+        release.set()
+    idle(backend, session_id)
+
+
+def test_a_small_frame_going_to_the_model_is_read_then(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    assert post_frame(client, session_id, SCREENS[0], timestamp=1500, small=True).json() == {"accepted": False, "reason": "small"}
+    seen = events_of(backend, session_id)
+    words(client, session_id, "Это что?")
+    assert next(event for event in seen if event["type"] == "read")["frame_ts"] == 1500
+    idle(backend, session_id)
+
+
+def test_a_small_frame_with_its_words_is_not_read_again(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    post_frame(client, session_id, SCREENS[0], timestamp=1500, small=True)
+    assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={"frame_ts": 1500, "lines": [{"text": "Поиск", "words": []}]}).status_code == 200
+    seen = events_of(backend, session_id)
+    words(client, session_id, "Это что?")
+    assert "read" not in kinds(seen)
+    idle(backend, session_id)
+
+
+def test_a_frame_that_stays_on_the_phone_is_not_read(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    seen = events_of(backend, session_id)
+    post_frame(client, session_id, SCREENS[0], timestamp=1000)
+    idle(backend, session_id)
+    post_frame(client, session_id, SCREENS[0], timestamp=1500, small=True)
+    assert "read" not in kinds(seen)
+
+
+def test_the_words_of_a_small_frame_read_late_keep_a_payment_screen_out_of_the_log(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    post_frame(client, session_id, SCREENS[0], timestamp=1500, small=True)
+    words(client, session_id, "Это что?")
+    idle(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={"frame_ts": 1500, "lines": [{"text": "Bayar Sekarang", "words": []}]}).status_code == 200
+    assert "1500.jpg" not in [picture.name for picture in (folder / "frames").iterdir()]
+    assert all(not turn.get("frame") or turn["frame"].timestamp_ms != 1500 for turn in backend.store.sessions[session_id].chat)
+
+
+
+def test_a_move_takes_the_outline_at_once(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Жми сюда.", show=SHOW)]
+    post_frame(client, session_id, SCREENS[0], timestamp=1000)
+    idle(backend, session_id)
+    assert "hint" in kinds(seen)
+    changed(client, session_id, 2000, moved=True)
+    assert kinds(seen)[-1] == "left" and client.get("/sessions/" + session_id + "/hint", headers=AUTH).status_code == 204
+
+
+def test_a_move_changes_nothing_for_words_waiting_for_their_look(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    session = backend.store.sessions[session_id]
+    changed(client, session_id, 2000)
+    words(client, session_id, "Что тут?")
+    changed(client, session_id, 3000, moved=True)
+    assert session.heard == "Что тут?" and not session.settling
+
+
+def test_a_change_told_late_does_not_take_back_a_newer_one(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    seen = events_of(backend, session_id)
+    changed(client, session_id, 3000)
+    changed(client, session_id, 2000)
+    post_frame(client, session_id, SCREENS[0], timestamp=2500)
+    words(client, session_id, "Это что?")
+    assert "look" in kinds(seen)
+
+
+def test_the_timer_of_their_words_does_not_cut_the_wait_for_the_new_screen(backend, monkeypatch):
+    monkeypatch.setattr(friend, "LOOK_SECONDS", 0.1)
+    monkeypatch.setattr(friend, "SETTLE_SECONDS", 30)
+    entered, release = blocked(backend, only=1)
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    session = backend.store.sessions[session_id]
+    try:
+        words(client, session_id, "Что тут?")
+        assert look(client, session_id, [SCREENS[0]], first_taken=1000).status_code == 200
+        assert entered.wait(2)
+        changed(client, session_id, 2000, moved=True)
+        time.sleep(0.3)
+        assert session.heard == "Что тут?" and len(backend.meta.calls) == 1
+    finally:
+        release.set()
+
+
+def test_answers_left_behind_count_as_restarts(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    next_screen = {1: (SCREENS[3], 2000), 2: (SCREENS[0], 3000), 3: (SCREENS[3], 4000)}
+
+    def move_on(index):
+        if index in next_screen:
+            post_frame(client, session_id, next_screen[index][0], timestamp=next_screen[index][1], small=True)
+    backend.meta.hook = move_on
+    words(client, session_id, "Что тут?")
+    assert look(client, session_id, [SCREENS[1]], first_taken=1000).status_code == 200
+    assert wait_until(lambda: len(backend.meta.calls) == 3)
+    idle(backend, session_id)
+    say_event = next(event for event in seen if event["type"] == "say")
+    assert say_event["frame_ts"] is None and session.restarts == 0
+
+
+def test_a_ready_text_past_the_restarts_names_no_screen(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    backend.store.sessions[session_id].restarts = friend.MAX_RESTARTS
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [{"paste": "Готово", "notes": "x"}]
+    post_frame(client, session_id, SCREENS[0], timestamp=1000)
+    idle(backend, session_id)
+    say_event = next(event for event in seen if event["type"] == "say")
+    assert say_event["paste_text"] == "Готово" and say_event["frame_ts"] is None
+
+
+def test_a_line_that_comes_with_the_whole_answer_can_be_cut_too(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [{"notes": "x", "say": "Это поздняя реплика."}]
+    post_frame(client, session_id, SCREENS[0], timestamp=1000)
+    idle(backend, session_id)
+    say_event = next(event for event in seen if event["type"] == "say")
+    assert say_event["line"] == 1
+    cut(client, session_id, 1)
+    assert said_lines(session) == [""]
+
+
+def test_only_the_last_lines_are_kept(backend):
+    session = backend.store.sessions[new_session(backend.client)]
+    numbers = [session.remember_line({}) for _ in range(sessions.KEPT_LINES + 1)]
+    assert numbers[0] not in session.lines and numbers[-1] in session.lines and len(session.lines) == sessions.KEPT_LINES
+
+
+def test_a_line_the_phone_dropped_goes_on_at_once_if_the_new_screen_is_here(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SETTLE_SECONDS", 30)
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Про старый экран."), line("Про новый экран.")]
+    words(client, session_id, "Что тут?")
+    assert look(client, session_id, [SCREENS[0]], first_taken=1000).status_code == 200
+    idle(backend, session_id)
+    post_frame(client, session_id, SCREENS[3], timestamp=2000, small=True)
+    cut(client, session_id, 1)
+    assert wait_until(lambda: len(backend.meta.calls) == 2)
+    idle(backend, session_id)
+    assert spoken(seen)[-1] == "Про новый экран." and pictures(backend.meta.calls[1].messages[-1])[-1] == meta.data_url(SCREENS[3])
+
+
+def test_a_dropped_line_takes_the_rest_of_its_answer_with_it(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    release = threading.Event()
+    backend.meta.after_text = lambda index: release.wait(5)
+    backend.meta.replies = [line("Жми сюда.", paste="Текст", show=SHOW)]
+    post_frame(client, session_id, SCREENS[0], timestamp=1000)
+    assert wait_until(lambda: "say" in kinds(seen))
+    cut(client, session_id, 1)
+    release.set()
+    idle(backend, session_id)
+    assert said_lines(session) == [""] and json.loads(session.chat[-1]["text"]) == {"say": ""} and not session.texts
+    assert "hint" not in kinds(seen) and not [event for event in seen if event.get("paste_text")]
+
+
+def test_a_small_frame_goes_in_the_log_only_with_its_words(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    post_frame(client, session_id, SCREENS[0], timestamp=1500, small=True)
+    words(client, session_id, "Это что?")
+    idle(backend, session_id)
+    played(backend, session_id, 1)
+    post_frame(client, session_id, SCREENS[0], timestamp=2500, small=True)
+    assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={"frame_ts": 2500, "lines": [{"text": "Keranjang", "words": []}]}).status_code == 200
+    words(client, session_id, "А это?")
+    idle(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    kept = [picture.name for picture in (folder / "frames").iterdir()]
+    assert "1500.jpg" not in kept and "2500.jpg" in kept
+    answers = [row for row in lines_of(folder) if row["kind"] == "answer"]
+    assert "answer" not in answers[-2] and answers[-2]["frame"] is None and answers[-1]["frame"] == "2500.jpg" and "answer" in answers[-1]
+
+
+def test_an_outline_on_an_unread_small_frame_stays_out_of_the_log(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    backend.meta.replies = [line("Жми сюда.", show=SHOW)]
+    post_frame(client, session_id, SCREENS[0], timestamp=1500, small=True)
+    words(client, session_id, "Куда нажать?")
+    idle(backend, session_id)
+    rows = [row for row in lines_of(next((tmp_path / "calls").iterdir())) if row["kind"] == "show"]
+    assert rows and all(row["target"] is None and "frame" not in row for row in rows)
+
+
+def test_a_line_dropped_after_the_end_of_the_call_starts_nothing(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    words(client, session_id, "Что тут?")
+    assert look(client, session_id, [SCREENS[0]], first_taken=1000).status_code == 200
+    idle(backend, session_id)
+    post_frame(client, session_id, SCREENS[3], timestamp=2000, small=True)
+    assert client.post("/sessions/" + session_id + "/end", headers=AUTH).status_code == 200
+    cut(client, session_id, 1)
+    idle(backend, session_id)
+    assert len(backend.meta.calls) == 1 and not backend.store.sessions[session_id].heard
+
+
+def test_a_line_the_phone_dropped_waits_if_the_screen_is_still_changing(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SETTLE_SECONDS", 30)
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    session = backend.store.sessions[session_id]
+    words(client, session_id, "Что тут?")
+    assert look(client, session_id, [SCREENS[0]], first_taken=1000).status_code == 200
+    idle(backend, session_id)
+    post_frame(client, session_id, SCREENS[3], timestamp=2000, small=True)
+    changed(client, session_id, 3000)
+    cut(client, session_id, 1)
+    assert session.heard == "Что тут?" and session.settling and len(backend.meta.calls) == 1

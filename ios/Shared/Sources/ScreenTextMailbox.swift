@@ -34,7 +34,7 @@ public struct ScreenTextMailbox: Sendable {
         // JPEG and metadata move together in one atomic replacement.
         try encoder.encode(frame).write(to: fileURL, options: .atomic)
         if notify {
-            CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFNotificationName(notificationName as CFString), nil, nil, true)
+            GroupNotification.post(notificationName)
         }
     }
 
@@ -57,16 +57,21 @@ public struct ScreenTextMailbox: Sendable {
     }
 }
 
-public final class ScreenTextNotification: @unchecked Sendable {
+/// A word from the broadcast to the app, which has nothing else that wakes it at once.
+public final class GroupNotification: @unchecked Sendable {
     private let name: CFString
     private let callback: @Sendable () -> Void
+
+    public static func post(_ name: String) {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFNotificationName(name as CFString), nil, nil, true)
+    }
 
     public init(name: String, callback: @escaping @Sendable () -> Void) {
         self.name = name as CFString
         self.callback = callback
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), Unmanaged.passUnretained(self).toOpaque(), { _, observer, _, _, _ in
             guard let observer else { return }
-            Unmanaged<ScreenTextNotification>.fromOpaque(observer).takeUnretainedValue().callback()
+            Unmanaged<GroupNotification>.fromOpaque(observer).takeUnretainedValue().callback()
         }, self.name, nil, .deliverImmediately)
     }
 

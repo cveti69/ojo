@@ -9,6 +9,10 @@ protocol Speaker: AnyObject {
     func prepare(client: ServerClient, journal: SharedJournal?)
     func speak(_ text: String)
     func speakAndWait(_ text: String) async
+    /// A line in sentences. Says how many of them began to sound.
+    func speakAndWait(_ parts: [String]) async -> Int
+    /// The line ends with the sentence that is sounding now.
+    func endSentence()
     func waitUntilQuiet() async
     func keep(_ texts: [String])
     func stop()
@@ -20,6 +24,11 @@ extension Speaker {
     var onSounding: ((Bool) -> Void)? { get { nil } set {} }
     var mayStart: (() -> Bool)? { get { nil } set {} }
     func prepare(client: ServerClient, journal: SharedJournal?) {}
+    func speakAndWait(_ parts: [String]) async -> Int {
+        await speakAndWait(parts.joined(separator: " "))
+        return parts.count
+    }
+    func endSentence() {}
     func waitUntilQuiet() async {}
     func keep(_ texts: [String]) {}
     func finish() { stop() }
@@ -32,6 +41,7 @@ final class ServerSpeaker: Speaker {
     private static let bufferBytes = 4800  // 100 ms of 16-bit mono.
     private static let longestWait: TimeInterval = 6  // A loud room must not keep the agent silent.
     private static let breath: TimeInterval = 0.5  // The microphone is deaf through a line and just after it, so it gets time to hear.
+    private static let sentenceGap = Data(count: 9600)  // 200 ms between two sentences, and time to stop before the next one sounds.
     var onSpeaking: ((Bool) -> Void)?
     var onSounding: ((Bool) -> Void)?
     var mayStart: (() -> Bool)?
@@ -45,6 +55,10 @@ final class ServerSpeaker: Speaker {
     private var journal: SharedJournal?
     private var playback: Task<Void, Never>?
     private var kept: [String: Data] = [:]
+    private var lineNumber = 0  // Stopping fires the marks of what was on the player too, and this tells them from real ones.
+    private var partsOut = 0  // Sentences with sound on the player.
+    private var partsDone = 0  // Sentences played to their end.
+    private var endsHere = false
     var hearsOverVoice = false
     var voice: String?  // Read for each line, so a new choice works from the next one.
     private var filtersVoice = false
@@ -70,19 +84,34 @@ final class ServerSpeaker: Speaker {
     }
 
     func speak(_ text: String) {
+        speak(parts: [text])
+    }
+
+    private func speak(parts: [String]) {
         stop()
+        (partsOut, partsDone, endsHere) = (0, 0, false)
         onSpeaking?(true)
         playback = Task { [weak self] in
-            await self?.play(text)
+            await self?.play(parts)
             if !Task.isCancelled { self?.onSpeaking?(false) }
         }
     }
 
     func speakAndWait(_ text: String) async {
-        guard !Task.isCancelled else { return }
-        speak(text)
+        _ = await speakAndWait([text])
+    }
+
+    func speakAndWait(_ parts: [String]) async -> Int {
+        guard !Task.isCancelled else { return 0 }
+        speak(parts: parts)
         let playback = playback
         await withTaskCancellationHandler { await playback?.value } onCancel: { playback?.cancel() }
+        return min(partsOut, partsDone + 1)
+    }
+
+    func endSentence() {
+        endsHere = true
+        if partsOut == partsDone { stop() }  // The next sentence is late and nothing sounds right now.
     }
 
     func waitUntilQuiet() async {
@@ -105,6 +134,7 @@ final class ServerSpeaker: Speaker {
     private static func key(_ text: String, _ voice: String?) -> String { (voice ?? "") + ":" + text }
 
     func stop() {
+        lineNumber += 1
         playback?.cancel()
         playback = nil
         player.stop()
@@ -119,41 +149,28 @@ final class ServerSpeaker: Speaker {
         client = nil
     }
 
-    private func play(_ text: String) async {
-        guard !text.isEmpty else { return }
+    /// Each sentence is a request of its own, so the line can end between two of them. The voice makes sound faster than it
+    /// plays, so the next one is on the player before this one is over.
+    private func play(_ parts: [String]) async {
+        guard !parts.joined().isEmpty else { return }
         guard let client else {
-            await fallback.speakAndWait(text)
+            await speakOurselves(parts, from: 0)
             return
         }
+        let line = lineNumber
         let started = Date()
         var frames = 0
+        var whole = 0  // Sentences with all their sound on the player.
         do {
             if !engine.isRunning { try engine.start() }
-            if let sound = kept[Self.key(text, voice)] {
-                await waitForThePerson()
+            for (index, part) in parts.enumerated() {
+                if endsHere { break }
+                if index > 0 { frames += schedule(Self.sentenceGap) }
+                try await put(part, index, frames: &frames, client: client, started: started)
                 try Task.checkCancellation()
-                sounds(true)
-                frames = schedule(sound)
-            } else {
-                var pending = Data(capacity: Self.bufferBytes)
-                for try await byte in try await client.speech(text, voice: voice) {
-                    pending.append(byte)
-                    guard pending.count == Self.bufferBytes else { continue }
-                    if frames == 0 {
-                        journal?.append("Голос сервера: первый звук готов через \(Int(Date().timeIntervalSince(started) * 1000)) мс")
-                        await waitForThePerson()
-                        try Task.checkCancellation()
-                        sounds(true)
-                    }
-                    frames += schedule(pending)
-                    pending.removeAll(keepingCapacity: true)
-                }
-                if frames == 0 { await waitForThePerson() }
-                try Task.checkCancellation()
-                sounds(true)
-                frames += schedule(pending)
+                mark(endOf: index, line: line)
+                whole = index + 1
             }
-            try Task.checkCancellation()
             guard frames > 0 else { throw ClientError.invalidResponse }
             await finishPlaying(seconds: Double(frames) / Self.sampleRate)
             if !Task.isCancelled { sounds(false) }
@@ -163,10 +180,74 @@ final class ServerSpeaker: Speaker {
             if frames == 0 {
                 await waitForThePerson()
                 sounds(true)
-                await fallback.speakAndWait(text)
-            }
+            } else { await finishPlaying(seconds: Double(frames) / Self.sampleRate) }  // What is on the player still sounds.
+            await speakOurselves(parts, from: whole)
             if !Task.isCancelled { sounds(false) }
         }
+    }
+
+    /// The phone's own voice takes the sentences the server gave no sound for, and they end where the line is told to end.
+    private func speakOurselves(_ parts: [String], from first: Int) async {
+        for index in first..<parts.count where !endsHere && !Task.isCancelled {
+            partsOut = index + 1
+            await fallback.speakAndWait(parts[index])
+            if !Task.isCancelled { partsDone = index + 1 }
+        }
+    }
+
+    private func put(_ text: String, _ index: Int, frames: inout Int, client: ServerClient, started: Date) async throws {
+        if let sound = kept[Self.key(text, voice)] {
+            try await begin(index)
+            frames += schedule(sound)
+            return
+        }
+        var begun = false
+        var pending = Data(capacity: Self.bufferBytes)
+        for try await byte in try await client.speech(text, voice: voice) {
+            pending.append(byte)
+            guard pending.count == Self.bufferBytes else { continue }
+            if !begun {
+                if index == 0 { journal?.append("Голос сервера: первый звук готов через \(Int(Date().timeIntervalSince(started) * 1000)) мс") }
+                try await begin(index)
+                begun = true
+            }
+            try Task.checkCancellation()
+            frames += schedule(pending)
+            pending.removeAll(keepingCapacity: true)
+        }
+        if !begun { try await begin(index) }
+        try Task.checkCancellation()
+        frames += schedule(pending)
+    }
+
+    /// Only the first sound of a line waits for the person.
+    private func begin(_ index: Int) async throws {
+        if index == 0 { await waitForThePerson() }
+        try Task.checkCancellation()
+        sounds(true)
+        partsOut = index + 1
+    }
+
+    private func mark(endOf index: Int, line: Int) {
+        guard let end = silentPoint else { return }
+        Self.schedule(end, on: player) { [weak self] in
+            Task { @MainActor [weak self] in self?.partEnded(index, line: line) }
+        }
+    }
+
+    private func partEnded(_ index: Int, line: Int) {
+        guard line == lineNumber else { return }
+        partsDone = max(partsDone, index + 1)
+        guard endsHere else { return }
+        partsOut = partsDone  // What is on the player past here never sounds.
+        stop()
+    }
+
+    private var silentPoint: AVAudioPCMBuffer? {
+        guard let point = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1) else { return nil }
+        point.frameLength = 1
+        point.floatChannelData?[0][0] = 0
+        return point
     }
 
     /// The answer may be ready before the person has finished. It holds its first sound until they have.
@@ -201,9 +282,7 @@ final class ServerSpeaker: Speaker {
     }
 
     private func finishPlaying(seconds: TimeInterval) async {
-        guard player.isPlaying, let end = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1) else { return }
-        end.frameLength = 1
-        end.floatChannelData?[0][0] = 0
+        guard player.isPlaying, let end = silentPoint else { return }
         let played = OneWait()
         let watchdog = Task { [weak self] in  // A route change stops the engine with no callback at all.
             try? await Task.sleep(nanoseconds: UInt64((seconds + 2) * 1_000_000_000))

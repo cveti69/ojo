@@ -136,6 +136,8 @@ private enum ProtocolChecks {
                                            sessionID: created.sessionID)
         try check(looked.ok, "look response")
         _ = try await client.played(turn: 3, sessionID: created.sessionID)
+        _ = try await client.spoken(line: 7, said: "Первая фраза.", sessionID: created.sessionID)
+        _ = try await client.screenChanged(at: 1_761_000_000_123, moved: true, sessionID: created.sessionID)
         try await client.health()
         let frame = try await client.sendFrame(Data([0xff, 0xd8, 0xff, 0xd9]), sessionID: created.sessionID,
                                                width: 1170, height: 2532, timestampMS: 123456789)
@@ -185,13 +187,14 @@ private enum ProtocolChecks {
         try check(line.url!.path == "/api/sessions/session-test/say" && line.value(forHTTPHeaderField: "Content-Type") == "audio/wav",
                   "spoken line endpoint")
         let create = requests.first { $0.url!.path == "/api/sessions" }!
-        let createBody = try JSONSerialization.jsonObject(with: body(of: create)) as! [String: String]
-        try check(createBody == ["user_lang": "ru", "target_lang": "auto", "text_entry": "clipboard",
-                                 "character": "warm", "own_character": ""], "create-session body leaves the level to the server")
+        var createBody = try JSONSerialization.jsonObject(with: body(of: create)) as! [String: Any]
+        try check(createBody.removeValue(forKey: "signals") as? Bool == true, "the phone promises the signals")
+        try check(createBody as! [String: String] == ["user_lang": "ru", "target_lang": "auto", "text_entry": "clipboard",
+                                                      "character": "warm", "own_character": ""], "create-session body leaves the level to the server")
         var chosen = settings
         chosen.thinking = .high
-        let chosenBody = try JSONSerialization.jsonObject(with: JSONEncoder().encode(CreateSessionRequest(settings: chosen))) as! [String: String]
-        try check(chosenBody["effort"] == "high", "a chosen level reaches the server")
+        let chosenBody = try JSONSerialization.jsonObject(with: JSONEncoder().encode(CreateSessionRequest(settings: chosen))) as! [String: Any]
+        try check(chosenBody["effort"] as? String == "high", "a chosen level reaches the server")
         let typedLine = requests.first { $0.url!.path.hasSuffix("/words") }!
         let typedBody = try JSONSerialization.jsonObject(with: body(of: typedLine)) as! [String: String]
         try check(typedBody == ["text": "Что это?"], "typed line body")
@@ -207,6 +210,12 @@ private enum ProtocolChecks {
         let playedRequest = requests.first { $0.url!.path.hasSuffix("/played") }!
         let playedBody = try JSONSerialization.jsonObject(with: body(of: playedRequest)) as! [String: Int]
         try check(playedBody == ["turn": 3], "played body")
+        let spokenRequest = requests.first { $0.url!.path.hasSuffix("/spoken") }!
+        let spokenBody = try JSONSerialization.jsonObject(with: body(of: spokenRequest)) as! [String: Any]
+        try check(spokenBody["line"] as? Int == 7 && spokenBody["said"] as? String == "Первая фраза.", "spoken body")
+        let changedRequest = requests.first { $0.url!.path.hasSuffix("/changed") }!
+        let changedBody = try JSONSerialization.jsonObject(with: body(of: changedRequest)) as! [String: Any]
+        try check((changedBody["at"] as? NSNumber)?.int64Value == 1_761_000_000_123 && changedBody["moved"] as? Bool == true, "changed body")
         let translate = requests.first { $0.url!.path.hasSuffix("/translate") }!
         let translateBody = try JSONSerialization.jsonObject(with: body(of: translate)) as! [String: String]
         try check(translateBody["from"] == "ru" && translateBody["to"] == "auto" && translateBody["session_id"] == created.sessionID,
@@ -240,6 +249,13 @@ private enum ProtocolChecks {
         let sayEvent = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"say","turn":3,"text_ru":"Жми зелёную.","paste_text":"sampo","timings":{"model_ms":900}}"#.utf8))
         guard case .say(let say) = sayEvent else { throw CheckFailure(description: "say event") }
         try check(say.turn == 3 && say.textRU == "Жми зелёную." && say.pasteText == "sampo" && say.timings.modelMS == 900, "say event fields")
+        try check(say.line == nil && say.frameTS == nil, "an old say is about no screen")
+        guard case .say(let tied) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"say","turn":3,"line":2,"frame_ts":1761000000123,"text_ru":"Жми.","paste_text":null,"timings":{"model_ms":900}}"#.utf8)),
+              tied.line == 2, tied.frameTS == 1_761_000_000_123 else { throw CheckFailure(description: "a say names its line and its screen") }
+        guard case .say(let free) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"say","turn":3,"line":null,"frame_ts":null,"text_ru":"Жми.","paste_text":null,"timings":{"model_ms":900}}"#.utf8)),
+              free.line == nil, free.frameTS == nil else { throw CheckFailure(description: "a say tied to nothing") }
+        guard case .read(let read) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"read","frame_ts":1761000000123}"#.utf8)),
+              read.frameTS == 1_761_000_000_123 else { throw CheckFailure(description: "read event") }
         guard case .heard(let heard) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"heard","turn":4}"#.utf8)), heard.turn == 4 else {
             throw CheckFailure(description: "heard event")
         }
@@ -270,6 +286,7 @@ private enum ProtocolChecks {
         try checkShelf()
         try checkPauseWords()
         try checkScreenTextGeometry()
+        try checkSentences()
         try checkSettingsAndMailbox()
         try await checkMemoryGate()
         if CommandLine.arguments.contains("--vision") { try await checkVision() }
@@ -788,6 +805,16 @@ private enum ProtocolChecks {
         try check(words.next(now: start.addingTimeInterval(17 * (PauseWords.gap + 1) + 5)) == nil, "pause words stay rare")
     }
 
+    private static func checkSentences() throws {
+        try check(Sentences.of("Нажми на зелёную кнопку внизу.") == ["Нажми на зелёную кнопку внизу."], "one sentence")
+        try check(Sentences.of("Это страница оплаты! Проверь сумму внизу экрана?") == ["Это страница оплаты!", "Проверь сумму внизу экрана?"], "two sentences")
+        try check(Sentences.of("Да. Это нужная кнопка, жми.") == ["Да. Это нужная кнопка, жми."], "a short start goes with the next")
+        try check(Sentences.of("Это нужная кнопка, жми. Да.") == ["Это нужная кнопка, жми. Да."], "a short end stays with the last")
+        try check(Sentences.of("Цена 1.5 млн рупий за штуку, это дорого") == ["Цена 1.5 млн рупий за штуку, это дорого"], "a point in a number ends nothing")
+        try check(Sentences.of("Первая часть… Вторая часть без точки") == ["Первая часть…", "Вторая часть без точки"], "the last one needs no mark")
+        try check(Sentences.of("Да") == ["Да"] && Sentences.of("") == [] && Sentences.of("  ") == [], "short and empty lines")
+    }
+
     private static func checkScreenTextGeometry() throws {
         try check(ScreenTextReader.recognitionLanguages(screenLang: "id") == ["en-US"], "Latin recognition language")
         try check(ScreenTextReader.recognitionLanguages(screenLang: nil) == ["en-US"], "no language named yet")
@@ -805,6 +832,8 @@ private enum ProtocolChecks {
         try check(zip(fallback.box, [0.1, 0.4, 0.4, 0.8]).allSatisfy { abs($0 - $1) < 0.00001 }, "line box for missing word box")
         let precise = ScreenTextReader.word("Beli", box: CGRect(x: 0.2, y: 0.3, width: 0.1, height: 0.2), lineBox: lineBox)
         try check(zip(precise.box, [0.2, 0.5, 0.3, 0.7]).allSatisfy { abs($0 - $1) < 0.00001 }, "prefer available word box")
+        let empty = ScreenTextReader.word("Beli", box: CGRect(x: 0, y: 1, width: 0, height: 0), lineBox: lineBox)
+        try check(zip(empty.box, [0.1, 0.4, 0.4, 0.8]).allSatisfy { abs($0 - $1) < 0.00001 }, "line box for a word box with no size")
     }
 
     private static func checkSettingsAndMailbox() throws {

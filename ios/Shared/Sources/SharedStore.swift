@@ -119,6 +119,30 @@ public final class SharedStore: @unchecked Sendable {
         }
     }
 
+    /// When the broadcast saw the person leave the screen, on the clock of the frames.
+    public var screenMovedAt: Int64 {
+        get {
+            refresh()
+            return Int64(defaults.integer(forKey: "screenMovedAt"))
+        }
+        set {
+            defaults.set(newValue, forKey: "screenMovedAt")
+            defaults.synchronize()
+        }
+    }
+
+    /// The frame that went to the model with no words read on it yet.
+    public var textAsked: Int64 {
+        get {
+            refresh()
+            return Int64(defaults.integer(forKey: "textAsked"))
+        }
+        set {
+            defaults.set(newValue, forKey: "textAsked")
+            defaults.synchronize()
+        }
+    }
+
     public var measuresAppleSpeech: Bool {
         get { defaults.bool(forKey: "measuresAppleSpeech") }
         set {

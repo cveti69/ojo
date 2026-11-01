@@ -62,10 +62,21 @@ class CreateSession(Payload):
     character: Literal["warm", "strict", "brief", "patient", "own"] = "warm"
     own_character: str = Field(default="", max_length=500)
     eyes: bool = False
+    signals: bool = False
 
 
 class Played(Payload):
     turn: int = Field(ge=0)
+
+
+class Spoken(Payload):
+    line: int = Field(ge=1)
+    said: str = Field(max_length=1000)
+
+
+class ScreenChange(Payload):
+    at: int = Field(ge=0)
+    moved: bool = False
 
 
 class Words(Payload):
@@ -213,7 +224,7 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
     @router.post("/sessions", status_code=201)
     async def create_session(body: CreateSession):
         session = sessions.create(body.user_lang, body.target_lang, body.text_entry, body.effort,
-                                  step.manner(body.character, body.own_character), body.eyes)
+                                  step.manner(body.character, body.own_character), body.eyes, body.signals)
         return {"session_id": session.id}
 
     @router.post("/sessions/{session_id}/frames", status_code=202)
@@ -241,6 +252,13 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
         if session.app_lang:
             result["lang"] = session.app_lang
         return result
+
+    @router.post("/sessions/{session_id}/changed")
+    async def screen_changed(session_id: str, body: ScreenChange):
+        session = session_or_404(session_id)
+        require_active(session)
+        friend.changed(session, body.at, body.moved)
+        return {"ok": True}
 
     @router.post("/sessions/{session_id}/text")
     async def frame_text(session_id: str, body: FrameText):
@@ -334,6 +352,11 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
         friend.played(session_or_404(session_id), body.turn)
         return {"ok": True}
 
+    @router.post("/sessions/{session_id}/spoken")
+    async def cut_short(session_id: str, body: Spoken):
+        friend.spoken(session_or_404(session_id), body.line, body.said)
+        return {"ok": True}
+
     @router.post("/speech")
     async def say(body: Speech):
         try:
@@ -355,7 +378,7 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
         session.note("broadcast", state=body.state)
         session.broadcasting = body.state == "started"
         if not session.broadcasting:
-            session.seen_gray = None
+            session.seen_gray = session.last_frame = None
         session.publish({
             "type": "status", "state": "broadcasting" if session.broadcasting else "broadcast_stopped",
             "text_ru": "Демонстрация экрана включена" if session.broadcasting else "Демонстрация экрана остановлена",

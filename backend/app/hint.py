@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import math
+import re
 from typing import List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
@@ -15,8 +16,7 @@ BACKGROUND = (27, 35, 48)
 PANEL = (13, 20, 32)
 OUTLINE = (255, 223, 0)
 BLACK = (0, 0, 0)
-EYES_ROOM = 200  # At the left of the panel: the phone draws small eyes there.
-EYES_SIDE = 170
+SHORT_SIZE = 44  # One line under the picture in a call with eyes: the voice has said the rest.
 
 
 def _wrap(text: str, font: ImageFont.FreeTypeFont, width: int) -> List[str]:
@@ -43,8 +43,25 @@ def _wrap(text: str, font: ImageFont.FreeTypeFont, width: int) -> List[str]:
     return lines
 
 
-def _text_layout(text: str, room: int = 0) -> tuple:
-    width = SIZE[0] - 80 - room
+def _short_layout(text: str) -> tuple:
+    """The first sentence, as far as it goes on one line."""
+    font = ImageFont.truetype(str(config.HINT_FONT), SHORT_SIZE)
+    width = SIZE[0] - 80
+    sentence = re.split(r"(?<=[.!?…])\s", text.strip(), maxsplit=1)[0]
+    if font.getlength(sentence) > width:
+        words = sentence.split()
+        while len(words) > 1 and font.getlength(" ".join(words) + "…") > width:
+            words.pop()
+        sentence = " ".join(words)
+        while font.getlength(sentence + "…") > width:
+            sentence = sentence[:-1]
+        sentence += "…"
+    line_height = math.ceil(SHORT_SIZE * 1.24)
+    return font, [sentence], line_height, line_height + 60
+
+
+def _text_layout(text: str) -> tuple:
+    width = SIZE[0] - 80
     for size in range(52, 35, -2):
         font = ImageFont.truetype(str(config.HINT_FONT), size)
         lines = _wrap(text, font, width)
@@ -83,17 +100,8 @@ def _crop(target: Tuple[float, ...], width: int, height: int, aspect: float) -> 
     return math.floor(left), math.floor(top), math.ceil(left + crop_width), math.ceil(top + crop_height)
 
 
-def eyes_box(instruction_ru: str) -> List[float]:
-    """Where the phone draws the eyes on a picture rendered with room for them, in 0-1 of the picture."""
-    panel_height = _text_layout(instruction_ru, EYES_ROOM)[3]
-    top = SIZE[1] - 12 - panel_height + (panel_height - EYES_SIDE) / 2
-    left = 12 + (EYES_ROOM - EYES_SIDE) / 2
-    return [round(value, 4) for value in (left / SIZE[0], top / SIZE[1], (left + EYES_SIDE) / SIZE[0], (top + EYES_SIDE) / SIZE[1])]
-
-
 def render(frame_jpeg: bytes, box: Optional[List[float]], instruction_ru: str, eyes: bool = False) -> bytes:
-    room = EYES_ROOM if eyes else 0
-    font, lines, line_height, panel_height = _text_layout(instruction_ru, room)
+    font, lines, line_height, panel_height = _short_layout(instruction_ru) if eyes else _text_layout(instruction_ru)
     panel_top = SIZE[1] - panel_height - 12
     canvas = Image.new("RGB", SIZE, BLACK if eyes else BACKGROUND)
     with Image.open(io.BytesIO(frame_jpeg)) as original:
@@ -123,7 +131,7 @@ def render(frame_jpeg: bytes, box: Optional[List[float]], instruction_ru: str, e
     draw.rounded_rectangle((12, panel_top, SIZE[0] - 12, SIZE[1] - 12), radius=28, fill=BLACK if eyes else PANEL)
     text_top = panel_top + (panel_height - len(lines) * line_height) // 2
     for index, line in enumerate(lines):
-        draw.text((40 + room, text_top + index * line_height), line, font=font, fill="white", anchor="lt")
+        draw.text((40, text_top + index * line_height), line, font=font, fill="white", anchor="lt")
     output = io.BytesIO()
     canvas.save(output, format="JPEG", quality=QUALITY)
     return output.getvalue()

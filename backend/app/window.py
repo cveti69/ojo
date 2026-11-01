@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import io
-import math
 from itertools import combinations
 from typing import List, Optional, Sequence, Tuple
 
@@ -77,16 +76,6 @@ def find(jpeg: bytes) -> Optional[List[float]]:
             if _is_window(mask, left, right, top, bottom):
                 return [left[0] / width, top[0] / height, right[1] / width, bottom[1] / height]
     return None
-
-
-def gaze(box: Optional[List[float]], target: Optional[List[float]], width: int, height: int) -> Optional[List[float]]:
-    """The way from the middle of our window to the target, as a unit step in the frame's pixels. None means look ahead."""
-    if not box or not target:
-        return None
-    x = ((target[0] + target[2]) - (box[0] + box[2])) / 2 * width
-    y = ((target[1] + target[3]) - (box[1] + box[3])) / 2 * height
-    length = math.hypot(x, y)
-    return [round(x / length, 3), round(y / length, 3)] if length else None
 
 
 def outside(lines: Sequence[dict], box: List[float]) -> List[dict]:

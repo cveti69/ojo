@@ -158,26 +158,17 @@ def test_hint_says_where_its_time_went(backend):
     assert set(timings) == {"model_ms", "box_ms", "box_source", "window"}
 
 
-def test_the_eyes_look_from_the_window_to_the_target():
-    assert window.gaze([0.1, 0.4, 0.3, 0.5], [0.8, 0.4, 0.9, 0.5], 1000, 2000) == [1.0, 0.0]
-    x, y = window.gaze([0.0, 0.0, 0.2, 0.1], [0.3, 0.3, 0.5, 0.4], 1000, 1000)
-    assert x > 0 and y > 0 and abs(x * x + y * y - 1) < 0.01
-    assert window.gaze(None, [0.1, 0.1, 0.2, 0.2], 1000, 1000) is None
-    assert window.gaze([0.1, 0.1, 0.2, 0.2], None, 1000, 1000) is None
-    assert window.gaze([0.1, 0.1, 0.2, 0.2], [0.1, 0.1, 0.2, 0.2], 1000, 1000) is None
-
-
 def test_hint_for_the_eyes(backend):
     backend.meta.replies = [line(show=SHOW), line(show=SHOW)]
     plain = sharing(backend.client)
     post_frame(backend.client, plain)
     idle(backend, plain)
-    assert not {"eyes_box", "gaze", "calm"} & set(backend.store.sessions[plain].last_hint)
+    assert "calm" not in backend.store.sessions[plain].last_hint
     session_id = sharing(backend.client, eyes=True)
     post_frame(backend.client, session_id)
     idle(backend, session_id)
     event = backend.store.sessions[session_id].last_hint
-    assert len(event["eyes_box"]) == 4 and event["gaze"] is None and event["calm"] is False
+    assert event["calm"] is False and not {"eyes_box", "gaze"} & set(event)
 
 
 @pytest.mark.parametrize("reply,calm", [(line(private=True, show=SHOW), True), (line("Введи пароль сам.", show=SHOW), True),

@@ -32,6 +32,8 @@ public struct ProjectConfiguration {
         UserDefaults(suiteName: appGroupIdentifier)
     }
 
+    public var screenMovedName: String { appGroupIdentifier + ".screen-moved" }
+
     public enum ConfigurationError: LocalizedError {
         case missingValue(String)
         case invalidServerURL

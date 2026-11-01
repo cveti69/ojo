@@ -11,6 +11,7 @@ from . import config
 from .calllog import CallLog
 
 KEPT_FRAME_TEXTS = 8
+KEPT_LINES = 8
 
 
 def _real_word(word: dict) -> bool:
@@ -44,9 +45,12 @@ class Session:
     effort: Optional[str] = None
     character: str = ""
     eyes: bool = False
+    signals: bool = False  # The phone says when the screen changes, ahead of the frame.
     chat: List[dict] = field(default_factory=list)  # The call as the model sees it.
     turn: int = 0
     heard: str = ""  # Their words, while the phone sends the screen as it is now.
+    settling: bool = False  # Those words wait for the screen that is on its way, not for a look.
+    changed_at: Optional[int] = None  # The moment the screen went on from the last frame the phone delivered.
     open_words: str = ""  # Their last words until the first sound of the answer: more words now are the same line.
     open_mark: int = 0
     seen_gray: Optional[bytes] = None  # The screen of the last turn: a new screen is measured against it.
@@ -58,6 +62,8 @@ class Session:
     texts: List[str] = field(default_factory=list)
     step_id: Optional[str] = None
     step_sequence: int = 0
+    line_sequence: int = 0
+    lines: Dict[int, dict] = field(default_factory=dict)  # The chat turn of each line lately sent to the voice.
     broadcasting: bool = False
     ended: bool = False
     shown: bool = False  # The window outlines something on the screen they are on.
@@ -91,6 +97,14 @@ class Session:
         self.frame_text[timestamp_ms] = [dict(line, words=[word for word in line["words"] if _real_word(word)]) for line in lines]
         while len(self.frame_text) > KEPT_FRAME_TEXTS:
             del self.frame_text[next(iter(self.frame_text))]
+
+    def remember_line(self, turn: dict) -> int:
+        """The number the phone names a line by, if it does not sound to the end."""
+        self.line_sequence += 1
+        self.lines[self.line_sequence] = turn
+        while len(self.lines) > KEPT_LINES:
+            del self.lines[next(iter(self.lines))]
+        return self.line_sequence
 
     def publish(self, event: dict) -> None:
         if event["type"] == "status":
@@ -150,10 +164,10 @@ class SessionStore:
         self.sessions: Dict[str, Session] = {}
 
     def create(self, user_lang: str, target_lang: str, text_entry: str, effort: Optional[str] = None,
-               character: str = "", eyes: bool = False) -> Session:
+               character: str = "", eyes: bool = False, signals: bool = False) -> Session:
         session = Session(
             id="s_" + uuid.uuid4().hex[:16], user_lang=user_lang, target_lang=target_lang, text_entry=text_entry,
-            effort=effort, character=character, eyes=eyes,
+            effort=effort, character=character, eyes=eyes, signals=signals,
         )
         session.call_log = CallLog.start(session.id)
         session.note("call", user_lang=user_lang, target_lang=target_lang, text_entry=text_entry, eyes=eyes,
