@@ -25,8 +25,8 @@ final class CallViewModel: ObservableObject {
     @Published private(set) var showsEyes = false
     @Published private(set) var voices: [Voice] = []
     @Published private(set) var voice = ""
-    @Published private(set) var status = "Позвоните и скажите, что нужно. Нажимаете всегда вы."
-    @Published private(set) var lastInstruction = "Подсказок пока нет"
+    @Published private(set) var status = CallWords.device.ready
+    @Published private(set) var lastInstruction = CallWords.device.noHints
     @Published private(set) var windowState: HintWindowState = .inactive
 
     let window: any HintWindowPresenting
@@ -35,6 +35,7 @@ final class CallViewModel: ObservableObject {
     let store: SharedStore?
     let journal: SharedJournal?
     var displayName: String { configuration?.displayName ?? "Звонок" }
+    private(set) var words = CallWords.device  // Taken again at every call, so one call keeps one language.
 
     /// One thing the agent has to say. Replies go first, and of the hints only the newest is worth saying.
     private struct Line {
@@ -46,8 +47,6 @@ final class CallViewModel: ObservableObject {
         var frameTS: Int64?
     }
 
-    private static let restWords = "Я рядом"
-    private static let sayingFailed = "Не получилось ответить, повтори, пожалуйста."
     private static let streamWait: UInt64 = 2_500_000_000  // Past this the server has not heard the phrase, so it goes as a file.
     private static let warmthGap: UInt64 = 20_000_000_000
     private static let screenWait = 1.0
@@ -89,7 +88,7 @@ final class CallViewModel: ObservableObject {
     private var lastHeard = Date.distantPast
     private var voiceEnded = Date.distantPast
     private var droppedSounds = 0
-    private var pauseWords = PauseWords()
+    private var pauseWords = PauseWords(CallWords.device.pause)
     private var pause: Task<Void, Never>?
     private var wordsThisTurn = 0
     private var eyes: EyesStage?
@@ -159,7 +158,7 @@ final class CallViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.resumeAudio() }
             .store(in: &subscriptions)
-        journal?.append("Приложение открыто; iOS \(UIDevice.current.systemVersion); источник окна: \(useVideoCallFallback ? "видеозвонок" : "sample buffer")")
+        journal?.append("Приложение открыто; сборка \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"); iOS \(UIDevice.current.systemVersion); источник окна: \(useVideoCallFallback ? "видеозвонок" : "sample buffer")")
     }
 
     var phase: CallPhase {
@@ -184,7 +183,9 @@ final class CallViewModel: ObservableObject {
         }
         textCoordinator?.prepareForCall(targetLang: settings.targetLang)
         isWorking = true
-        status = "Соединяемся…"
+        words = .device
+        status = words.connecting
+        pauseWords = PauseWords(words.pause)
         let id = newWorkflow()
         workflow = Task { [weak self] in
             guard let self else { return }
@@ -204,15 +205,15 @@ final class CallViewModel: ObservableObject {
                 let own = settings.character == .own ? ", \(settings.ownCharacter.count) знаков" : ""
                 self.journal?.append("Сессия создана; рассуждения: \(settings.thinking.rawValue); характер: \(settings.character.rawValue)\(own)")
                 self.connect(client: client, sessionID: response.sessionID)
-                self.status = "Агент здоровается"
-                await self.speaker.speakAndWait("Привет, чем помочь?")
+                self.status = self.words.greets
+                await self.speaker.speakAndWait(self.words.greeting)
                 try Task.checkCancellation()
                 _ = await AVAudioApplication.requestRecordPermission()
                 try Task.checkCancellation()
                 self.isGreeted = true
-                self.status = "Говорите, как по телефону"
+                self.status = self.words.talk
                 self.hearPerson()
-                if self.speaksRussian { self.speaker.keep(PauseWords.all) }
+                self.speaker.keep(self.words.pause)
             } catch {
                 guard !Task.isCancelled, self.workflowID == id else { return }
                 if !self.isCallActive { self.endCall() }
@@ -281,8 +282,8 @@ final class CallViewModel: ObservableObject {
         eyes = nil
         window.stop()
         deactivateAudio()
-        status = "Звонок завершён"
-        lastInstruction = "Подсказок пока нет"
+        status = words.ended
+        lastInstruction = words.noHints
         journal?.append("Звонок завершён; расширение получит сигнал остановки через App Group")
         if let endingClient, let endingID {
             endRemoteSession(client: endingClient, sessionID: endingID)
@@ -364,7 +365,7 @@ final class CallViewModel: ObservableObject {
         if isTestingWindow { try displayTestFrame() }
         else if let eyes { eyes.redraw() }
         else if let lastJPEG { try window.display(jpegData: lastJPEG) }
-        else { try window.display(image: TestFrameFactory.make()) }
+        else { try window.display(image: TestFrameFactory.make(title: words.waitingHint)) }
     }
 
     func setMeasuresAppleSpeech(_ value: Bool) {
@@ -387,7 +388,7 @@ final class CallViewModel: ObservableObject {
         voice = id
         store?.voice = id
         (speaker as? ServerSpeaker)?.voice = id
-        if isGreeted, speaksRussian { speaker.keep(PauseWords.all) }
+        if isGreeted { speaker.keep(words.pause) }
     }
 
     func loadVoices() async {
@@ -400,8 +401,8 @@ final class CallViewModel: ObservableObject {
     }
 
     private func showRestCard() {
-        if let eyes { return eyes.pause(words: Self.restWords) }
-        guard let card = TestFrameFactory.make(title: Self.restWords).jpegData(compressionQuality: 0.9) else { return }
+        if let eyes { return eyes.pause(words: words.rest) }
+        guard let card = TestFrameFactory.make(title: words.rest).jpegData(compressionQuality: 0.9) else { return }
         lastJPEG = card
         try? window.display(jpegData: card)
     }
@@ -490,12 +491,12 @@ final class CallViewModel: ObservableObject {
         try audioSession.activate()
         window.prepare()
         if withEyes {
-            let stage = EyesStage(surface: window, journal: journal)
+            let stage = EyesStage(surface: window, phrases: words, journal: journal)
             stage.start()
             eyes = stage
-        } else { try window.display(image: TestFrameFactory.make()) }
+        } else { try window.display(image: TestFrameFactory.make(title: words.waitingHint)) }
         isCallActive = true
-        lastInstruction = "Ожидание подсказки"
+        lastInstruction = words.waitingHint
     }
 
     private func hearPerson() {
@@ -516,7 +517,8 @@ final class CallViewModel: ObservableObject {
         let microphone = CallMicrophone(sharedEngine: hearsOverVoice ? (speaker as? ServerSpeaker)?.engine : nil)
         microphone.onDiagnostic = { [weak self] in self?.journal?.append($0) }
         microphone.onLost = { [weak self] in
-            self?.announce("Я перестал тебя слышать. Открой наше приложение на секунду, и снова услышу.")
+            guard let self else { return }
+            self.announce(self.words.lostHearing)
         }
         if measuresAppleSpeech {
             let probe = AppleSpeechProbe(journal: journal)
@@ -569,7 +571,7 @@ final class CallViewModel: ObservableObject {
                 self.journal?.append("Реплика файлом: распознавание \(reply.speechMS) мс; \(reply.heard ? "есть слова" : "пусто")")
             } catch {
                 self.journal?.append("Ошибка реплики: \(error.localizedDescription)")
-                self.enqueue(Line(text: Self.sayingFailed, turn: turn))
+                self.enqueue(Line(text: self.words.failed, turn: turn))
             }
         }
     }
@@ -654,7 +656,7 @@ final class CallViewModel: ObservableObject {
         movedAt = at
         journal?.append("Экран сдвинулся")
         if let eyes { eyes.newScreen() } else if hintOnWindow { showRestCard() }
-        if hintOnWindow { lastInstruction = Self.restWords }
+        if hintOnWindow { lastInstruction = words.rest }
         hintOnWindow = false
         dropLines(where: isAboutOldScreen)
         if isSounding, let currentLine, isAboutOldScreen(currentLine) { speaker.endSentence() }
@@ -694,7 +696,6 @@ final class CallViewModel: ObservableObject {
 
     /// A short ready word while the agent thinks, so the line never goes dead. It only ever fills silence.
     private func fillPause(after seconds: Double) {
-        guard speaksRussian else { return }
         pause?.cancel()
         pause = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -707,8 +708,6 @@ final class CallViewModel: ObservableObject {
             self.fillPause(after: PauseWords.gap)
         }
     }
-
-    private var speaksRussian: Bool { store?.settings.userLang == "ru" }
 
     private func keepQuiet() {
         pause?.cancel()
@@ -723,7 +722,7 @@ final class CallViewModel: ObservableObject {
         connection.onSessionExpired = { [weak self] in
             guard let self else { return }
             self.endCall()
-            self.status = "Сервер отклонил сессию или токен. Проверьте настройки и позвоните снова"
+            self.status = self.words.refused
             self.journal?.append(self.status)
         }
         self.connection = connection
@@ -796,7 +795,7 @@ final class CallViewModel: ObservableObject {
         case .left:
             hintOnWindow = false
             if let eyes { eyes.newScreen() } else { showRestCard() }
-            lastInstruction = Self.restWords
+            lastInstruction = words.rest
         case .reading:
             eyes?.newScreen()
             eyes?.wait(for: .screen)
@@ -869,13 +868,13 @@ final class CallViewModel: ObservableObject {
             isSharing = false
         } else if status.state == "broadcasting", !isSharing {
             isSharing = true
-            lastInstruction = "Открой нужное приложение"
+            lastInstruction = words.openApp
         }
     }
 
     private func repeatHint() {
         guard isCallActive else { return }
-        announce(lastSpokenHint.isEmpty ? "Пока нет подсказки. Ожидайте." : lastSpokenHint)
+        announce(lastSpokenHint.isEmpty ? words.noHintYet : lastSpokenHint)
         journal?.append("Последняя подсказка повторена голосом; аудиосессия активна: \(audioIsActive ? "да" : "нет")")
     }
 
@@ -924,14 +923,14 @@ final class CallViewModel: ObservableObject {
             isWorking = false
             silence()
             microphone?.stop()
-            status = "Звонок прерван системой"
+            status = words.interrupted
             journal?.append(status)
         } else {
             let options = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
             if AVAudioSession.InterruptionOptions(rawValue: options).contains(.shouldResume) { resumeAudio() }
             else {
                 endCall()
-                status = "Звонок завершён после прерывания"
+                status = words.endedByInterruption
             }
         }
     }
@@ -940,12 +939,12 @@ final class CallViewModel: ObservableObject {
         guard isCallActive else { return }
         do {
             try audioSession.activate()
-            status = isTestingWindow ? "Тест окна: новый кадр каждые 3 секунды" : "Звонок продолжается"
+            status = isTestingWindow ? "Тест окна: новый кадр каждые 3 секунды" : words.goesOn
             if !isTestingWindow { isGreeted = true }  // The break may have cut the greeting off.
             hearPerson()
         } catch {
             endCall()
-            status = "Не удалось возобновить звонок: \(error.localizedDescription)"
+            status = "\(words.notResumed): \(error.localizedDescription)"
         }
     }
 

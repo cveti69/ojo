@@ -21,12 +21,10 @@ final class EyesStage {
     private static let size = CGSize(width: 720, height: 960)
     private static let wordsBox = CGRect(x: 180, y: 130, width: 360, height: 360)
     private static let wordsArea = CGRect(x: 60, y: 510, width: 600, height: 400)
-    private static let longWaitWords = "Жду ответа дольше обычного"
-    private static let noLinkWords = "Нет связи"
-    private static let restWords = "Я рядом"
     private static let slowestRetry = 8  // In frames: a window that keeps refusing is not worth 30 tries a second.
 
     private let surface: any EyesSurface
+    private let phrases: CallWords
     private let journal: SharedJournal?
     private var director = EyesDirector()
     private var timer: DispatchSourceTimer?
@@ -50,8 +48,9 @@ final class EyesStage {
     private var refused = 0
     private var drawing: TimeInterval = 0
 
-    init(surface: any EyesSurface, journal: SharedJournal?) {
+    init(surface: any EyesSurface, phrases: CallWords, journal: SharedJournal?) {
         self.surface = surface
+        self.phrases = phrases
         self.journal = journal
     }
 
@@ -190,7 +189,7 @@ final class EyesStage {
             mood = director.mood
             moodSince = now
         }
-        let wanted = isLinkDown ? Self.noLinkWords : director.hasGivenUp(at: now) ? Self.longWaitWords : nil
+        let wanted = isLinkDown ? phrases.noLink : director.hasGivenUp(at: now) ? phrases.longWait : nil
         if wanted != notice || needsComposing || underEyes != composedWords {
             if wanted != notice { journal?.append("Глаза: \(wanted == nil ? "снова на месте" : "убраны, текст на чёрном")") }
             notice = wanted
@@ -204,11 +203,11 @@ final class EyesStage {
     private var underEyes: String {
         if let question { return question }
         switch mood {
-        case .listening: return "Слушаю"
-        case .reading: return "Смотрю"
-        case .thinking: return "Думаю"
-        case .speaking: return "Говорю"
-        default: return words ?? Self.restWords
+        case .listening: return phrases.listening
+        case .reading: return phrases.looking
+        case .thinking: return phrases.thinking
+        case .speaking: return phrases.speaking
+        default: return words ?? phrases.rest
         }
     }
 

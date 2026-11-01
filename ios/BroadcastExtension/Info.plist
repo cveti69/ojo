@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
-    <string>ru</string>
+    <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>$(APP_DISPLAY_NAME) — трансляция</string>
+    <string>$(APP_DISPLAY_NAME)</string>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
@@ -25,7 +25,7 @@
     <key>DefaultServerURL</key>
     <string>$(DEFAULT_SERVER_URL)</string>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Доступ к сети нужен для отправки экрана выбранному серверу.</string>
+    <string>OjO needs the network to send your screen to the server you chose.</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>

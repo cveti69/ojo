@@ -10,9 +10,10 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 
-from app import config, friend, grounding, hint, meta, server, sessions
+from app import config, friend, grounding, hint, language, meta, server, sessions
 from conftest import AUTH, idle, jpeg, line, look, new_session, post_frame, real_locate, say, sharing, words
 
+RU = language.words("ru")
 SHOW = {"label": "Beli Langsung", "object": "green button", "box": [600, 900, 950, 960]}
 SCREENS = [jpeg((value, value, value)) for value in (20, 90, 160, 230)]
 
@@ -97,7 +98,7 @@ def test_words_with_no_screen_go_straight_to_the_model(backend):
     words(backend.client, session_id, "Какие взять?")
     idle(backend, session_id)
     message = backend.meta.calls[0].messages[-1]
-    assert texts(message) == ["Какие взять? " + friend.UNSEEN] and not pictures(message)
+    assert texts(message) == ["Какие взять? " + RU["unseen"]] and not pictures(message)
     assert kinds(seen) == ["heard", "say"] and seen[1]["turn"] == 1 and seen[1]["text_ru"] == "Это кнопка поиска."
 
 
@@ -130,7 +131,7 @@ def test_a_phone_that_sends_no_screen_does_not_hold_the_answer(backend, monkeypa
     other = sharing(client)
     words(client, other, "Это что?")
     assert wait_until(lambda: len(backend.meta.calls) == 1)
-    assert texts(backend.meta.calls[0].messages[-1]) == ["Это что? " + friend.UNSEEN]
+    assert texts(backend.meta.calls[0].messages[-1]) == ["Это что? " + RU["unseen"]]
 
 
 def test_a_new_line_cancels_the_wait_for_an_old_screen(backend, monkeypatch):
@@ -192,7 +193,7 @@ def test_a_ready_text_with_no_voice_closes_the_line(backend):
     idle(backend, session_id)
     words(backend.client, session_id, "Два")
     idle(backend, session_id)
-    assert texts(backend.meta.calls[1].messages[-1]) == ["Два " + friend.UNSEEN]
+    assert texts(backend.meta.calls[1].messages[-1]) == ["Два " + RU["unseen"]]
 
 
 def test_silence_closes_the_line(backend):
@@ -238,7 +239,7 @@ def test_a_new_screen_is_a_turn_and_a_video_on_the_page_is_not(backend):
     assert post_frame(client, session_id, timestamp=1).json() == {"accepted": True}
     idle(backend, session_id)
     message = backend.meta.calls[0].messages[-1]
-    assert texts(message) == [friend.SILENT_TURN] and len(pictures(message)) == 1
+    assert texts(message) == [RU["silent"]] and len(pictures(message)) == 1
     assert post_frame(client, session_id, timestamp=2).json() == {"accepted": False, "reason": "same"}
     assert post_frame(client, session_id, with_video(), timestamp=3).json() == {"accepted": False, "reason": "same"}
     assert post_frame(client, session_id, with_keyboard(), timestamp=4).json() == {"accepted": True}
@@ -274,7 +275,7 @@ def test_after_the_broadcast_the_model_is_told_there_is_no_screen(backend):
     client.post("/sessions/" + session_id + "/broadcast", headers=AUTH, json={"state": "finished"})
     words(client, session_id, "Видишь?")
     idle(backend, session_id)
-    assert texts(backend.meta.calls[0].messages[-1]) == ["Видишь? " + friend.UNSEEN]
+    assert texts(backend.meta.calls[0].messages[-1]) == ["Видишь? " + RU["unseen"]]
 
 
 def test_a_new_screen_replaces_the_answer_for_the_old_one(backend):
@@ -293,7 +294,7 @@ def test_a_new_screen_replaces_the_answer_for_the_old_one(backend):
         release.set()
     assert spoken(seen) == ["Новое."]
     message = backend.meta.calls[1].messages[-1]
-    assert texts(message) == [friend.SILENT_TURN, friend.SILENT_TURN] and len(pictures(message)) == 2
+    assert texts(message) == [RU["silent"], RU["silent"]] and len(pictures(message)) == 2
 
 
 def test_a_screen_that_never_settles_still_gets_an_answer(backend):
@@ -323,7 +324,7 @@ def test_the_screen_that_had_to_wait_gets_its_turn_after_the_answer(backend):
     release.set()
     assert wait_until(lambda: len(backend.meta.calls) == 2)
     idle(backend, session_id)
-    assert session.chat[-2]["text"] == friend.SILENT_TURN and session.chat[-2]["frame"].timestamp_ms == 2 and not session.held
+    assert session.chat[-2]["text"] == RU["silent"] and session.chat[-2]["frame"].timestamp_ms == 2 and not session.held
 
 
 def test_a_small_change_does_not_take_the_turn_of_the_screen_that_waited(backend):
@@ -339,7 +340,7 @@ def test_a_small_change_does_not_take_the_turn_of_the_screen_that_waited(backend
     release.set()
     assert wait_until(lambda: len(backend.meta.calls) == 2)
     idle(backend, session_id)
-    assert session.chat[-2]["text"] == friend.SILENT_TURN and session.chat[-2]["frame"].timestamp_ms == 3
+    assert session.chat[-2]["text"] == RU["silent"] and session.chat[-2]["frame"].timestamp_ms == 3
 
 
 def test_words_under_way_take_the_place_of_the_screen_that_waited(backend):
@@ -532,7 +533,7 @@ def test_new_words_replace_the_answer_under_way_and_its_turn_stays(backend):
     finally:
         release.set()
     assert spoken(seen) == ["Новое."]
-    assert texts(backend.meta.calls[1].messages[-1]) == [friend.SILENT_TURN, "Подожди"]
+    assert texts(backend.meta.calls[1].messages[-1]) == [RU["silent"], "Подожди"]
 
 
 def test_words_before_the_first_sound_are_one_line(backend):
@@ -543,7 +544,7 @@ def test_words_before_the_first_sound_are_one_line(backend):
     words(client, session_id, "и доставку")
     idle(backend, session_id)
     call = backend.meta.calls[1]
-    assert roles(call) == ["system", "user"] and texts(call.messages[-1]) == ["Посмотри цену и доставку " + friend.UNSEEN]
+    assert roles(call) == ["system", "user"] and texts(call.messages[-1]) == ["Посмотри цену и доставку " + RU["unseen"]]
 
 
 def test_words_after_the_sound_stand_alone(backend):
@@ -839,7 +840,7 @@ def test_no_answer_at_all_says_so_on_words(backend):
     backend.meta.replies = [OSError("down"), OSError("down")]
     words(backend.client, session_id)
     idle(backend, session_id)
-    assert spoken(seen) == [friend.FAILED_LINE]
+    assert spoken(seen) == [RU["failed"]]
 
 
 def test_no_answer_on_a_screen_stays_silent(backend):
@@ -995,7 +996,7 @@ def test_the_model_hears_on_its_next_turn_that_no_outline_came(backend):
     words(client, session_id, "Где?")
     look(client, session_id, [SCREENS[0]], first_taken=200)
     idle(backend, session_id)
-    assert texts(backend.meta.calls[1].messages[-1]) == [friend.UNSHOWN, "Где?"]
+    assert texts(backend.meta.calls[1].messages[-1]) == [RU["unshown"], "Где?"]
     played(backend, session_id, 1)
     words(client, session_id, "Вижу")
     look(client, session_id, [SCREENS[0]], first_taken=300)
@@ -1015,7 +1016,7 @@ def test_the_model_hears_that_they_left_before_the_outline_came(backend):
     release.set()
     assert wait_until(lambda: len(backend.meta.calls) == 2)
     idle(backend, session_id)
-    assert texts(backend.meta.calls[1].messages[-1]) == [friend.UNSHOWN, friend.SILENT_TURN]
+    assert texts(backend.meta.calls[1].messages[-1]) == [RU["unshown"], RU["silent"]]
 
 
 def test_the_model_hears_that_a_new_turn_stopped_the_outline(backend, monkeypatch):
@@ -1035,7 +1036,7 @@ def test_the_model_hears_that_a_new_turn_stopped_the_outline(backend, monkeypatc
     release.set()
     assert wait_until(lambda: len(backend.meta.calls) == 2)
     idle(backend, session_id)
-    assert texts(backend.meta.calls[1].messages[-1]) == [friend.UNSHOWN, friend.SILENT_TURN]
+    assert texts(backend.meta.calls[1].messages[-1]) == [RU["unshown"], RU["silent"]]
 
 
 def test_an_outline_that_came_leaves_nothing_to_hear(backend):
@@ -1059,7 +1060,7 @@ def test_words_before_the_first_sound_take_the_fact_away_with_the_answer(backend
     words(client, session_id, "Где")
     look(client, session_id, [SCREENS[0]], first_taken=200)
     idle(backend, session_id)
-    assert backend.store.sessions[session_id].chat[-1]["text"] == friend.UNSHOWN
+    assert backend.store.sessions[session_id].chat[-1]["text"] == RU["unshown"]
     words(client, session_id, "кнопка")
     look(client, session_id, [SCREENS[0]], first_taken=300)
     idle(backend, session_id)
@@ -1255,10 +1256,10 @@ def test_a_model_given_up_on_stays_silent(backend, monkeypatch):
     seen = events_of(backend, session_id)
     backend.meta.replies = [line("Поздний ответ."), line("Поздний запасной.")]
     words(backend.client, session_id)
-    assert wait_until(lambda: spoken(seen) == [friend.FAILED_LINE])
+    assert wait_until(lambda: spoken(seen) == [RU["failed"]])
     release.set()
     time.sleep(0.05)
-    assert spoken(seen) == [friend.FAILED_LINE]
+    assert spoken(seen) == [RU["failed"]]
 
 
 def test_a_line_from_an_answer_nobody_waits_for_stays_silent(backend):
@@ -1945,7 +1946,7 @@ def test_a_failed_line_is_not_cut_and_goes_with_any_screen(backend):
     words(backend.client, session_id)
     idle(backend, session_id)
     say_event = next(event for event in seen if event["type"] == "say")
-    assert say_event["text_ru"] == friend.FAILED_LINE and "line" not in say_event and "frame_ts" not in say_event
+    assert say_event["text_ru"] == RU["failed"] and "line" not in say_event and "frame_ts" not in say_event
 
 
 def test_a_ready_text_names_its_screen(backend):
@@ -2003,7 +2004,7 @@ def test_their_question_goes_on_past_an_answer_about_a_screen_they_left(backend)
     assert wait_until(lambda: len(backend.meta.calls) == 2)
     idle(backend, session_id)
     assert spoken(seen) == ["Про новый экран."] and said_lines(still) == ["Про новый экран."]
-    assert texts(backend.meta.calls[1].messages[-1]) == ["Что тут?", friend.SILENT_TURN]
+    assert texts(backend.meta.calls[1].messages[-1]) == ["Что тут?", RU["silent"]]
     assert pictures(backend.meta.calls[1].messages[-1])[-1] == meta.data_url(SCREENS[3])
     assert next(event for event in seen if event["type"] == "read")["frame_ts"] == 2000
 

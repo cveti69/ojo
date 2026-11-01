@@ -90,6 +90,20 @@ def test_the_border_is_found_bright_or_dimmed(page, width, dim, dark):
     assert near(window.find(jpeg(frame)), width, (20, 300))
 
 
+def nosed():
+    """The face between hints: inside the window sits a hook in the very colour of the border."""
+    inner = picture()
+    ImageDraw.Draw(inner).line([(360, 420), (360, 482), (350, 505), (329, 513), (302, 497)], fill=VIOLET, width=35, joint="curve")
+    return window.add_border(inner)
+
+
+@pytest.mark.parametrize("page", [white, black, busy])
+@pytest.mark.parametrize("width", [124, 180, 202, 285])
+@pytest.mark.parametrize("dim", [1.0, 0.55])
+def test_a_nose_in_the_colour_of_the_border_leaves_the_window_found(page, width, dim):
+    assert near(window.find(jpeg(shot(page(), nosed(), width, dim=dim))), width, (20, 300))
+
+
 def test_the_colour_stays_hot_under_the_window_dimming():
     red, green, blue = VIOLET
     assert min(red - green, blue - green) * 0.55 >= window.HOT_MARGIN + 15

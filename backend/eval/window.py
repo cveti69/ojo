@@ -116,6 +116,27 @@ def card(text: str) -> Image.Image:
     return picture
 
 
+def face(text: str) -> Image.Image:
+    """The window between hints as EyesStage draws it, with the nose in the very colour of the border."""
+    scale = 4
+    picture = Image.new("RGB", (hint.SIZE[0] * scale, hint.SIZE[1] * scale), "black")
+    draw = ImageDraw.Draw(picture)
+
+    def round_box(x: float, y: float, across: float, down: float, fill: str | tuple) -> None:
+        draw.ellipse([value * scale for value in (x - across, y - down, x + across, y + down)], fill=fill)
+
+    for x in (255.6, 464.4):
+        round_box(x, 310, 75.6, 117.18, "white")
+        round_box(x, 310, 37.8, 37.8, "black")
+        round_box(x + 17.39, 295.64, 11.34, 11.34, "white")
+    middle = [(360, 420), (360, 482)] + [(329 + 31 * math.cos(step / 30 * math.pi * 5 / 6), 482 + 31 * math.sin(step / 30 * math.pi * 5 / 6)) for step in range(31)]
+    for x, y in middle[:1] + middle[-1:]:
+        round_box(x, y, 17.5, 17.5, window.BORDER)
+    draw.line([value * scale for point in middle for value in point], fill=window.BORDER, width=35 * scale, joint="curve")
+    draw.text((360 * scale, 730 * scale), text, fill="white", anchor="mm", font_size=64 * scale)
+    return picture.resize(hint.SIZE, Image.Resampling.LANCZOS)
+
+
 def paste(base: Image.Image, picture: Image.Image, rect: tuple[int, int, int, int]) -> Image.Image:
     width, height = rect[2] - rect[0], rect[3] - rect[1]
     radius = round(width * 0.07)
@@ -190,9 +211,10 @@ def detect() -> None:
             rect = spot(spot_name, width, height)
             truth = [rect[0] / width, rect[1] / height, rect[2] / width, rect[3] / height]
             known = pictures[name]
-            for state, shown in (("hint", known), ("touched", with_controls(known)), ("card", card("Смотрю экран"))):
-                plain = small_jpeg(paste(base, shown, rect))
-                marked = small_jpeg(paste(base, with_controls(window.add_border(known)) if state == "touched"
+            for state, shown in (("hint", known), ("touched", known), ("card", card("Смотрю экран")),
+                                 ("face", face("Смотрю")), ("face touched", face("Смотрю"))):
+                plain = small_jpeg(paste(base, with_controls(shown) if "touched" in state else shown, rect))
+                marked = small_jpeg(paste(base, with_controls(window.add_border(shown)) if "touched" in state
                                           else window.add_border(shown), rect))
                 row = tally.setdefault(state, {"total": 0, "border": 0, "picture": 0, "border_ms": [], "picture_ms": []})
                 row["total"] += 1
@@ -261,7 +283,6 @@ def place_of(rect: tuple, screen: tuple = SCREEN) -> list[float]:
 def scenes() -> None:
     """Made-up screens that have fooled a search for the border before. No frames and no model.
     This is the server's search with this file's shrink, which is not quite the phone's: numbers near a limit differ."""
-    picture = window.add_border(card("Смотрю экран"))
     tally: dict[str, list[int]] = {}
 
     def count(title: str, good: bool) -> None:
@@ -274,22 +295,25 @@ def scenes() -> None:
             count("white card: nothing found", window.find(small_jpeg(card_page(back, wide, ratio))[0]) is None)
         for columns, ratio, gutter in itertools.product((2, 3), (0.66, 0.72, 0.75, 0.78, 0.82), (24, 36, 60)):
             count("sale page: nothing found", window.find(small_jpeg(sale_page(back, columns, ratio, gutter))[0]) is None)
-        for columns, wide, place in itertools.product((2, 3), (0.30, 0.39, 0.44), ((0.97, 0.5), (0.97, 0.8), (0.03, 0.6))):
+    plain, nosed = window.add_border(card("Смотрю экран")), window.add_border(face("Смотрю"))
+    for name, picture in (("card", plain), ("card dimmed", with_controls(plain)), ("nose", nosed), ("nose dimmed", with_controls(nosed))):
+        for back in BRIGHT_PAGES:
+            for columns, wide, place in itertools.product((2, 3), (0.30, 0.39, 0.44), ((0.97, 0.5), (0.97, 0.8), (0.03, 0.6))):
+                rect = window_at(*place, wide)
+                found = window.find(small_jpeg(paste(sale_page(back, columns, 0.75, 36), picture, rect))[0])
+                count(f"{name}, window on a sale page: no card taken for it", found is None or same_place(found, place_of(rect)))
+                kind = "does not take" if back == NOT_BORDER_PAGE else "takes"
+                count(f"{name}, window on a sale page the search {kind} for the border: found", same_place(found, place_of(rect)))
+        for share, wide, place, color in itertools.product((0.09, 0.10, 0.12, 0.16), (0.30, 0.39, 0.44, 0.62), ((0.03, 0.2), (0.97, 0.5), (0.97, 0.8)),
+                                                           ((120, 20, 200), (190, 30, 150))):
             rect = window_at(*place, wide)
-            found = window.find(small_jpeg(paste(sale_page(back, columns, 0.75, 36), picture, rect))[0])
-            count("window on a sale page: no card taken for it", found is None or same_place(found, place_of(rect)))
-            kind = "does not take" if back == NOT_BORDER_PAGE else "takes"
-            count(f"window on a sale page the search {kind} for the border: found", same_place(found, place_of(rect)))
-    for share, wide, place, color in itertools.product((0.09, 0.10, 0.12, 0.16), (0.30, 0.39, 0.44, 0.62), ((0.03, 0.2), (0.97, 0.5), (0.97, 0.8)),
-                                                       ((120, 20, 200), (190, 30, 150))):
-        rect = window_at(*place, wide)
-        found = window.find(small_jpeg(paste(band_page(color, rect, share), picture, rect))[0])
-        count("band behind the window: found", same_place(found, place_of(rect)))
-    turned = (SCREEN[1], SCREEN[0])
-    for wide, place in itertools.product((0.14, 0.16, 0.18, 0.21, 0.30), ((0.03, 0.5), (0.97, 0.5), (0.97, 0.2))):
-        rect = window_at(*place, wide, turned)
-        found = window.find(small_jpeg(paste(Image.new("RGB", turned, "white"), picture, rect))[0])
-        count("turned screen: found", same_place(found, place_of(rect, turned)))
+            found = window.find(small_jpeg(paste(band_page(color, rect, share), picture, rect))[0])
+            count(f"{name}, band behind the window: found", same_place(found, place_of(rect)))
+        turned = (SCREEN[1], SCREEN[0])
+        for wide, place in itertools.product((0.14, 0.16, 0.18, 0.21, 0.30), ((0.03, 0.5), (0.97, 0.5), (0.97, 0.2))):
+            rect = window_at(*place, wide, turned)
+            found = window.find(small_jpeg(paste(Image.new("RGB", turned, "white"), picture, rect))[0])
+            count(f"{name}, turned screen: found", same_place(found, place_of(rect, turned)))
     for title, (good, total) in tally.items():
         print(f"{title:70} {good}/{total}")
 

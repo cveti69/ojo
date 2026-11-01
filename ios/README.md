@@ -20,10 +20,12 @@ open App.xcodeproj
 
 ## The call
 
-1. The main screen works like a phone: "Позвонить" to call and "Завершить" to end. Everything else is behind "⋯": a typed line, the
+1. The main screen works like a phone: one button to call and one to end. The app's own words on a call are in
+   `Shared/Sources/CallWords.swift`, in Russian, English and Spanish by the language of the phone, English for any other. Everything
+   else is behind "⋯": a typed line, the
    broadcast button, the window, settings and the checks.
 2. A call creates a session, turns on `.playAndRecord`, says hello and opens the microphone. Right after the greeting the app asks
-   iOS for the system broadcast sheet. If it does not open, the "Покажи экран" button stays, with the real system button under it.
+   iOS for the system broadcast sheet. If it does not open, the "Show your screen" button stays, with the real system button under it.
 3. `CallMicrophone` listens until the end of the call, also from another app: iOS gives a background app the microphone only if it
    was turned on in the foreground. `SpeechDetector` tells speech from the noise of the room and ends a phrase after a 0.8 second
    pause. `SpeechStream` sends the sound to `/listen` while a voice is heard, and the server's stream finds the end of the phrase. If

@@ -24,6 +24,7 @@ ICON_REACH = 0.14  # How far the model's guess may land from the real icon, in s
 ICON_MAX_AREA = 0.03  # A target larger than this share of the frame is not an icon.
 ICON_MAX_STRETCH = 2.5  # Icons are nearly square, so a longer guess is a bar or a button, however small.
 ROW_SLACK = 0.6  # Of the model's box height. Right icons sat within 0.45 of it from the box, icons of another row 0.79 and more.
+CAPTION_SLACK = 0.8  # Wider: on a real call a checkbox took the shop's name 0.7 above it for its label.
 
 
 def _normal(text: str) -> str:
@@ -125,8 +126,8 @@ def _looks_like_icon(box: list[float] | None, frame_ratio: float) -> bool:
     return bool(box) and not _is_large(box) and not _is_stretched(box, frame_ratio)
 
 
-def _same_row(near: list[float], box: list[float]) -> bool:
-    return max(near[1] - box[3], box[1] - near[3]) <= ROW_SLACK * (near[3] - near[1])
+def _same_row(near: list[float], box: list[float], slack: float = ROW_SLACK) -> bool:
+    return max(near[1] - box[3], box[1] - near[3]) <= slack * (near[3] - near[1])
 
 
 def snap_to_icon(near: list[float] | None, icons: list[list[float]], frame_ratio: float) -> list[float] | None:
@@ -144,7 +145,7 @@ def snap_to_icon(near: list[float] | None, icons: list[list[float]], frame_ratio
 
 def _is_caption(near: list[float] | None, words: list[float], frame_ratio: float) -> bool:
     """Words beside an icon in its row: a target with no words of its own borrows the nearest ones for its label."""
-    return (_looks_like_icon(near, frame_ratio) and _same_row(near, words)
+    return (_looks_like_icon(near, frame_ratio) and _same_row(near, words, CAPTION_SLACK)
             and not words[0] <= center(near)[0] <= words[2] and not near[0] <= center(words)[0] <= near[2])
 
 

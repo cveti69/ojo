@@ -237,6 +237,14 @@ def test_the_shape_of_the_frame_decides_what_looks_like_an_icon(monkeypatch):
     assert real_locate(b"", 1000, 1000, answer, lines, [])["source"] == "text"
 
 
+def test_the_shops_name_over_a_card_is_no_label_for_its_checkbox(monkeypatch):
+    asked = asked_sam(monkeypatch, {"product checkbox": [[22, 155, 43, 180]]})
+    lines = [{"text": "Toko Contoh", "words": [{"text": "Toko", "box": [0.221, 0.114, 0.33, 0.128]}, {"text": "Contoh", "box": [0.34, 0.114, 0.47, 0.128]}]}]
+    target = {"label": "Toko Contoh", "object": "product checkbox", "box": [48, 151, 95, 184], "mark_id": None}
+    found = real_locate(b"", 460, 1000, {"action": "tap", "target": target}, lines)
+    assert found["source"] == "sam" and asked == ["product checkbox"]
+
+
 def test_a_wide_model_box_beside_the_words_is_no_icon(monkeypatch):
     asked = asked_sam(monkeypatch, {})
     target = {**CLOSE, "box": [380, 165, 700, 195]}

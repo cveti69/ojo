@@ -14,7 +14,7 @@ from typing import Callable, Coroutine, List, Optional, Set
 from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 
-from . import config, grounding, hint, meta, step, window
+from . import config, grounding, hint, language, meta, step, window
 from .sessions import Frame, Session
 
 log = logging.getLogger(__name__)
@@ -40,10 +40,6 @@ paste: готовый текст, если человеку надо его вс
 private: true, если на последнем экране оплата, карта, пароль или код.
 lang: код языка приложения на последнем экране, две буквы. Экрана нет, не пиши lang.
 notes: записи для себя, любой текст. На следующем ходу они вернутся к тебе."""
-SILENT_TURN = "(молчит, экран обновился)"
-UNSEEN = "(экран не показан)"
-UNSHOWN = "(обводка не показана)"
-FAILED_LINE = "Не получилось ответить, повтори, пожалуйста."
 
 GRAY_SIZE = (64, 96)
 FRAME_DIFF_THRESHOLD = 3.0
@@ -64,6 +60,7 @@ _PAYMENT = (
     r"парол|\bкартой\b|пин-код|оплат|заплат|плат[её]ж|код подтверждения|код из смс"
     r"|password|\bpin\b|cvv|cvc|(credit|debit|bank) card|card (number|details)|payment|billing|\bpay\b|verification code|\botp\b"
     r"|sandi|kartu|bayar|rekening|transfer bank|kode verifikasi"
+    r"|contraseña|\btarjetas?\b|\bpagar\b|\bpagos?\b|código de (verificación|seguridad)"
     r"|支付|付款|密码|银行卡|验证码|パスワード|クレジットカード|支払|認証コード|비밀번호|결제|카드 ?번호|인증번호|รหัสผ่าน|ชำระเงิน|บัตรเครดิต|รหัสยืนยัน|mật khẩu|thanh toán|số thẻ|mã xác|كلمة المرور|الدفع|رقم البطاقة|رمز التحقق")
 _PRIVATE_SCREEN = re.compile(_PAYMENT + r"|\bкарт[аыуе]\b", re.I)
 # The model can name a map app, so in its own words "карты" alone is not a payment.
@@ -150,9 +147,16 @@ def _pictures(chat: List[dict]) -> Set[int]:
     return kept
 
 
+def _rules(session: Session) -> str:
+    """The rules are written in Russian, so a call in Russian needs no word about its language and any other call does."""
+    if language.code(session.user_lang) == "ru":
+        return RULES
+    return RULES.replace("вслух,", "вслух, только на языке " + session.user_lang + ",")
+
+
 def messages_of(session: Session) -> List[dict]:
     """A plain chat. The words stay for the whole call, and a turn that was never answered joins the next one."""
-    messages: List[dict] = [{"role": "system", "content": ROLE + session.character + "\n\n" + RULES}]
+    messages: List[dict] = [{"role": "system", "content": ROLE + session.character + "\n\n" + _rules(session)}]
     pictures = _pictures(session.chat)
     for index, turn in enumerate(session.chat):
         if turn["role"] == "assistant":
@@ -267,7 +271,7 @@ class Friend:
         session.note("heard", turn=session.turn, said=said)
         session.publish({"type": "heard", "turn": session.turn})
         if not session.broadcasting:
-            self._start(session, said + " " + UNSEEN, None)
+            self._start(session, said + " " + session.words["unseen"], None)
             return
         session.heard, session.settling = said, False
         if _still(session):
@@ -301,7 +305,7 @@ class Friend:
             self._left(session)
         if frame and _ahead(session, frame):
             session.last_frame = frame
-        self._start(session, said if frame else said + " " + UNSEEN, frame)
+        self._start(session, said if frame else said + " " + session.words["unseen"], frame)
 
     def changed(self, session: Session, at: int, moved: bool) -> None:
         """The phone saw the screen change, ahead of the frame that will show it. Moved means they are leaving it, so what
@@ -351,7 +355,7 @@ class Friend:
                 session.held = True
                 return False, "busy"
             session.restarts += 1
-        self._start(session, SILENT_TURN, frame)
+        self._start(session, session.words["silent"], frame)
         return True, None
 
     def _left(self, session: Session) -> None:
@@ -497,7 +501,7 @@ class Friend:
         now = session.last_frame
         if held and now and not session.heard and not session.ended and _new_screen(session, now):
             session.answer = None  # This one is done, and it is what would be stopped.
-            self._start(session, SILENT_TURN, now)  # The screen that had to wait would otherwise go unseen.
+            self._start(session, session.words["silent"], now)  # The screen that had to wait would otherwise go unseen.
 
     async def _reply(self, session: Session, turn: int, frame: Optional[Frame]) -> None:
         started = time.perf_counter()
@@ -514,7 +518,7 @@ class Friend:
         session.restarts = 0
         if got is None:
             if session.open_words:
-                session.publish({"type": "say", "turn": turn, "text_ru": FAILED_LINE, "paste_text": None, "timings": {"model_ms": _ms(started)}})
+                session.publish({"type": "say", "turn": turn, "text_ru": session.words["failed"], "paste_text": None, "timings": {"model_ms": _ms(started)}})
             else:
                 session.publish({"type": "quiet", "turn": turn})
             return
@@ -568,7 +572,7 @@ class Friend:
     async def _show(self, session: Session, frame: Frame, text: str, target: dict, answer: dict, model_ms: int) -> None:
         """The voice has gone ahead of the outline. Whatever keeps it away, a new turn included, the model hears on its next turn."""
         started = time.perf_counter()
-        unshown = {"role": "user", "text": UNSHOWN, "frame": None}
+        unshown = {"role": "user", "text": session.words["unshown"], "frame": None}
         session.chat.append(unshown)
 
         def written() -> dict:  # The words of a payment screen can arrive while this is at work.

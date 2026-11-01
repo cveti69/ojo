@@ -45,7 +45,7 @@ public final class SharedStore: @unchecked Sendable {
         defaultServerURL = configuration.defaultServerURL
         defaults.register(defaults: [
             "serverURL": configuration.defaultServerURL.absoluteString,
-            "userLang": "ru", "targetLang": "id", "textInput": TextEntry.clipboard.rawValue,
+            "targetLang": "id", "textInput": TextEntry.clipboard.rawValue,
             "screenReading": ScreenTextMode.extension.rawValue
         ])
     }
@@ -55,7 +55,7 @@ public final class SharedStore: @unchecked Sendable {
         return ServerSettings(
             serverURL: URL(string: defaults.string(forKey: "serverURL") ?? "") ?? defaultServerURL,
             token: defaults.string(forKey: "token") ?? "",
-            userLang: defaults.string(forKey: "userLang") ?? "ru",
+            userLang: Locale.preferredLanguages.first ?? "en",  // The phone's language at every call, and never a saved one.
             targetLang: defaults.string(forKey: "targetLang") ?? "id",
             textEntry: TextEntry(rawValue: defaults.string(forKey: "textInput") ?? "") ?? .clipboard,
             thinking: ThinkingLevel(rawValue: defaults.string(forKey: "thinkingLevel") ?? "") ?? .auto,
@@ -178,26 +178,25 @@ public final class SharedStore: @unchecked Sendable {
         }
     }
 
+    /// The token a build carries is the current one, so a new one reaches a phone with the update. A build with none keeps the typed one.
     public func seedDefaultToken(_ token: String) {
         refresh()
-        guard (defaults.string(forKey: "token") ?? "").isEmpty, !token.isEmpty else { return }
+        guard !token.isEmpty, token != defaults.string(forKey: "token") else { return }
         defaults.set(token, forKey: "token")
         defaults.synchronize()
     }
 
-    public func save(serverAddress: String, token: String, userLang: String, targetLang: String, textEntry: TextEntry,
+    public func save(serverAddress: String, token: String, targetLang: String, textEntry: TextEntry,
                      thinking: ThinkingLevel, character: AgentCharacter, ownCharacter: String) throws {
         let address = serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: address), ["http", "https"].contains(url.scheme?.lowercased()),
               url.host != nil, url.query == nil, url.fragment == nil else {
             throw ProjectConfiguration.ConfigurationError.invalidServerURL
         }
-        let user = userLang.trimmingCharacters(in: .whitespacesAndNewlines)
         let target = targetLang.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !user.isEmpty, !target.isEmpty else { throw StoreError.emptyLanguage }
+        guard !target.isEmpty else { throw StoreError.emptyLanguage }
         defaults.set(url.absoluteString, forKey: "serverURL")
         defaults.set(token.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "token")
-        defaults.set(user, forKey: "userLang")
         defaults.set(target, forKey: "targetLang")
         defaults.set(textEntry.rawValue, forKey: "textInput")
         defaults.set(thinking.rawValue, forKey: "thinkingLevel")

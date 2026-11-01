@@ -1,3 +1,4 @@
+import Shared
 import SwiftUI
 
 /// Plays every state in half a minute, with no call, on the same code the floating window uses.
@@ -29,7 +30,7 @@ private final class EyesPreview: ObservableObject, EyesSurface {
         isPlaying = true
         show = Task { [weak self] in
             guard let self else { return }
-            let stage = EyesStage(surface: self, journal: nil)
+            let stage = EyesStage(surface: self, phrases: .device, journal: nil)
             stage.start()
             defer {
                 stage.stop()

@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
-from . import config
+from . import config, language
 from .calllog import CallLog
 
 KEPT_FRAME_TEXTS = 8
@@ -72,15 +72,18 @@ class Session:
     last_answer: Optional[dict] = None
     last_hint: Optional[dict] = None
     last_say: Optional[dict] = None
-    last_status: dict = field(default_factory=lambda: {
-        "type": "status", "state": "waiting_frames", "text_ru": "Включи демонстрацию экрана"
-    })
+    last_status: dict = field(init=False)
     last_done: Optional[dict] = None
     grounding: Optional[dict] = None
     timings: Dict[str, Any] = field(default_factory=dict)
     frame_text: Dict[int, List[dict]] = field(default_factory=dict)
     subscribers: Set[asyncio.Queue] = field(default_factory=set)
     call_log: Optional[CallLog] = None
+    words: Dict[str, str] = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.words = language.words(self.user_lang)
+        self.last_status = {"type": "status", "state": "waiting_frames", "text_ru": self.words["share"]}
 
     def touch(self) -> None:
         self.last_activity = time.monotonic()
@@ -142,14 +145,14 @@ class Session:
     def unsubscribe(self, queue: asyncio.Queue) -> None:
         self.subscribers.discard(queue)
 
-    def finish(self, text_ru: str = "Сессия завершена") -> None:
+    def finish(self, text_ru: Optional[str] = None) -> None:
         self.note("end", turns=self.turn, steps=self.step_sequence)
         self.ended = True
         self.broadcasting = False
         self.heard = ""
         self.texts.clear()
         if not self.last_done:
-            self.publish({"type": "done", "text_ru": text_ru})
+            self.publish({"type": "done", "text_ru": text_ru or self.words["ended"]})
         for queue in tuple(self.subscribers):
             self._put(queue, None)
         if self.answer and not self.answer.done():
@@ -186,7 +189,7 @@ class SessionStore:
 
     def _remove(self, session_id: str) -> None:
         session = self.sessions.pop(session_id)
-        session.finish("Сессия истекла")
+        session.finish(session.words["expired"])
 
     def cleanup(self) -> None:
         now = time.monotonic()

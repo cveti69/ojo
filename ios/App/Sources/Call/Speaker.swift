@@ -377,7 +377,7 @@ final class SystemSpeaker: NSObject, Speaker, AVSpeechSynthesizerDelegate {
             return
         }
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: "ru-RU")
+        utterance.voice = AVSpeechSynthesisVoice(language: Locale.preferredLanguages.first)
         currentUtterance = utterance
         synthesizer.speak(utterance)
     }

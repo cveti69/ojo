@@ -5,7 +5,6 @@ import SwiftUI
 private final class SettingsForm: ObservableObject {
     @Published var serverAddress = ""
     @Published var token = ""
-    @Published var userLang = "ru"
     @Published var targetLang = ""
     @Published var textEntry: TextEntry = .clipboard
     @Published var thinking: ThinkingLevel = .auto
@@ -54,8 +53,6 @@ struct SettingsScreen: View {
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
             }
             Section {
-                TextField("Ваш язык", text: $form.userLang)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
                 TextField("Язык приложения-цели: id, auto, en…", text: $form.targetLang)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 Picker("Способ ввода", selection: $form.textEntry) {
@@ -114,7 +111,6 @@ struct SettingsScreen: View {
             guard let settings = model.store?.settings else { return }
             form.serverAddress = settings.serverURL.absoluteString
             form.token = settings.token
-            form.userLang = settings.userLang
             form.targetLang = settings.targetLang
             form.textEntry = settings.textEntry
             form.thinking = settings.thinking
@@ -125,7 +121,7 @@ struct SettingsScreen: View {
 
     private func save() {
         do {
-            try model.store?.save(serverAddress: form.serverAddress, token: form.token, userLang: form.userLang, targetLang: form.targetLang, textEntry: form.textEntry,
+            try model.store?.save(serverAddress: form.serverAddress, token: form.token, targetLang: form.targetLang, textEntry: form.textEntry,
                                   thinking: form.thinking, character: form.character, ownCharacter: form.ownCharacter)
             form.message = "Сохранено в общей группе приложения"
             model.journal?.append("Настройки сохранены; text_entry: \(form.textEntry.rawValue); рассуждения: \(form.thinking.rawValue); характер: \(form.character.rawValue)")

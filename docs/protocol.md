@@ -9,7 +9,7 @@ Without it, or with a wrong value, the answer is `401`. Sessions live in the ser
 
 | Method and path | Caller | Body | Answer |
 |---|---|---|---|
-| `POST /sessions` | app | `{"user_lang": "ru", "target_lang": "id", "text_entry": "clipboard", "effort": "medium", "character": "warm", "own_character": "", "eyes": true, "signals": true}`, `eyes` only when the eyes are on, `signals` if the phone sends `/changed` | `201 {"session_id": "s_ab12cd34"}` |
+| `POST /sessions` | app | `{"user_lang": "es-MX", "target_lang": "id", "text_entry": "clipboard", "effort": "medium", "character": "warm", "own_character": "", "eyes": true, "signals": true}`, `eyes` only when the eyes are on, `signals` if the phone sends `/changed` | `201 {"session_id": "s_ab12cd34"}` |
 | `POST /transcribe` | app | `audio/wav`: mono, 16 bit, 16 kHz | `200 {"text": "..."}` |
 | `POST /sessions/{id}/frames` | broadcast extension | `image/jpeg` | `202 {"accepted": true}` if the frame became a turn, or `202 {"accepted": false, "reason": "same"}`. `reason`: `same` the same screen, `small` a small change the next turn will see, `looking` the phone is sending the screen for a line, `busy` the answer was restarted twice already, `old` a newer frame has come. `lang`, once the model has named the language of the screen, two letters: the extension reads the next screens with it |
 | `POST /sessions/{id}/changed` | broadcast extension, once for a change and once for a move until the next frame is delivered | `{"at": 1793436844526, "moved": true}`: `at` on the clock of `X-Frame-Ts`, `moved` if the person is leaving the screen | `200 {"ok": true}` |
@@ -30,6 +30,10 @@ Without it, or with a wrong value, the answer is `401`. Sessions live in the ser
 | `WS /sessions/{id}/events` | app | `X-Token` in the connection header | a stream of events |
 | `GET /debug/{id}?token=...` | developer | | a page that refreshes once a second |
 | `GET /health` | anyone | no token | `200 {"ok": true}` |
+
+`user_lang` is the first language of the phone at the moment of the call, as the phone writes it: letters, digits, `-` and `_`, anything else gets a 422. `ru` leaves the call as it always was.
+Any other language adds that language to the rule about the spoken line, and the status words come in `ru`, `en` or `es`, English for
+the rest. So despite their names `text_ru` and `instruction_ru` can hold any language.
 
 `target_lang` can be `"auto"`: the model names the app's language from the screen, and until the first screen a translation into it
 gets `409`. Once the model has named it, a translation goes into that language, whatever `to` says. `text_entry` takes `"keyboard"` or `"clipboard"`. A frame comes with the headers `X-Frame-Width` and `X-Frame-Height` (the

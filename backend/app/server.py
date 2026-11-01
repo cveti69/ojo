@@ -55,7 +55,7 @@ class Payload(BaseModel):
 
 
 class CreateSession(Payload):
-    user_lang: str = Field(default="ru", min_length=1, max_length=64)
+    user_lang: str = Field(default="ru", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")  # It goes into the model's rules.
     target_lang: str = Field(default="id", min_length=1, max_length=64)
     text_entry: Literal["keyboard", "clipboard"] = "clipboard"
     effort: Optional[Literal[step.EFFORTS]] = None
@@ -381,7 +381,7 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
             session.seen_gray = session.last_frame = None
         session.publish({
             "type": "status", "state": "broadcasting" if session.broadcasting else "broadcast_stopped",
-            "text_ru": "Демонстрация экрана включена" if session.broadcasting else "Демонстрация экрана остановлена",
+            "text_ru": session.words["sharing" if session.broadcasting else "stopped"],
         })
         return {"ok": True}
 

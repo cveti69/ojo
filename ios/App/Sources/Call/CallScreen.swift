@@ -65,7 +65,7 @@ struct CallScreen: View {
     private var title: String {
         switch model.phase {
         case .idle, .busy: return model.displayName
-        case .needsScreen: return "Покажи экран"
+        case .needsScreen: return model.words.showScreen
         case .guiding: return model.lastInstruction
         }
     }
@@ -73,20 +73,20 @@ struct CallScreen: View {
     @ViewBuilder private var actions: some View {
         VStack(spacing: 12) {
             if model.phase == .needsScreen {
-                Label("Покажи экран", systemImage: "rectangle.on.rectangle")
+                Label(model.words.showScreen, systemImage: "rectangle.on.rectangle")
                     .callButton(.accentColor)
                     .overlay { Hosted(view: model.screenShare) }
             }
             if model.windowFailed {
-                Button("Открыть окно") { model.openWindow() }
+                Button(model.words.openWindow) { model.openWindow() }
             }
             if model.phase == .idle {
                 Button { model.startCall() } label: {
-                    Label("Позвонить", systemImage: "phone.fill").callButton(.green)
+                    Label(model.words.call, systemImage: "phone.fill").callButton(.green)
                 }
             } else {
                 Button(role: .destructive) { model.endCall() } label: {
-                    Label("Завершить", systemImage: "phone.down.fill").callButton(.red)
+                    Label(model.words.hangUp, systemImage: "phone.down.fill").callButton(.red)
                 }
             }
         }

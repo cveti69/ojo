@@ -39,6 +39,7 @@ targets:
     sources:
       - App/Sources
       - App/Assets.xcassets
+      - App/Localized
     settings:
       base:
         INFOPLIST_FILE: App/Info.plist

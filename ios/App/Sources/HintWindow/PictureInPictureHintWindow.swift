@@ -274,9 +274,12 @@ extension PictureInPictureHintWindow: AVPictureInPictureSampleBufferPlaybackDele
         let identifier = ObjectIdentifier(pictureInPictureController)
         Task { @MainActor [weak self] in
             guard let self, let controller = self.controller, ObjectIdentifier(controller) == identifier else { return }
-            self.onDiagnostic?("Системная кнопка: \(playing ? "плей" : "пауза"); повтор голоса")
-            self.onRepeatHint?()
+            self.onDiagnostic?("Системная кнопка: \(playing ? "плей" : "пауза")")
             controller.invalidatePlaybackState()
+            try? await Task.sleep(nanoseconds: 1_200_000_000)  // A closing window sends a pause first and stops 0.83 s later.
+            guard self.controller === controller, controller.isPictureInPictureActive else { return }
+            self.onDiagnostic?("Повтор голоса")
+            self.onRepeatHint?()
         }
     }
 

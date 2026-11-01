@@ -22,7 +22,7 @@ enum TestFrameFactory {
         }
     }
 
-    static func make(number: Int? = nil, date: Date = Date(), title: String = "Ожидание\nподсказки") -> UIImage {
+    static func make(number: Int? = nil, date: Date = Date(), title: String = "") -> UIImage {
         let size = CGSize(width: 720, height: 960)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1

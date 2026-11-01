@@ -1,0 +1,3 @@
+NSLocalNetworkUsageDescription = "Доступ к сети нужен для связи с выбранным сервером подсказок.";
+NSMicrophoneUsageDescription = "Микрофон нужен, чтобы вы могли произнести цель звонка.";
+NSSpeechRecognitionUsageDescription = "Распознавание речи нужно, чтобы понять вашу цель на русском языке.";

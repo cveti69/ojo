@@ -195,6 +195,9 @@ private enum ProtocolChecks {
         chosen.thinking = .high
         let chosenBody = try JSONSerialization.jsonObject(with: JSONEncoder().encode(CreateSessionRequest(settings: chosen))) as! [String: Any]
         try check(chosenBody["effort"] as? String == "high", "a chosen level reaches the server")
+        let english = ServerSettings(serverURL: settings.serverURL, token: settings.token, userLang: "en-US", targetLang: "auto", textEntry: .clipboard)
+        let englishBody = try JSONSerialization.jsonObject(with: JSONEncoder().encode(CreateSessionRequest(settings: english))) as! [String: Any]
+        try check(englishBody["user_lang"] as? String == "en-US", "the phone's whole language tag reaches the server")
         let typedLine = requests.first { $0.url!.path.hasSuffix("/words") }!
         let typedBody = try JSONSerialization.jsonObject(with: body(of: typedLine)) as! [String: String]
         try check(typedBody == ["text": "Что это?"], "typed line body")
@@ -285,6 +288,7 @@ private enum ProtocolChecks {
         try checkStillness()
         try checkShelf()
         try checkPauseWords()
+        try checkCallWords()
         try checkScreenTextGeometry()
         try checkSentences()
         try checkSettingsAndMailbox()
@@ -522,6 +526,12 @@ private enum ProtocolChecks {
         try check(WindowFinder.find(dimmed, width: width, height: height, side: 64) != nil, "the window dimmed by its controls is found")
         let turned = picture(width: height, height: width, window: (300, 20, 64))
         try check(WindowFinder.find(turned, width: height, height: width, side: 64) != nil, "the window on a turned screen is found")
+        var nosed = picture(width: width, height: height, window: (20, 200, 90))  // A hook in the very colour of the border.
+        fill(&nosed, width: width, 63..<67, 250..<266, violet)
+        fill(&nosed, width: width, 56..<67, 261..<266, violet)
+        try check(WindowFinder.find(nosed, width: width, height: height, side: 64) ==
+                  WindowFinder.find(picture(width: width, height: height, window: (20, 200, 90)), width: width, height: height, side: 64),
+                  "a nose in the border's colour leaves the window where it was")
         var banner = picture(width: width, height: height, window: nil)
         fill(&banner, width: width, 0..<width, 60..<110, violet)
         try check(WindowFinder.find(banner, width: width, height: height, side: 64) == nil, "a violet banner is not a window")
@@ -808,18 +818,46 @@ private enum ProtocolChecks {
     }
 
     private static func checkPauseWords() throws {
-        var words = PauseWords()
-        let start = Date()
-        var said: [String] = []
-        for step in 0..<18 {
-            guard let word = words.next(now: start.addingTimeInterval(Double(step) * (PauseWords.gap + 1))) else {
-                throw CheckFailure(description: "a word after a long pause")
+        for language in [CallWords.russian, .english, .spanish] {
+            var words = PauseWords(language.pause)
+            let start = Date()
+            var said: [String] = []
+            for step in 0..<18 {
+                guard let word = words.next(now: start.addingTimeInterval(Double(step) * (PauseWords.gap + 1))) else {
+                    throw CheckFailure(description: "a word after a long pause")
+                }
+                try check(word != said.last, "the same pause word twice in a row: \(word)")
+                said.append(word)
             }
-            try check(word != said.last, "the same pause word twice in a row: \(word)")
-            said.append(word)
+            try check(Set(said).count == language.pause.count, "every pause word gets its turn")
+            try check(words.next(now: start.addingTimeInterval(17 * (PauseWords.gap + 1) + 5)) == nil, "pause words stay rare")
         }
-        try check(Set(said).count == PauseWords.all.count, "every pause word gets its turn")
-        try check(words.next(now: start.addingTimeInterval(17 * (PauseWords.gap + 1) + 5)) == nil, "pause words stay rare")
+    }
+
+    private static func checkCallWords() throws {
+        for tag in ["ru", "ru-RU", "RU", "ru_RU", "ru-ID"] { try check(CallWords.of(tag) == .russian, "a Russian phone: \(tag)") }
+        for tag in ["es", "es-MX", "es_ES", "es-419"] { try check(CallWords.of(tag) == .spanish, "a Spanish phone: \(tag)") }
+        for tag in ["en", "en-US", "de-DE", "zh-Hans-CN", "est", "rue", ""] { try check(CallWords.of(tag) == .english, "English for \(tag)") }
+        try check(CallWords.device == .of(Locale.preferredLanguages.first ?? "en"), "the words follow the phone")
+        func strings(_ words: CallWords) -> [String] {
+            Mirror(reflecting: words).children.flatMap { child -> [String] in
+                (child.value as? [String]) ?? [child.value as! String]
+            }
+        }
+        let russian = strings(.russian)
+        for language in [CallWords.russian, .english, .spanish] {
+            let all = strings(language)
+            try check(all.count == russian.count && all.allSatisfy { !$0.isEmpty }, "every word has its text")
+            try check(language.pause.count == 6 && Set(language.pause).count == 6, "six different pause words")
+            let spoken = [language.greeting, language.failed, language.lostHearing, language.noHintYet] + language.pause
+            try check(spoken.allSatisfy { $0.last.map { ".?!".contains($0) } == true }, "what is said ends as a sentence")
+        }
+        for words in strings(.english) + strings(.spanish) {
+            try check(words.unicodeScalars.allSatisfy { !(0x0400...0x04FF).contains($0.value) }, "no Russian left in \(words)")
+        }
+        try check(zip(russian, strings(.english)).filter { $0 == $1 }.isEmpty, "every English word is written out")
+        try check(zip(strings(.english), strings(.spanish)).filter { $0 == $1 }.isEmpty, "every Spanish word is written out")
+        try check(CallWords.russian.greeting == "Привет, чем помочь?", "a Russian call opens as it always did")
     }
 
     private static func checkSentences() throws {
@@ -874,7 +912,9 @@ private enum ProtocolChecks {
         store.voice = "voice-1"
         try check(defaults.string(forKey: "voice") == "voice-1", "a chosen voice stays")
         try check(store.settings.thinking == .auto && store.settings.character == .warm, "default level and manner")
-        try store.save(serverAddress: "https://example.invalid", token: "", userLang: "ru", targetLang: "id", textEntry: .clipboard,
+        defaults.set("zz", forKey: "userLang")  // An older build saved one.
+        try check(store.settings.userLang == Locale.preferredLanguages.first ?? "en", "the language is the phone's at every call")
+        try store.save(serverAddress: "https://example.invalid", token: "", targetLang: "id", textEntry: .clipboard,
                        thinking: .medium, character: .brief, ownCharacter: "")
         try check(store.settings.thinking == .medium && store.settings.character == .brief, "saved level and manner")
         store.screenTextMode = .extension
@@ -885,9 +925,12 @@ private enum ProtocolChecks {
                   "restore extensionFast from App Group")
         store.seedDefaultToken(configuration.defaultServerToken)
         try check(store.settings.token == "fixture-token", "seed missing token")
-        defaults.set("owner-token", forKey: "token")
+        defaults.set("old-token", forKey: "token")
         store.seedDefaultToken(configuration.defaultServerToken)
-        try check(store.settings.token == "owner-token", "keep existing token")
+        try check(store.settings.token == "fixture-token", "a build with a new token replaces the old one")
+        defaults.set("owner-token", forKey: "token")
+        store.seedDefaultToken("")
+        try check(store.settings.token == "owner-token", "a build with no token keeps the typed one")
         defaults.set(nil, forKey: "token")
         store.seedDefaultToken("")
         try check(store.settings.token.isEmpty, "missing local token")
