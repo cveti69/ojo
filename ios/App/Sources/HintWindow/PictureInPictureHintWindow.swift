@@ -6,7 +6,8 @@ import UIKit
 
 @MainActor
 final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
-    private var useVideoCallFallback = false
+    /// The video call window has no system buttons, so nothing dims it over its border. False brings back the sample buffer window.
+    static let usesVideoCall = true
     private static let frameSize = CGSize(width: 720, height: 960)
 
     var inlineView: UIView { sourceView }
@@ -22,13 +23,6 @@ final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
     private var videoCallView: SampleBufferView?
     private var pixelBufferPool: CVPixelBufferPool?
 
-    func setVideoCallFallback(_ enabled: Bool) {
-        guard enabled != useVideoCallFallback else { return }
-        stop()
-        useVideoCallFallback = enabled
-        onDiagnostic?("Источник окна: \(enabled ? "видеозвонок" : "sample buffer")")
-    }
-
     func prepare() {
         guard controller == nil else { return }
         guard AVPictureInPictureController.isPictureInPictureSupported() else {
@@ -37,7 +31,7 @@ final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
         }
 
         let contentSource: AVPictureInPictureController.ContentSource
-        if useVideoCallFallback {
+        if Self.usesVideoCall {
             let callController = AVPictureInPictureVideoCallViewController()
             callController.preferredContentSize = Self.frameSize
             let callView = SampleBufferView()
@@ -77,14 +71,12 @@ final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
     }
 
     func display(image: UIImage) throws {
-        let sampleBuffer = try makeSampleBuffer(from: image)
-        sourceView.enqueue(sampleBuffer)
-        videoCallView?.enqueue(sampleBuffer)
+        enqueue(try makeSampleBuffer(from: image))
         controller?.invalidatePlaybackState()
     }
 
     func display(background: CGImage, drawing: (CGContext) -> Void) throws -> Bool {
-        guard sourceView.isReady else { return false }
+        guard shownView.isReady else { return false }
         let sampleBuffer = try makeSampleBuffer { context in
             // Before the flip the picture goes in as it is, the cheapest way. This runs 30 times a second.
             context.draw(background, in: CGRect(origin: .zero, size: Self.frameSize))
@@ -92,9 +84,21 @@ final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
             context.scaleBy(x: 1, y: -1)
             drawing(context)
         }
-        sourceView.enqueue(sampleBuffer)
-        videoCallView?.enqueue(sampleBuffer)
+        enqueue(sampleBuffer)
         return true
+    }
+
+    /// The one the person sees. In the app that is the source view, and in the open window of a video call its own view.
+    private var shownView: SampleBufferView {
+        if let videoCallView, controller?.isPictureInPictureActive == true { return videoCallView }
+        return sourceView
+    }
+
+    /// The other view can stand still for the whole call, so it only takes what it has room for.
+    private func enqueue(_ sampleBuffer: CMSampleBuffer) {
+        for view in [sourceView, videoCallView].compactMap({ $0 }) where view === shownView || view.isReady {
+            view.enqueue(sampleBuffer)
+        }
     }
 
     func startPictureInPicture() {
@@ -243,7 +247,10 @@ final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
     private final class SampleBufferView: UIView {
         override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
         var displayLayer: AVSampleBufferDisplayLayer { layer as! AVSampleBufferDisplayLayer }
-        var isReady: Bool { displayLayer.sampleBufferRenderer.isReadyForMoreMediaData }
+        var isReady: Bool {  // A stuck renderer counts too: only `enqueue` brings it back.
+            let renderer = displayLayer.sampleBufferRenderer
+            return renderer.isReadyForMoreMediaData || renderer.status == .failed || renderer.requiresFlushToResumeDecoding
+        }
 
         init() {
             super.init(frame: .zero)

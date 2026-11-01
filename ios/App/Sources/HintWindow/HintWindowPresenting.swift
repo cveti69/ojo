@@ -7,7 +7,6 @@ protocol HintWindowPresenting: EyesSurface {
     var onRepeatHint: (() -> Void)? { get set }
     var onDiagnostic: ((String) -> Void)? { get set }
 
-    func setVideoCallFallback(_ enabled: Bool)
     func prepare()
     func display(image: UIImage) throws
     func display(jpegData: Data) throws

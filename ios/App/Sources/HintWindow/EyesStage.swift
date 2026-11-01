@@ -65,7 +65,7 @@ final class EyesStage {
 
     func start() {
         startedAt = ProcessInfo.processInfo.systemUptime
-        journal?.append("Глаза: включены")
+        journal?.append("Глаза: включены, рамка \(frame.rawValue)")
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.tick() } }
         timer.schedule(deadline: .distantFuture)
@@ -80,7 +80,7 @@ final class EyesStage {
         self.timer = nil
         let seconds = clock
         let perFrame = frames > 0 ? drawing / Double(frames) * 1000 : 0
-        journal?.append("Глаза: кадров \(frames) за \(Self.number(seconds)) с, \(Self.number(perFrame)) мс на кадр, не приняты \(skipped)")
+        journal?.append("Глаза: кадров \(frames) за \(Self.number(seconds)) с, \(Self.number(perFrame)) мс на кадр, не приняты \(skipped), жестов рамки \(director.stirs)")
     }
 
     private var clock: TimeInterval { ProcessInfo.processInfo.systemUptime - startedAt }
@@ -148,16 +148,13 @@ final class EyesStage {
         tick()
     }
 
-    /// Only their words start the clock. A screen the agent looks at by itself leaves the window at rest.
     func wait(for reason: Wait) {
         waits.insert(reason)
         director.isOnNewScreen = waits.contains(.screen)
-        if reason == .reply {
-            director.beginWaiting(at: clock)
-            if question != nil {
-                question = nil
-                needsComposing = true
-            }
+        director.beginWaiting(at: clock)
+        if reason == .reply, question != nil {
+            question = nil
+            needsComposing = true
         }
         tick()
     }
@@ -165,7 +162,7 @@ final class EyesStage {
     func stopWaiting(for reason: Wait, redraw: Bool = true) {
         waits.remove(reason)
         director.isOnNewScreen = waits.contains(.screen)
-        if reason == .reply { director.endWaiting() }
+        if waits.isEmpty { director.endWaiting() }
         if redraw { tick() }
     }
 
@@ -192,8 +189,14 @@ final class EyesStage {
         tick()
     }
 
+    func stir() {
+        director.beginStir(at: clock)
+        tick()
+    }
+
     func change(frame: EyesFrame) {
         self.frame = frame
+        journal?.append("Глаза: рамка \(frame.rawValue)")
         redraw()
     }
 
@@ -213,6 +216,7 @@ final class EyesStage {
             director.isOnNewScreen = false
             director.endWaiting()
         }
+        director.isHidden = isLinkDown || (scene == .hint && hint != nil)
         let pose = director.advance(to: now)
         if director.mood != mood {
             journal?.append("Глаза: \(director.mood.rawValue), до этого \(mood.rawValue) \(Self.number(now - moodSince)) с")
@@ -225,7 +229,7 @@ final class EyesStage {
             notice = wanted
             compose()
         }
-        let moved = eyesBox != nil && motion.settle(by: min(now - settledAt, Self.longestStep), mood: mood, level: director.level, gaze: pose.x)
+        let moved = eyesBox != nil && motion.settle(by: min(now - settledAt, Self.longestStep), mood: mood, level: director.level, gaze: pose.x, stir: director.stir, place: director.stirPlace)
         settledAt = now
         if moved { shown = nil }
         if pose != shown { draw(pose) }

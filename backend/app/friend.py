@@ -274,6 +274,8 @@ class Friend:
         if session.open_words:  # They went on before the agent spoke, so both are one line.
             said = session.open_words + " " + said
             del session.chat[session.open_mark:]
+        else:
+            session.open_screen = None
         session.open_words = said
         session.open_mark = len(session.chat)
         session.turn += 1
@@ -300,7 +302,7 @@ class Friend:
                 session.restarts = MAX_RESTARTS  # With no new frame to go by, the answer goes with any screen.
             self.look(session, session.last_frame)
 
-    def _reask(self, session: Session) -> None:
+    def _reask(self, session: Session, frame: Optional[Frame] = None) -> None:
         """Their words have no answer they heard and the screen they were about has gone. The frame that shows the new one
         may be here already, otherwise the next one brings the answer."""
         about = next((turn["frame"] for turn in session.chat[session.open_mark:] if turn.get("frame")), None)
@@ -309,7 +311,9 @@ class Friend:
             self._see(session, session.open_words)
             return
         session.heard, session.settling = session.open_words, True
-        if about and _gone(session, about) and _still(session):
+        if frame and session.changed_at is None:
+            self.look(session, frame)
+        elif about and _gone(session, about) and _still(session):
             self.look(session, session.last_frame)
         else:
             self._run(self._no_look(session, session.turn, True))
@@ -317,6 +321,7 @@ class Friend:
     def look(self, session: Session, frame: Optional[Frame]) -> None:
         said, session.heard = session.heard, ""
         session.settling = False
+        session.open_screen = session.open_screen or frame
         if frame and _new_screen(session, frame):
             self._left(session)
         if frame and _ahead(session, frame):
@@ -373,16 +378,26 @@ class Friend:
                 session.held = True
                 return False, "busy"
             session.restarts += 1
-        self._start(session, session.words["silent"], frame)
-        return True, None
+        self._take_turn(session, frame)
+        return (False, "looking") if session.heard else (True, None)
+
+    def _take_turn(self, session: Session, frame: Frame) -> None:
+        """A new screen takes a turn. While their words have no answer it is their turn: told that they are silent, the
+        model believes the last thing it reads."""
+        if _unanswered(session):
+            session.note("asked again", turn=session.turn)
+            self._stop(session)
+            self._reask(session, frame)
+        else:
+            self._start(session, session.words["silent"], frame)
 
     def _turn_away(self, session: Session, frame: Optional[Frame]) -> None:
-        """From here on no frame is taken for a turn or kept, and those of this turn go from the chat and the log. The last
-        screen can have stood there since an earlier turn that kept it, and a stopped answer leaves it nowhere else."""
+        """From here on no frame is taken for a turn or kept, and those of this turn go from the chat and the log. The frame
+        their words first went with can have stood there since an earlier turn that kept it, and a stopped answer leaves it nowhere else."""
         if session.not_looking:
             return
         self._left(session)
-        closing = [frame, session.last_frame] + [turn.get("frame") for turn in session.chat[session.open_mark:]]
+        closing = [frame, session.last_frame, session.open_screen] + [turn.get("frame") for turn in session.chat[session.open_mark:]]
         stamps = {seen.timestamp_ms for seen in closing if seen}
         for turn in session.chat:
             if turn.get("frame") and turn["frame"].timestamp_ms in stamps:
@@ -390,7 +405,7 @@ class Friend:
         if session.call_log:
             for timestamp_ms in stamps:
                 session.call_log.forget(timestamp_ms)
-        session.seen_gray = session.last_frame = session.changed_at = None
+        session.seen_gray = session.last_frame = session.open_screen = session.changed_at = None
         session.note("not looking", on=True)
         session.publish({"type": "not_looking", "on": True})
 
@@ -562,7 +577,7 @@ class Friend:
         now = session.last_frame
         if held and now and not session.heard and not session.ended and _new_screen(session, now):
             session.answer = None  # This one is done, and it is what would be stopped.
-            self._start(session, session.words["silent"], now)  # The screen that had to wait would otherwise go unseen.
+            self._take_turn(session, now)  # The screen that had to wait would otherwise go unseen.
 
     async def _reply(self, session: Session, turn: int, frame: Optional[Frame]) -> None:
         started = time.perf_counter()

@@ -53,20 +53,18 @@ private final class EyesPreview: ObservableObject, EyesSurface {
     }
 
     private func run(on stage: EyesStage) async {
-        await step("Покой", 3)
-        stage.newScreen()
-        await step("Экран сменился, никто не спросил: покой", 2)
-        stage.wait(for: .reply)
+        await step("Покой", 2)
+        stage.stir()
+        await step("Покой: рамка шевельнулась", 1.5)
         stage.newScreen()
         stage.wait(for: .screen)
-        await step("Человек спросил, экран сменился: читает", 2.7)
+        await step("Экран сменился: читает", 2.7)
         await step("Ждём ответа: думает", 3)
         for (title, joke) in [("Шутка: круг", EyesJoke.circle), ("Шутка: в кучу", .cross), ("Шутка: прищур", .squint)] {
             guard !Task.isCancelled else { return }
             stage.perform(joke)
             await step(title, joke.length + 0.5)
         }
-        stage.stopWaiting(for: .reply)
         stage.stopWaiting(for: .screen)
         guard !Task.isCancelled else { return }
         talk = Task {

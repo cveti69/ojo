@@ -32,10 +32,10 @@ open App.xcodeproj
 4. `ServerSpeaker` plays each line as it arrives from `POST /speech`, on `AVAudioEngine`. With no sound in time, `SystemSpeaker` reads
    the line in the system voice. The agent does not hear the person while it speaks and for 0.3 seconds after. The voice setting
    behind "⋯" lists the voices from `/voices` and works from the next line.
-5. With no answer 1.5 seconds after a phrase, the phone says a short waiting phrase from `PauseWords`, in Russian calls only.
+5. With no answer 1.5 seconds after a phrase, the phone says a short waiting phrase from `PauseWords`, in the language of the call.
 6. A `hint` event carries a 720×960 picture for the floating window: a zoomed part of the screen with the target outlined.
-   `PictureInPictureHintWindow` draws it through `AVSampleBufferDisplayLayer`. A second window source, based on a video call, stays in
-   the code with no switch on screen.
+   `PictureInPictureHintWindow` shows it in a video call window, which has no system buttons. The sample buffer window stays in the
+   code with no switch on screen, and `usesVideoCall` brings it back.
 7. `paste_text` goes to `UIPasteboard` as soon as it arrives. iOS lets a background app reach the clipboard only while the window is
    open, so if the write fails, it is repeated when the person comes back. The keyboard road stays in the code with no setting on
    screen: with it the keyboard takes the text from `/suggestions` instead.
@@ -104,5 +104,5 @@ sh ios/scripts/check-protocol.sh
 settings, frame comparison, phrase detection and the movements of the eyes, with strict concurrency and warnings as errors.
 `--vision` also runs text reading on a drawn picture.
 
-In the Simulator a file, `tmp/heard.wav` in the app's data folder, stands in for the microphone. The broadcast, the floating window
-and the keyboard flow need a real iPhone.
+In the Simulator a file, `tmp/heard.wav` in the app's data folder, stands in for the microphone. The floating window opens only on an
+iPad Simulator: iPhone Simulators report no support for it. The broadcast and the keyboard flow need a real iPhone.

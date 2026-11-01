@@ -71,7 +71,9 @@ with `frame_ts: null` and goes with any screen, or a video on the whole screen w
 
 A frame counts as a new screen if at least 38% of the picture changed since the frame of the last turn: a video, a banner or the
 keyboard do not change that much, and a transition does. Such a frame reaches the model with a note that the person is silent, and
-the model decides by itself whether to say something.
+the model decides by itself whether to say something. While their words have no answer heard it is their turn instead: the answer in
+flight stops and the same words go to the model with this frame and no such note, or with the next frame if `/changed` has announced
+a change after this one. A question asked before the broadcast starts goes on to its first frame this way.
 
 A new turn cancels the answer in flight. Its turn stays in the chat and goes out with the next one. A screen that does not settle
 cancels an answer at most 2 times in a row. With no line in 8 seconds, or a broken answer, the spare model starts beside the main
@@ -83,9 +85,9 @@ watch the screen at all, in any words and any language. The server reads this fi
 `not_looking` with `on: true` as soon as it is written. The rules list it first, and an answer that writes it first sends no early
 line, so the event goes ahead of the line that says so. An answer that writes it after `say` speaks first, and the event follows.
 From then on the server takes no frame for a turn and keeps none: `/frames` answers with `reason: not_looking`, `/changed` does
-nothing, `/look` answers 409, and the frames of that turn leave the chat and the log, the last frame of the call among them. The spare
-model, if it starts after that, gets no picture. The phone stops sending frames and reading text, and the broadcast stays on. Text
-read before that can still reach `/text`: it keeps a payment screen out of the log.
+nothing, `/look` answers 409, and the frames of that turn leave the chat and the log, the last frame of the call and the first one
+their words went with among them. The spare model, if it starts after that, gets no picture. The phone stops sending frames and
+reading text, and the broadcast stays on. Text read before that can still reach `/text`: it keeps a payment screen out of the log.
 
 The field counts even if a new screen has stopped its answer by then, in the same turn. A later turn ignores it. Whatever took over
 from that answer stops, and a look or a wait for a frame is dropped. If no line has gone out, their words go to the model with no
@@ -153,11 +155,11 @@ turn.
 
 In a call with `eyes` the window has two states. With a hint it shows the picture with no eyes: a piece of the screen, the outline
 and one short line, the first sentence as far as it fits. With no hint it shows the eyes and a word for what is really going on:
-Слушаю, Смотрю, Думаю, Говорю, Я рядом, Всё ещё думаю after 12 seconds with no answer, Не смотрю. Смотрю and Думаю come only while
-the person waits for an answer: a new screen nobody asked about leaves the window at rest. The phone takes these from real events, not
-from the model. The hint event has one more field, `calm`: a payment, card or password screen, the eyes only rest.
+Слушаю, Смотрю, Думаю, Говорю, Я рядом, Всё ещё думаю after 12 seconds with no answer, Не смотрю. The phone takes these from real
+events, not from the model. The hint event has one more field, `calm`: a payment, card or password screen, the eyes only rest.
 
-A call with `eyes` has two more events. `reading`: a new screen came. `face`, at
+A call with `eyes` has two more events. `reading`: a new screen came, and the eyes read it while the answer is on its way, whether the
+person asked anything or not. `face`, at
 the end of every answer: `{"type":"face","turn":3,"face":null,"calm":false}`. `face` is always `null`, and a build before 2 November
 reads it as no face. `calm`: a payment, card or password screen. Such an event also comes ahead of the answer if payment words were
 found in the text of a frame the server already has.

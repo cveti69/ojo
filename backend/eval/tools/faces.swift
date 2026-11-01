@@ -19,6 +19,10 @@ enum Faces {
         states.append(("reading", "Смотрю", EyePose(x: 0.75, y: -0.6), EyesFrameMotion(look: 1, gaze: 0.75)))
         states.append(("thinking", "Думаю", EyePose(x: 0.7, y: -0.75, squint: 0.35, brow: 1), EyesFrameMotion(think: 1, gaze: 0.7)))
         states.append(("speaking", "Говорю", EyePose(), EyesFrameMotion(speak: 1)))
+        for (side, place) in [("top", 0.11), ("corner", 0.21), ("right", 0.36), ("bottom", 0.61), ("left", 0.86)] {
+            let gaze = EyesFrame.direction(of: place)
+            states.append(("hop \(side)", "Я рядом", EyePose(x: gaze.x, y: gaze.y), EyesFrameMotion(stir: 1, place: place)))
+        }
         for frame in EyesFrame.allCases {
             for state in states {
                 for (index, moment) in moments.enumerated() {

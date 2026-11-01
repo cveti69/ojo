@@ -227,7 +227,8 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 return
             }
             if waited > 0 {
-                check.run.journal.append("Экран успокоился за \(String(format: "%.1f", locale: Locale(identifier: "ru_RU"), waited)) с")
+                let locale = Locale(identifier: "ru_RU")
+                check.run.journal.append("Экран успокоился за \(String(format: "%.1f", locale: locale, waited)) с, доля изменений \(String(format: "%.2f", locale: locale, share))")
             }
             guard let jpeg = makeSmallJPEG(image) else {
                 skipFrame(runID: check.run.id)

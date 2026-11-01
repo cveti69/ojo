@@ -74,14 +74,6 @@ public final class SharedStore: @unchecked Sendable {
         }
     }
 
-    public var useVideoCallFallback: Bool {
-        get { defaults.bool(forKey: "useVideoCallFallback") }
-        set {
-            defaults.set(newValue, forKey: "useVideoCallFallback")
-            defaults.synchronize()
-        }
-    }
-
     /// The next line sounds in it. Nothing chosen leaves it to the server.
     public var voice: String? {
         get {

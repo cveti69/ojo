@@ -72,7 +72,9 @@ public struct CallWords: Sendable, Equatable {
 
     public static let russian = CallWords(
         greeting: "Привет, чем помочь?",
-        pause: ["Сейчас подумаю.", "Секунду.", "Так, дай подумать.", "Минутку.", "Сейчас скажу.", "Погоди секунду."],
+        pause: ["Сейчас подумаю.", "Секунду.", "Так, дай подумать.", "Минутку.", "Сейчас скажу.", "Погоди секунду.",
+                "Момент.", "Сейчас.", "Дай соображу.", "Сейчас прикину.", "Уже разбираюсь.", "Секундочку.", "Ага, сейчас.",
+                "Один момент.", "Уже думаю.", "Скоро отвечу."],
         failed: "Не получилось ответить, повтори, пожалуйста.",
         lostHearing: "Я перестал тебя слышать. Открой наше приложение на секунду, и снова услышу.",
         noHintYet: "Пока нет подсказки. Ожидайте.",
@@ -124,7 +126,9 @@ public struct CallWords: Sendable, Equatable {
 
     public static let english = CallWords(
         greeting: "Hi, how can I help?",
-        pause: ["Let me think.", "One second.", "Hold on.", "Just a moment.", "Let me see.", "Give me a second."],
+        pause: ["Let me think.", "One second.", "Hold on.", "Just a moment.", "Let me see.", "Give me a second.",
+                "One moment.", "One sec.", "Let me work that out.", "Let me think about that.", "Working on it.", "Just a second.",
+                "Okay, one sec.", "One moment, please.", "Thinking it over.", "I'll tell you in a sec."],
         failed: "Sorry, I couldn't answer. Please say that again.",
         lostHearing: "I can't hear you anymore. Open our app for a second and I'll hear you again.",
         noHintYet: "No hint yet. Please wait.",

@@ -6,6 +6,7 @@ struct EyesFrameMotion: Equatable {
     private static let speed = 5.0  // Per second: a change of state takes about 0.2 s.
     private static let levelSpeed = 8.0
     private static let gazeSpeed = 7.0
+    private static let stirSpeed = 8.0  // Quick enough to follow the hop, and to end it when someone starts to talk.
 
     var speak = 0.0
     var think = 0.0
@@ -13,9 +14,11 @@ struct EyesFrameMotion: Equatable {
     var level = 0.0  // The voice, from 0 to 1.
     var gaze = 0.0  // Where the eyes look while they think or read: -1 is left, 1 is right.
     var time = 0.0
+    var stir = 0.0  // One detail off its place, from 0 to 1, in a rare moment of rest.
+    var place = 0.0  // Where on the ring it is: 0 is the top left, and it goes clockwise.
 
     /// True while the picture changes, the step that brings it to rest included: that still picture has to go out too.
-    mutating func settle(by passed: TimeInterval, mood: EyesMood, level heard: Double, gaze looking: Double) -> Bool {
+    mutating func settle(by passed: TimeInterval, mood: EyesMood, level heard: Double, gaze looking: Double, stir stirred: Double = 0, place spot: Double = 0) -> Bool {
         let before = self
         speak = EyesDirector.approach(speak, mood == .speaking ? 1 : 0, by: passed * Self.speed)
         think = EyesDirector.approach(think, mood == .thinking ? 1 : 0, by: passed * Self.speed)
@@ -24,6 +27,8 @@ struct EyesFrameMotion: Equatable {
         let seeks = mood == .thinking || mood == .reading
         gaze = EyesDirector.approach(gaze, seeks ? looking : 0, by: passed * Self.gazeSpeed)
         time = speak + think + look + level + abs(gaze) > 0 ? time + passed : 0
+        stir = EyesDirector.approach(stir, stirred, by: passed * Self.stirSpeed)
+        if stirred > 0 { place = spot } else if stir == 0 { place = 0 }
         return self != before
     }
 }
@@ -50,6 +55,7 @@ enum EyesFrame: String, CaseIterable, Sendable {
     private static let iris: Ink = (108, 92, 255)
     private static let glowTone: Ink = (52, 44, 168)
     private static let glowDepth: CGFloat = 136
+    private static let flareReach: CGFloat = 150
     private static let tickWidth: CGFloat = 9
 
     private static let scallops: [Scallop] = {
@@ -74,6 +80,24 @@ enum EyesFrame: String, CaseIterable, Sendable {
         return top + right + bottom + left
     }()
 
+    /// Which way the eyes go to see that place on the ring.
+    static func direction(of place: Double) -> (x: Double, y: Double) {
+        let spot = spot(at: place)
+        let (x, y) = (Double((spot.x - inside.midX) / (inside.width / 2)), Double((spot.y - inside.midY) / (inside.height / 2)))
+        let reach = 0.85 / max(1, hypot(x, y))
+        return (x * reach, y * reach)
+    }
+
+    private static func spot(at place: Double) -> CGPoint {
+        var along = CGFloat(place) * 2 * (inside.width + inside.height)
+        if along < inside.width { return CGPoint(x: inside.minX + along, y: inside.minY) }
+        along -= inside.width
+        if along < inside.height { return CGPoint(x: inside.maxX, y: inside.minY + along) }
+        along -= inside.height
+        if along < inside.width { return CGPoint(x: inside.maxX - along, y: inside.maxY) }
+        return CGPoint(x: inside.minX, y: inside.maxY - (along - inside.width))
+    }
+
     func draw(_ motion: EyesFrameMotion, on context: CGContext) {
         context.saveGState()
         defer { context.restoreGState() }
@@ -87,15 +111,19 @@ enum EyesFrame: String, CaseIterable, Sendable {
     private static func drawLace(_ motion: EyesFrameMotion, on context: CGContext) {
         let count = Double(scallops.count)
         let walker = (motion.time * 7).truncatingRemainder(dividingBy: count)
+        let stirred = Int(motion.place * count)
         for (index, scallop) in scallops.enumerated() {
             let place = Double(index)
+            let hop = index == stirred ? motion.stir : 0
+            let lift = scallop.radius * CGFloat(hop)  // It leaves the row, straight inwards.
             let swell = motion.speak * 0.34 * wave(place * 2 * .pi / 9 - motion.time * 5)
                 + motion.level * 0.3 * wave(place * 2.4 + motion.time * 9)
                 + (motion.think + motion.look) * 0.3 * closeness(of: place, to: walker, among: count, within: 2.5)
-            context.addArc(center: scallop.center, radius: scallop.radius * CGFloat(1 + swell), startAngle: scallop.turn - 0.04,
+            let center = CGPoint(x: scallop.center.x - sin(scallop.turn) * lift, y: scallop.center.y + cos(scallop.turn) * lift)
+            context.addArc(center: center, radius: scallop.radius * CGFloat(1 + swell), startAngle: scallop.turn - 0.04,
                            endAngle: scallop.turn + .pi + 0.04, clockwise: false)
             context.closePath()
-            let share = min(1, 0.52 + swell * 1.4)
+            let share = min(1, 0.52 + swell * 1.4 + hop * 0.48)
             context.setFillColor(red: CGFloat((deep.red + (iris.red - deep.red) * share) / 255),
                                  green: CGFloat((deep.green + (iris.green - deep.green) * share) / 255),
                                  blue: CGFloat((deep.blue + (iris.blue - deep.blue) * share) / 255), alpha: 1)
@@ -127,11 +155,19 @@ enum EyesFrame: String, CaseIterable, Sendable {
              CGRect(x: inside.minX, y: inside.minY, width: depth, height: inside.height), left)
         band(CGPoint(x: inside.maxX, y: 0), CGPoint(x: inside.maxX - depth, y: 0),
              CGRect(x: inside.maxX - depth, y: inside.minY, width: depth, height: inside.height), right)
+        let ink = [CGFloat(iris.red / 255), CGFloat(iris.green / 255), CGFloat(iris.blue / 255)]
+        guard motion.stir > 0, let flare = CGGradient(colorSpace: CGColorSpaceCreateDeviceRGB(), colorComponents: ink + [1] + ink + [0],
+                                                      locations: [0, 1], count: 2) else { return }
+        let spot = spot(at: motion.place)  // A patch of the light flares up and goes out.
+        context.clip(to: inside)
+        context.setAlpha(CGFloat(motion.stir))
+        context.drawRadialGradient(flare, startCenter: spot, startRadius: 0, endCenter: spot, endRadius: flareReach, options: [])
     }
 
     private static func drawTicks(_ motion: EyesFrameMotion, on context: CGContext) {
         let count = Double(marks.count)
         let walker = (motion.time * 20).truncatingRemainder(dividingBy: count)
+        let stirred = Int(motion.place * count)
         context.setLineCap(.round)
         context.setLineWidth(tickWidth)
         for (index, tick) in marks.enumerated() {
@@ -139,8 +175,9 @@ enum EyesFrame: String, CaseIterable, Sendable {
             let bounce = 0.5 + 0.5 * sin(place * 1.9 + motion.time * 7) * sin(place * 0.7 - motion.time * 3.1)
             let ripple = wave(place * 0.34 - motion.time * 5.5)
             let near = closeness(of: place, to: walker, among: count, within: 5)
-            let length = 10 + motion.level * (14 + 62 * bounce) + motion.speak * (6 + 44 * ripple) + (motion.think + motion.look) * 30 * near
-            let alpha = 0.78 + 0.22 * (motion.level + motion.speak * ripple + near * (motion.think + motion.look))
+            let hop = index == stirred ? motion.stir : 0
+            let length = 10 + motion.level * (14 + 62 * bounce) + motion.speak * (6 + 44 * ripple) + (motion.think + motion.look) * 30 * near + 64 * hop
+            let alpha = 0.78 + 0.22 * (motion.level + motion.speak * ripple + near * (motion.think + motion.look) + hop)
             context.setStrokeColor(red: CGFloat(iris.red / 255), green: CGFloat(iris.green / 255), blue: CGFloat(iris.blue / 255), alpha: CGFloat(min(1, alpha)))
             context.move(to: tick.start)
             context.addLine(to: CGPoint(x: tick.start.x + tick.inward.dx * CGFloat(length), y: tick.start.y + tick.inward.dy * CGFloat(length)))

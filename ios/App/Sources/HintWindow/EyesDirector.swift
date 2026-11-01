@@ -67,11 +67,16 @@ struct EyesDirector {
     private static let stoppedPupil = 0.6
     private static let hearingGap = 0.4  // Sound comes in pieces of 0.1 s, so this means it stopped.
     private static let softSpeed = 8.0  // Per second: the squint, the brow and the pupil take about 0.12 s.
+    private static let stirGap = 17.0...23.0  // About twenty seconds between the rare moves of the drawing.
+    private static let stirFor = 0.5...1.0
+    private static let stirNotice = 0.12  // The eyes catch it a moment after it moves.
+    private static let stirAfterRest = 3.0  // Any sooner and it reads as an answer to what just ended.
 
     var isSpeaking = false
     var isCalm = false  // Payment, card, password: nothing but rest.
     var isOnNewScreen = false  // Nobody has said yet what this screen is, and it can be a payment. No jokes over it.
     var isLookingAway = false  // Only the server says so, as shut eyes promise that the agent is really not looking.
+    var isHidden = false  // A hint or a notice has the window, with no drawing and no eyes.
     private(set) var mood = EyesMood.rest
     private let random: () -> Double
     private var now = 0.0
@@ -105,6 +110,7 @@ struct EyesDirector {
     private var face = EyesMood.rest
     private var faceStart = -Double.infinity
     private var waitingSince: TimeInterval?
+    private var waitLimit: TimeInterval?
     private var countedPause = false
     private var pausesToJoke: Int
     private var lastJoke: EyesJoke?
@@ -112,9 +118,17 @@ struct EyesDirector {
     private var jokeStart = 0.0
     private var jokeAngle = 0.0
 
+    private var nextStir: TimeInterval
+    private var stirStart = -Double.infinity
+    private var stirLength = 0.0
+    private var quietSince: TimeInterval?
+    private(set) var stirPlace = 0.0
+    private(set) var stirs = 0
+
     init(random: @escaping () -> Double = { Double.random(in: 0..<1) }) {
         self.random = random
         nextBlink = Self.blinkGap.lowerBound
+        nextStir = Self.stirGap.lowerBound
         pausesToJoke = Self.pausesPerJoke.lowerBound + Int(random() * 2)
     }
 
@@ -130,12 +144,16 @@ struct EyesDirector {
     mutating func stopReading() { readingUntil = -.infinity }
 
     mutating func beginWaiting(at time: TimeInterval) {
+        waitLimit = time + Self.longestWait  // A new reason to wait has the whole time for its own answer.
         guard waitingSince == nil else { return }
         waitingSince = time
         countedPause = false
     }
 
-    mutating func endWaiting() { waitingSince = nil }
+    mutating func endWaiting() {
+        waitingSince = nil
+        waitLimit = nil
+    }
 
     mutating func hear(level: Double, at time: TimeInterval) {
         self.level = level
@@ -173,13 +191,29 @@ struct EyesDirector {
         if joke == .cross { jump(to: (0, 0.15), at: time) }
     }
 
+    /// One detail of the drawing moves, and the eyes go to it and back.
+    mutating func beginStir(at time: TimeInterval) {
+        stirStart = time
+        stirLength = choose(Self.stirFor)
+        stirPlace = random()
+        stirs += 1
+        nextStir = time + choose(Self.stirGap)
+        nextLook = time + Self.stirNotice
+    }
+
+    /// How far that detail is off its place: one hop from 0 to 1 and back.
+    var stir: Double {
+        let phase = (now - stirStart) / stirLength
+        return (0..<1).contains(phase) ? sin(.pi * phase) : 0
+    }
+
     func hasGivenUp(at time: TimeInterval) -> Bool {
         waitingSince.map { time - $0 >= Self.givesUpAfter } ?? false
     }
 
     /// No answer takes this long, so it is lost, with the connection for one, and nothing else would end the wait.
     func hasWaitedOut(at time: TimeInterval) -> Bool {
-        waitingSince.map { time - $0 >= Self.longestWait } ?? false
+        waitLimit.map { time >= $0 } ?? false
     }
 
     static func level(of samples: [Int16]) -> Double {
@@ -204,6 +238,7 @@ struct EyesDirector {
             self.joke = nil
             nextLook = time
         }
+        considerStir(at: time)
         if joke == nil {
             considerJoke(at: time)
             look(at: time)
@@ -228,7 +263,7 @@ struct EyesDirector {
                        faceStart + Self.foundFor, faceStart + Self.faceFor,
                        lastHeard + Self.hearingGap, (waitingSince ?? -.infinity) + Self.thinksAfter,
                        (waitingSince ?? -.infinity) + Self.jokesAfter, (waitingSince ?? -.infinity) + Self.givesUpAfter,
-                       (waitingSince ?? -.infinity) + Self.longestWait]
+                       waitLimit ?? -.infinity, nextStir, (quietSince ?? -.infinity) + Self.stirAfterRest]
         return moments.filter { $0 > now }.min() ?? now + 1
     }
 
@@ -240,13 +275,13 @@ struct EyesDirector {
         if time - lastHeard < Self.hearingGap { return .listening }
         if time < faceStart + Self.faceFor { return face }
         if isSpeaking { return .speaking }
-        guard let waitingSince else { return .rest }  // A look of the agent's own shows nothing: only a person can be waiting.
         if time < readingUntil { return .reading }
-        return time - waitingSince >= Self.thinksAfter ? .thinking : .rest
+        if let waitingSince, time - waitingSince >= Self.thinksAfter { return .thinking }
+        return .rest
     }
 
     private var isMoving: Bool {
-        now < jumpStart + jumpLength || now < blinkStart + blinkLength || joke != nil
+        now < jumpStart + jumpLength || now < blinkStart + blinkLength || now < stirStart + stirLength || joke != nil
             || pupil != pupilTarget || squint != squintTarget || brow != browTarget || cross != crossTarget || wink != winkTarget
             || doubt != doubtTarget
     }
@@ -291,6 +326,20 @@ struct EyesDirector {
         perform(choices[Int(random() * Double(choices.count))], at: time)
     }
 
+    private mutating func considerStir(at time: TimeInterval) {
+        guard mood == .rest, !isCalm, !isHidden, waitingSince == nil else {
+            quietSince = nil
+            if time < stirStart + stirLength {
+                stirStart = -.infinity
+                nextLook = time
+            }
+            return
+        }
+        let since = quietSince ?? time
+        quietSince = since
+        if time >= nextStir, time - since >= Self.stirAfterRest, joke == nil { beginStir(at: time) }
+    }
+
     private mutating func look(at time: TimeInterval) {
         guard joke == nil, time >= nextLook else { return }
         switch mood {
@@ -310,6 +359,9 @@ struct EyesDirector {
         case .pointing:
             jump(to: pointingAt, at: time)
             nextLook = .infinity
+        case .rest where time < stirStart + stirLength:
+            jump(to: EyesFrame.direction(of: stirPlace), at: time)
+            nextLook = stirStart + stirLength
         case .rest, .listening, .speaking, .happy, .found, .stopped, .away:
             jump(to: (0, 0), at: time)
             nextLook = .infinity

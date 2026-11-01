@@ -19,7 +19,6 @@ final class CallViewModel: ObservableObject {
     @Published private(set) var isClipboardTestPending = false
     @Published private(set) var isTextTestPending = false
     @Published private(set) var screenTextMode: ScreenTextMode = .extension
-    @Published private(set) var useVideoCallFallback = false
     @Published private(set) var measuresAppleSpeech = false
     @Published private(set) var hearsOverVoice = false
     @Published private(set) var voices: [Voice] = []
@@ -142,12 +141,12 @@ final class CallViewModel: ObservableObject {
             do { textCoordinator = try ScreenTextCoordinator(configuration: configuration, store: store, journal: journal) }
             catch { journal.append("Текст в приложении недоступен: \(error.localizedDescription)") }
         }
-        useVideoCallFallback = store?.useVideoCallFallback ?? false
-        window.setVideoCallFallback(useVideoCallFallback)
         window.onStateChange = { [weak self] state in
             guard let self else { return }
             if self.windowState != state { self.journal?.append(state.message) }
+            let viewChanged = (state == .active) != (self.windowState == .active)
             self.windowState = state
+            if viewChanged { self.eyes?.redraw() }  // The view now on show took only what it had room for, and at rest no other picture comes.
             if state == .ready, self.startWindowWhenReady {
                 self.startWindowWhenReady = false
                 self.window.startPictureInPicture()
@@ -169,7 +168,7 @@ final class CallViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.resumeAudio() }
             .store(in: &subscriptions)
-        journal?.append("Приложение открыто; сборка \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"); iOS \(UIDevice.current.systemVersion); источник окна: \(useVideoCallFallback ? "видеозвонок" : "sample buffer")")
+        journal?.append("Приложение открыто; сборка \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"); iOS \(UIDevice.current.systemVersion); источник окна: \(PictureInPictureHintWindow.usesVideoCall ? "видеозвонок" : "sample buffer")")
     }
 
     var phase: CallPhase {
@@ -360,17 +359,6 @@ final class CallViewModel: ObservableObject {
             window.prepare()
             window.startPictureInPicture()
         }
-    }
-
-    func setVideoCallFallback(_ value: Bool) {
-        useVideoCallFallback = value
-        store?.useVideoCallFallback = value
-        window.setVideoCallFallback(value)
-        guard isCallActive else { return }
-        window.prepare()
-        do {
-            try restoreWindowImage()
-        } catch { journal?.append("Ошибка смены источника окна: \(error.localizedDescription)") }
     }
 
     private func restoreWindowImage() throws {

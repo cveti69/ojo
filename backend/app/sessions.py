@@ -53,6 +53,7 @@ class Session:
     changed_at: Optional[int] = None  # The moment the screen went on from the last frame the phone delivered.
     open_words: str = ""  # Their last words until the first sound of the answer: more words now are the same line.
     open_mark: int = 0
+    open_screen: Optional[Frame] = None  # The first frame those words went with.
     seen_gray: Optional[bytes] = None  # The screen of the last turn: a new screen is measured against it.
     restarts: int = 0
     held: bool = False

@@ -364,7 +364,7 @@ def write_on(backend, session_id, stream):
 
 
 def no_frame_left(session, folder):
-    assert session.last_frame is None and session.seen_gray is None
+    assert session.last_frame is None and session.open_screen is None and session.seen_gray is None
     assert not any(turn.get("frame") for turn in session.chat)
     assert not list(folder.glob("*/frames/*")) and not any(row.get("frame") for row in lines_of(folder))
 
@@ -478,6 +478,74 @@ def test_a_frame_with_no_signal_ahead_of_it_goes_the_same_way(backend, tmp_path,
     write_on(backend, session_id, taken_over)
     assert spoken(seen) == ["Хорошо, не смотрю."] and pictures_in(asked_with(backend, -1)) == 0
     no_frame_left(session, tmp_path)
+
+
+def test_the_screen_of_their_words_goes_when_only_the_answer_on_the_next_one_closes(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    stopped, taken_over = a_new_answer(), field_first()
+    backend.meta.replies += [stopped, taken_over]
+    words(client, session_id, "Не смотри")
+    assert stopped.written.wait(5)
+    assert post_frame(client, session_id, SCREENS[2], 300).json()["accepted"]
+    assert taken_over.written.wait(5)
+    write_on(backend, session_id, taken_over)
+    write_on(backend, session_id, stopped)
+    assert session.not_looking and spoken(seen) == ["Не смотрю."]
+    no_frame_left(session, tmp_path)
+
+
+def test_the_screen_of_their_words_goes_when_the_phone_saw_the_change_first(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    stopped, taken_over = a_new_answer(), field_first()
+    backend.meta.replies += [stopped, taken_over]
+    words(client, session_id, "Не смотри")
+    assert stopped.written.wait(5)
+    moved(client, session_id)
+    assert post_frame(client, session_id, SCREENS[2], 300).json()["accepted"]
+    assert taken_over.written.wait(5)
+    write_on(backend, session_id, taken_over)
+    write_on(backend, session_id, stopped)
+    assert session.not_looking and spoken(seen) == ["Не смотрю."]
+    no_frame_left(session, tmp_path)
+
+
+def test_the_screen_stays_the_one_their_words_began_on_when_they_go_on(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    first, second, closing = a_new_answer(), a_new_answer(), field_first()
+    backend.meta.replies += [first, second, closing]
+    words(client, session_id, "Не")
+    assert first.written.wait(5)
+    assert post_frame(client, session_id, SCREENS[2], 300).json()["accepted"]
+    assert second.written.wait(5)
+    words(client, session_id, "смотри")
+    assert closing.written.wait(5)
+    for stream in (closing, first, second):
+        write_on(backend, session_id, stream)
+    assert session.not_looking and spoken(seen) == ["Не смотрю."]
+    no_frame_left(session, tmp_path)
+
+
+def test_the_screen_that_goes_is_that_of_their_last_words(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    backend.meta.replies += [line("Это первый экран."), line("Вижу второй экран.")]
+    words(client, session_id, "Что тут?")
+    idle(backend, session_id)
+    played(backend, session_id)
+    assert post_frame(client, session_id, SCREENS[2], 300).json()["accepted"]
+    idle(backend, session_id)
+    played(backend, session_id)
+    assert list(tmp_path.glob("*/frames/300.jpg"))
+    stopped, taken_over = a_new_answer(), field_first()
+    backend.meta.replies += [stopped, taken_over]
+    words(client, session_id, "Не смотри")
+    assert stopped.written.wait(5)
+    assert post_frame(client, session_id, SCREENS[3], 400).json()["accepted"]
+    assert taken_over.written.wait(5)
+    write_on(backend, session_id, taken_over)
+    write_on(backend, session_id, stopped)
+    assert session.not_looking and session.open_screen is None
+    assert not list(tmp_path.glob("*/frames/300.jpg")) and not list(tmp_path.glob("*/frames/400.jpg"))
+    assert not any(turn.get("frame") and turn["frame"].timestamp_ms == 300 for turn in session.chat)
 
 
 def test_the_field_stops_an_answer_that_has_spoken_and_asks_no_more(backend, tmp_path, monkeypatch):

@@ -585,6 +585,7 @@ private enum ProtocolChecks {
 
     private static func checkEyes() throws {
         var rest = EyesDirector(random: sameRandom())
+        rest.isHidden = true  // The rare move of the drawing has checks of its own.
         let quiet = play(&rest, from: 0, to: 60)
         let gaps = zip(quiet, quiet.dropFirst()).map { $1.time - $0.time }.filter { $0 > 1 }.dropFirst()  // The first blink comes early.
         try check(gaps.count >= 3 && gaps.allSatisfy { $0 >= 4 }, "at rest nothing is drawn between rare blinks")
@@ -609,22 +610,16 @@ private enum ProtocolChecks {
         try check(moves < 12, "jumps are short: a side change takes a couple of pictures, not a slide")
         try check(!thinking.hasGivenUp(at: 12.9) && thinking.hasGivenUp(at: 13.1), "after twelve seconds the wait gets words of its own")
         try check(!thinking.hasWaitedOut(at: 35.9) && thinking.hasWaitedOut(at: 36.1), "no wait lasts past the longest answer")
-
-        var alone = EyesDirector(random: sameRandom())
-        _ = alone.advance(to: 1)
-        alone.screenChanged(at: 1)
-        let unasked = play(&alone, from: 1, to: 12)
-        try check(alone.mood == .rest && unasked.allSatisfy { $0.pose.x == 0 && $0.pose.y == 0 && $0.pose.brow == 0 }, "a screen nobody asked about leaves the eyes at rest")
-        alone.screenChanged(at: 12)
-        alone.beginWaiting(at: 13)
-        _ = alone.advance(to: 13.1)
-        try check(alone.mood == .reading, "until the person speaks while the agent looks")
-        _ = alone.advance(to: 14.8)
-        try check(alone.mood == .thinking && !alone.hasGivenUp(at: 24.9) && alone.hasGivenUp(at: 25.1), "and the wait counts from their words")
+        var twice = EyesDirector(random: sameRandom())
+        twice.beginWaiting(at: 1)
+        twice.beginWaiting(at: 30)
+        try check(twice.hasGivenUp(at: 13.1), "a second reason to wait does not hide how long the first has gone on")
+        try check(!twice.hasWaitedOut(at: 64.9) && twice.hasWaitedOut(at: 65.1), "and has the whole time for its own answer")
+        twice.endWaiting()
+        try check(!twice.hasWaitedOut(at: 66), "a wait that ended cannot run out")
 
         var reader = EyesDirector(random: sameRandom())
         _ = reader.advance(to: 1)
-        reader.beginWaiting(at: 1)
         reader.screenChanged(at: 1)
         let reading = play(&reader, from: 1, to: 3.5)
         try check(reader.mood == .reading, "a new screen is read")
@@ -632,6 +627,16 @@ private enum ProtocolChecks {
         try check(line.count >= 3 && zip(line, line.dropFirst()).allSatisfy { $1 >= $0 - 0.001 }, "left to right along a line")
         let rows = reading.map { ($0.pose.y * 10).rounded() / 10 }.reduce(into: [Double]()) { if $0.last != $1 { $0.append($1) } }
         try check(rows.filter { [-0.6, 0, 0.6].contains($0) }.count >= 3 && (rows.first { $0 != 0 } ?? 0) < 0, "line after line, from the top")
+
+        var alone = EyesDirector(random: sameRandom())
+        _ = alone.advance(to: 1)
+        alone.screenChanged(at: 1)
+        alone.beginWaiting(at: 1)
+        _ = alone.advance(to: 3.8)
+        try check(alone.mood == .thinking, "after the reading a screen nobody asked about shows thinking, while its answer is on the way")
+        alone.endWaiting()
+        _ = alone.advance(to: 3.9)
+        try check(alone.mood == .rest, "and a silent answer ends it")
 
         var listener = EyesDirector(random: sameRandom())
         _ = listener.advance(to: 1)
@@ -671,7 +676,6 @@ private enum ProtocolChecks {
         _ = moved.advance(to: 1)
         moved.rejoice(at: 1)
         moved.express(.found, at: 1)
-        moved.beginWaiting(at: 1)
         moved.screenChanged(at: 1.2)
         let carried = moved.advance(to: 1.3)
         try check(moved.mood == .reading && !carried.isHappy, "a face stays on its own screen")
@@ -780,6 +784,7 @@ private enum ProtocolChecks {
         try check(raised && !(0..<720).contains { painted[(250 * 720 + $0) * 4] > 128 }, "the brow goes up in doubt")
         try checkNose()
         try checkFrames()
+        try checkStir()
         try checkLookingAway()
     }
 
@@ -798,6 +803,10 @@ private enum ProtocolChecks {
                 pictures.append(("\(name) at \(time)", try paintedWindow(frame, moving)))
             }
         }
+        for place in [0, 0.11, 0.21, 0.36, 0.5, 0.61, 0.79, 0.86, 0.99] {
+            pictures.append(("hop at \(place)", try paintedWindow(frame, EyesFrameMotion(stir: 1, place: place))))
+        }
+        pictures.append(("hop as the speech begins", try paintedWindow(frame, EyesFrameMotion(speak: 1, think: 1, look: 1, level: 1, gaze: 1, time: 1.7, stir: 1, place: 0.36))))
         return pictures
     }
 
@@ -888,6 +897,126 @@ private enum ProtocolChecks {
             while back.settle(by: 0.1, mood: .rest, level: 0, gaze: 0) {}
             let settled = try paintedWindow(frame, back)
             try check(settled == rest, "\(frame): after moving it is the same bytes as at rest")
+            var hop = EyesFrameMotion()
+            _ = hop.settle(by: 0.1, mood: .rest, level: 0, gaze: 0, stir: 1, place: 0.36)
+            _ = hop.settle(by: 0.1, mood: .rest, level: 0, gaze: 0, stir: 1, place: 0.36)
+            let hopping = try paintedWindow(frame, hop)
+            var changed = 0
+            for pixel in 0..<(720 * 960) where hopping[pixel * 4] != rest[pixel * 4] || hopping[pixel * 4 + 2] != rest[pixel * 4 + 2] { changed += 1 }
+            try check(Double(changed) / (720 * 960) < (frame == .glow ? 0.06 : 0.02), "\(frame): a hop moves one detail, not the drawing: \(changed) pixels")
+            let base = (480 * 720 + 690) * 4  // Where the scallop at this place stands in its row.
+            try check(frame != .lace || (rest[base + 2] > 0 && hopping[base + 2] == 0), "lace: the scallop leaves the row")
+            while hop.settle(by: 0.033, mood: .rest, level: 0, gaze: 0) {}
+            try check(hop == EyesFrameMotion(), "\(frame): after the hop nothing is left to draw")
+        }
+    }
+
+    /// Plays five minutes the way the stage does: pictures while something moves, and then nothing until the next moment.
+    private static func stirs(of eyes: inout EyesDirector, to end: Double) -> [(start: Double, end: Double, place: Double, gaze: [EyePose], after: [EyePose])] {
+        var found: [(start: Double, end: Double, place: Double, gaze: [EyePose], after: [EyePose])] = []
+        var motion = EyesFrameMotion()
+        var time = 0.0
+        var settled = 0.0
+        var seen = 0
+        while time < end {
+            let pose = eyes.advance(to: time)
+            let moved = motion.settle(by: min(time - settled, 0.1), mood: eyes.mood, level: eyes.level, gaze: pose.x, stir: eyes.stir, place: eyes.stirPlace)
+            settled = time
+            if eyes.stirs > seen {
+                seen = eyes.stirs
+                found.append((time, time, eyes.stirPlace, [], []))
+            }
+            if var last = found.popLast() {
+                if eyes.stir > 0 {
+                    last.end = time
+                    last.gaze.append(pose)
+                } else {
+                    last.after.append(pose)
+                }
+                found.append(last)
+            }
+            let next = eyes.nextChange
+            time = moved ? time + EyesDirector.frame : next
+        }
+        return found
+    }
+
+    private static func checkStir() throws {
+        var eyes = EyesDirector(random: sameRandom())
+        let hops = stirs(of: &eyes, to: 300)
+        try check((12...18).contains(hops.count) && hops.count == eyes.stirs, "about once in twenty seconds: \(hops.count) in five minutes")
+        try check(hops[0].start >= 17, "not in the first moments of a call")
+        try check(zip(hops, hops.dropFirst()).allSatisfy { (17...23).contains($1.start - $0.start) }, "with a little scatter")
+        try check(Set(hops.map { Int($0.place * 4) }).count >= 3, "somewhere else every time")
+        for hop in hops {
+            try check((0.4...1).contains(hop.end - hop.start), "half a second to a second: \(hop.end - hop.start)")
+            let wanted = EyesFrame.direction(of: hop.place)
+            try check(hop.gaze.contains { abs($0.x - wanted.x) < 0.01 && abs($0.y - wanted.y) < 0.01 }, "the eyes go to it")
+            try check(hop.after.dropFirst(4).allSatisfy { $0.x == 0 && $0.y == 0 }, "and come back, and look ahead until the next one")
+        }
+
+        let quiet: [(String, (inout EyesDirector) -> Void)] = [
+            ("payment", { $0.isCalm = true }), ("a hint or a notice", { $0.isHidden = true }), ("shut eyes", { $0.isLookingAway = true }),
+            ("the agent speaking", { $0.isSpeaking = true }), ("a wait", { $0.beginWaiting(at: 0) }),
+        ]
+        for (name, stays) in quiet {
+            var kept = EyesDirector(random: sameRandom())
+            stays(&kept)
+            _ = play(&kept, from: 0, to: 100)
+            try check(kept.stirs == 0, "no move of the drawing: \(name)")
+        }
+        var waiter = EyesDirector(random: sameRandom())
+        _ = play(&waiter, from: 0, to: 16.9)
+        waiter.beginWaiting(at: 16.9)
+        _ = play(&waiter, from: 16.9, to: 17.5)
+        try check(waiter.mood == .rest && waiter.stirs == 0, "nor in the first moment of a wait, before the face has changed")
+        var talking = EyesDirector(random: sameRandom())
+        var moment = 0.0
+        while moment < 100 {
+            talking.hear(level: 0.5, at: moment)
+            _ = talking.advance(to: moment)
+            moment += 0.1
+        }
+        try check(talking.stirs == 0, "no move of the drawing while the person speaks")
+        var lines = EyesDirector(random: sameRandom())
+        moment = 0
+        while moment < 100 {
+            lines.isSpeaking = moment.truncatingRemainder(dividingBy: 4) < 2
+            _ = lines.advance(to: moment)
+            moment += 0.1
+        }
+        try check(lines.stirs == 0, "nor in the short gaps between lines")
+
+        var after = EyesDirector(random: sameRandom())
+        after.isSpeaking = true
+        _ = play(&after, from: 0, to: 30)
+        after.isSpeaking = false
+        _ = play(&after, from: 30, to: 32.9)
+        try check(after.stirs == 0, "the rest has to last a moment first")
+        _ = play(&after, from: 32.9, to: 33.2)
+        try check(after.stirs == 1 && after.stir > 0, "and then it comes")
+
+        let breaks: [(String, (inout EyesDirector) -> Void)] = [("speech", { $0.isSpeaking = true }), ("a payment", { $0.isCalm = true }), ("a hint", { $0.isHidden = true })]
+        for (name, stops) in breaks {
+            var cut = EyesDirector(random: sameRandom())
+            _ = cut.advance(to: 1)
+            cut.beginStir(at: 1)
+            _ = cut.advance(to: 1.2)
+            let looking = cut.advance(to: 1.3)
+            try check(cut.stir > 0 && hypot(looking.x, looking.y) > 0.5, "the hop is under way")
+            stops(&cut)
+            _ = cut.advance(to: 1.34)
+            let back = cut.advance(to: 1.42)
+            try check(cut.stir == 0 && back.x == 0 && back.y == 0, "\(name) ends it at once")
+        }
+
+        for (place, x, y) in [(0.106, 0.0, -0.85), (0.356, 0.85, 0.0), (0.606, 0.0, 0.85), (0.856, -0.85, 0.0)] {
+            let way = EyesFrame.direction(of: place)
+            try check(abs(way.x - x) < 0.02 && abs(way.y - y) < 0.02, "the eyes find the middle of a side")
+        }
+        for step in 0..<200 {
+            let way = EyesFrame.direction(of: Double(step) / 200)
+            try check(hypot(way.x, way.y) <= 0.86, "and no place sends them past the edge of the eye")
         }
     }
 
@@ -1008,6 +1137,10 @@ private enum ProtocolChecks {
             try check(Set(said).count == language.pause.count, "every pause word gets its turn")
             try check(words.next(now: start.addingTimeInterval(17 * (PauseWords.gap + 1) + 5)) == nil, "pause words stay rare")
         }
+        try check(CallWords.russian.pause.count == 16 && CallWords.english.pause.count == 16 && CallWords.spanish.pause.count == 6, "the waiting phrases of each language")
+        for word in CallWords.russian.pause + CallWords.english.pause {
+            try check(!["смотр", "вижу", "look", "watch"].contains { word.lowercased().contains($0) }, "a waiting phrase sounds with the eyes shut too: \(word)")
+        }
     }
 
     private static func checkCallWords() throws {
@@ -1023,8 +1156,8 @@ private enum ProtocolChecks {
         let russian = strings(.russian)
         for language in [CallWords.russian, .english, .spanish] {
             let all = strings(language)
-            try check(all.count == russian.count && all.allSatisfy { !$0.isEmpty }, "every word has its text")
-            try check(language.pause.count == 6 && Set(language.pause).count == 6, "six different pause words")
+            try check(all.count - language.pause.count == russian.count - CallWords.russian.pause.count && all.allSatisfy { !$0.isEmpty }, "every word has its text")
+            try check(Set(language.pause).count == language.pause.count, "different waiting phrases")
             let spoken = [language.greeting, language.failed, language.lostHearing, language.noHintYet] + language.pause
             try check(spoken.allSatisfy { $0.last.map { ".?!".contains($0) } == true }, "what is said ends as a sentence")
         }
