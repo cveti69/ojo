@@ -2,10 +2,12 @@
 """What our floating window on the frame costs the agent, and what helps.
 
     python3 -m eval.window --detect
+    python3 -m eval.window --scenes
     python3 -m eval.window --model <id> --effort minimal --repeat 2
 
 A window with a real hint from the step before is drawn on every stand frame, clear of the target or
 over it. --detect compares finding the window by its border with searching for the picture it shows.
+--scenes tries the search on made-up pages: white cards on bright pages, bands behind the window, a turned screen.
 The main run compares three modes on the model: raw (the frame as it is), border (a coloured border
 the model is told about) and hidden (the server finds the border, paints the window grey and gives
 the model its place). Composites stay in memory; the ones Vision reads live in a folder next to the
@@ -15,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import itertools
 import json
 import math
 import re
@@ -39,10 +42,13 @@ SPOTS = {"left-middle": (0, 0.5), "right-middle": (1, 0.5), "left-top": (0, 0.2)
          "left-bottom": (0, 0.8), "right-bottom": (1, 0.8)}
 MOVE_WORDS = re.compile(r"сдвин|подвин|передвин|отодвин|перетащ|перемест|убери|отведи|оттащи")
 WINDOW_WORDS = re.compile(r"окн|окош|подсказк|картинк")
-BORDER_RULE = "\nOur floating window is the one with a thick magenta border: everything inside the border is ours."
+BORDER_RULE = "\nOur floating window is the one with a thick violet border: everything inside the border is ours."
 PICTURE_SCALE = 0.25
 PICTURE_STEP = 2
 PICTURE_TOLERANCE = 30
+SCREEN = (1206, 2622)
+NOT_BORDER_PAGE = (76, 52, 148)  # Its red is too close to green for the search to take it for the border.
+BRIGHT_PAGES = [(124, 58, 237), NOT_BORDER_PAGE, (236, 72, 153), (190, 30, 150)]
 
 
 def window_size(width: int, height: int) -> tuple[int, int]:
@@ -206,6 +212,88 @@ def detect() -> None:
     print(f"no window on the frame: border finds one on {false_alarms} of {len(bases)}")
 
 
+def card_page(back: tuple, wide: float, ratio: float) -> Image.Image:
+    """One white card of about the window's shape on a bright page, with no window at all."""
+    page = Image.new("RGB", SCREEN, back)
+    draw = ImageDraw.Draw(page)
+    width, height = round(SCREEN[0] * wide), round(SCREEN[0] * wide / ratio)
+    x, y = (SCREEN[0] - width) // 2, round((SCREEN[1] - height) * 0.45)
+    draw.rounded_rectangle((x, y, x + width, y + height), radius=36, fill="white")
+    for row in range(6):
+        draw.rectangle((x + 60, y + 90 + row * 110, x + width - 90, y + 120 + row * 110), fill=(60, 60, 70))
+    return page
+
+
+def sale_page(back: tuple, columns: int, ratio: float, gutter: int) -> Image.Image:
+    """White product cards on a bright page."""
+    page = Image.new("RGB", SCREEN, back)
+    draw = ImageDraw.Draw(page)
+    width = (SCREEN[0] - 72 - (columns - 1) * gutter) // columns
+    height = round(width / ratio)
+    for y in range(300, SCREEN[1] - height - 40, height + gutter):
+        for column in range(columns):
+            x = 36 + column * (width + gutter)
+            draw.rounded_rectangle((x, y, x + width, y + height), radius=24, fill="white")
+            draw.rectangle((x + 16, y + 16, x + width - 16, y + round(height * 0.62)), fill=(225, 228, 232))
+            draw.rectangle((x + 20, y + round(height * 0.7), x + width - 40, y + round(height * 0.74)), fill=(60, 60, 70))
+    return page
+
+
+def band_page(color: tuple, rect: tuple, share: float) -> Image.Image:
+    """A pale page with a band of colour from edge to edge behind the window."""
+    page = Image.new("RGB", SCREEN, (250, 250, 250))
+    tall = round(SCREEN[1] * share)
+    y = (rect[1] + rect[3] - tall) // 2
+    ImageDraw.Draw(page).rectangle((0, y, SCREEN[0], y + tall), fill=color)
+    return page
+
+
+def window_at(x_share: float, y_share: float, wide: float, screen: tuple = SCREEN) -> tuple:
+    width, height = round(screen[0] * wide), round(screen[0] * wide * 4 / 3)
+    x, y = round((screen[0] - width) * x_share), round((screen[1] - height) * y_share)
+    return x, y, x + width, y + height
+
+
+def place_of(rect: tuple, screen: tuple = SCREEN) -> list[float]:
+    return [rect[0] / screen[0], rect[1] / screen[1], rect[2] / screen[0], rect[3] / screen[1]]
+
+
+def scenes() -> None:
+    """Made-up screens that have fooled a search for the border before. No frames and no model.
+    This is the server's search with this file's shrink, which is not quite the phone's: numbers near a limit differ."""
+    picture = window.add_border(card("Смотрю экран"))
+    tally: dict[str, list[int]] = {}
+
+    def count(title: str, good: bool) -> None:
+        row = tally.setdefault(title, [0, 0])
+        row[0] += good
+        row[1] += 1
+
+    for back in BRIGHT_PAGES:
+        for wide, ratio in itertools.product((0.3, 0.5, 0.7, 0.8), (0.72, 0.75, 0.78)):
+            count("white card: nothing found", window.find(small_jpeg(card_page(back, wide, ratio))[0]) is None)
+        for columns, ratio, gutter in itertools.product((2, 3), (0.66, 0.72, 0.75, 0.78, 0.82), (24, 36, 60)):
+            count("sale page: nothing found", window.find(small_jpeg(sale_page(back, columns, ratio, gutter))[0]) is None)
+        for columns, wide, place in itertools.product((2, 3), (0.30, 0.39, 0.44), ((0.97, 0.5), (0.97, 0.8), (0.03, 0.6))):
+            rect = window_at(*place, wide)
+            found = window.find(small_jpeg(paste(sale_page(back, columns, 0.75, 36), picture, rect))[0])
+            count("window on a sale page: no card taken for it", found is None or same_place(found, place_of(rect)))
+            kind = "does not take" if back == NOT_BORDER_PAGE else "takes"
+            count(f"window on a sale page the search {kind} for the border: found", same_place(found, place_of(rect)))
+    for share, wide, place, color in itertools.product((0.09, 0.10, 0.12, 0.16), (0.30, 0.39, 0.44, 0.62), ((0.03, 0.2), (0.97, 0.5), (0.97, 0.8)),
+                                                       ((120, 20, 200), (190, 30, 150))):
+        rect = window_at(*place, wide)
+        found = window.find(small_jpeg(paste(band_page(color, rect, share), picture, rect))[0])
+        count("band behind the window: found", same_place(found, place_of(rect)))
+    turned = (SCREEN[1], SCREEN[0])
+    for wide, place in itertools.product((0.14, 0.16, 0.18, 0.21, 0.30), ((0.03, 0.5), (0.97, 0.5), (0.97, 0.2))):
+        rect = window_at(*place, wide, turned)
+        found = window.find(small_jpeg(paste(Image.new("RGB", turned, "white"), picture, rect))[0])
+        count("turned screen: found", same_place(found, place_of(rect, turned)))
+    for title, (good, total) in tally.items():
+        print(f"{title:70} {good}/{total}")
+
+
 def asked_to_move(answer: dict | None) -> bool:
     text = (answer or {}).get("instruction", "").lower()
     return bool(MOVE_WORDS.search(text) and WINDOW_WORDS.search(text))
@@ -312,12 +400,16 @@ def summarize(rows: list[dict]) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--detect", action="store_true")
+    parser.add_argument("--scenes", action="store_true")
     parser.add_argument("--model", default="")
     parser.add_argument("--effort", default="minimal")
     parser.add_argument("--repeat", type=int, default=2)
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--modes", type=lambda text: text.split(","), default=["raw", "border", "hidden"])
     args = parser.parse_args()
+    if args.scenes:
+        scenes()
+        return
     if args.detect:
         detect()
         return

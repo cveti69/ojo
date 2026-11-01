@@ -483,7 +483,9 @@ private enum ProtocolChecks {
         }
     }
 
-    private static func picture(width: Int, height: Int, window: (x: Int, y: Int, width: Int)?) -> [UInt8] {
+    private static let violet: [UInt8] = [150, 40, 245, 255]
+
+    private static func picture(width: Int, height: Int, window: (x: Int, y: Int, width: Int)?, dim: Double = 1) -> [UInt8] {
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         for y in 0..<height {
             for x in 0..<width {
@@ -497,7 +499,8 @@ private enum ProtocolChecks {
         for y in window.y..<(window.y + tall) {
             for x in window.x..<(window.x + window.width) {
                 let onBorder = x < window.x + line || x >= window.x + window.width - line || y < window.y + line || y >= window.y + tall - line
-                let color: [UInt8] = onBorder ? [245, 12, 165, 255] : (x + y).isMultiple(of: 5) ? [255, 255, 255, 255] : [0, 0, 0, 255]
+                let border = violet.prefix(3).map { UInt8(Double($0) * dim) } + [255]
+                let color: [UInt8] = onBorder ? border : (x + y).isMultiple(of: 5) ? [255, 255, 255, 255] : [0, 0, 0, 255]
                 pixels.replaceSubrange((y * width + x) * 4..<(y * width + x) * 4 + 4, with: color)
             }
         }
@@ -515,12 +518,26 @@ private enum ProtocolChecks {
         }
         try check(WindowFinder.find(picture(width: width, height: height, window: nil), width: width, height: height, side: 64) == nil,
                   "a page with no window")
+        let dimmed = picture(width: width, height: height, window: (10, 150, 74), dim: 0.55)
+        try check(WindowFinder.find(dimmed, width: width, height: height, side: 64) != nil, "the window dimmed by its controls is found")
+        let turned = picture(width: height, height: width, window: (300, 20, 64))
+        try check(WindowFinder.find(turned, width: height, height: width, side: 64) != nil, "the window on a turned screen is found")
         var banner = picture(width: width, height: height, window: nil)
-        for y in 60..<110 {
-            for x in 0..<width { banner.replaceSubrange((y * width + x) * 4..<(y * width + x) * 4 + 4, with: [245, 12, 165, 255]) }
+        fill(&banner, width: width, 0..<width, 60..<110, violet)
+        try check(WindowFinder.find(banner, width: width, height: height, side: 64) == nil, "a violet banner is not a window")
+        for back: [UInt8] in [violet, [124, 58, 237, 255], [76, 52, 148, 255], [236, 72, 153, 255]] {
+            var page = [UInt8](repeating: 0, count: width * height * 4)
+            fill(&page, width: width, 0..<width, 0..<height, back)
+            fill(&page, width: width, 40..<140, 130..<263, [255, 255, 255, 255])
+            try check(WindowFinder.find(page, width: width, height: height, side: 64) == nil, "a white card on a bright page is not a window")
         }
-        try check(WindowFinder.find(banner, width: width, height: height, side: 64) == nil, "a pink banner is not a window")
         try check(WindowFinder.find([], width: width, height: height, side: 64) == nil, "no picture")
+    }
+
+    private static func fill(_ pixels: inout [UInt8], width: Int, _ xs: Range<Int>, _ ys: Range<Int>, _ color: [UInt8]) {
+        for y in ys {
+            for x in xs { pixels.replaceSubrange((y * width + x) * 4..<(y * width + x) * 4 + 4, with: color) }
+        }
     }
 
     private static func require<Value>(_ value: Value?, _ message: String) throws -> Value {

@@ -60,8 +60,10 @@ final class SpeechStream {
         let data = samples.withUnsafeBytes { Data($0) }  // Little-endian, as the server expects.
         let log = onDiagnostic
         Task {
-            do { try await socket.send(.data(data)) }
-            catch { log?("Поток речи: звук не ушёл: \(error.localizedDescription)") }
+            do { try await socket.send(.data(data)) } catch {
+                log?("Поток речи: звук не ушёл: \(error.localizedDescription)")
+                socket.cancel(with: .goingAway, reason: nil)  // The pending receive now fails, and the keeper opens a new one a second later.
+            }
         }
         return true
     }

@@ -7,7 +7,7 @@ from typing import List, Optional, Sequence, Tuple
 
 from PIL import Image, ImageChops, ImageDraw, ImageStat
 
-BORDER = (255, 0, 170)
+BORDER = (150, 40, 245)  # Violet, with red far enough above green to stay hot under the window's dimming.
 BORDER_SHARE = 0.035  # Of the window's width: thick enough to survive a small JPEG, thin enough to leave the hint alone.
 HOT_MARGIN = 45  # How far red and blue must rise above green. Dimmed window controls still pass it.
 MIN_SIDE = 0.12  # A window side fills at least this share of the frame's width or height.

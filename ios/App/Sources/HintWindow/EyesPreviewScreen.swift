@@ -103,7 +103,7 @@ private final class EyesPreview: ObservableObject, EyesSurface {
             UIColor.black.setFill()
             context.fill(CGRect(x: 0, y: 0, width: 720, height: 960))
             UIColor.white.setFill()
-            context.fill(CGRect(x: 32, y: 24, width: 656, height: 785))
+            context.fill(CGRect(x: 32, y: 32, width: 656, height: 896))
             UIColor.systemGray5.setFill()
             for top in [90, 270, 450] as [CGFloat] { context.fill(CGRect(x: 60, y: top, width: 600, height: 140)) }
             UIColor.systemGreen.setFill()
@@ -112,9 +112,6 @@ private final class EyesPreview: ObservableObject, EyesSurface {
             let outline = UIBezierPath(roundedRect: CGRect(x: 170, y: 610, width: 380, height: 100), cornerRadius: 22)
             outline.lineWidth = 10
             outline.stroke()
-            ("Нажми на зелёную…" as NSString).draw(in: CGRect(x: 40, y: 860, width: 640, height: 60), withAttributes: [
-                .font: UIFont.systemFont(ofSize: 44, weight: .regular), .foregroundColor: UIColor.white
-            ])
         }
         return picture.jpegData(compressionQuality: 0.8)
     }

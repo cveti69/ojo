@@ -19,8 +19,8 @@ final class EyesStage {
     private enum Scene: Equatable { case pause, hint }
 
     private static let size = CGSize(width: 720, height: 960)
-    private static let wordsBox = CGRect(x: 180, y: 90, width: 360, height: 360)
-    private static let wordsArea = CGRect(x: 60, y: 470, width: 600, height: 420)
+    private static let wordsBox = CGRect(x: 180, y: 130, width: 360, height: 360)
+    private static let wordsArea = CGRect(x: 60, y: 510, width: 600, height: 400)
     private static let longWaitWords = "Жду ответа дольше обычного"
     private static let noLinkWords = "Нет связи"
     private static let restWords = "Я рядом"

@@ -223,7 +223,7 @@ final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
     /// This colour tells the server which part of a screenshot is our own window.
     static func strokeBorder(on context: CGContext) {
         let thickness = (frameSize.width * 0.035).rounded()
-        context.setStrokeColor(UIColor(red: 1, green: 0, blue: 170.0 / 255, alpha: 1).cgColor)
+        context.setStrokeColor(UIColor(red: 150.0 / 255, green: 40.0 / 255, blue: 245.0 / 255, alpha: 1).cgColor)
         context.setLineWidth(thickness)
         context.stroke(CGRect(origin: .zero, size: frameSize).insetBy(dx: thickness / 2, dy: thickness / 2))
     }
