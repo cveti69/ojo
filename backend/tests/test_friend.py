@@ -224,7 +224,7 @@ def test_a_ready_text_with_no_words(backend, entry, kind):
 def test_a_new_screen_is_a_turn_and_a_video_on_the_page_is_not(backend):
     client = backend.client
     session_id = sharing(client)
-    assert post_frame(client, session_id).json() == {"accepted": True}
+    assert post_frame(client, session_id, timestamp=1).json() == {"accepted": True}
     idle(backend, session_id)
     message = backend.meta.calls[0].messages[-1]
     assert texts(message) == [friend.SILENT_TURN] and len(pictures(message)) == 1
@@ -238,7 +238,7 @@ def test_a_new_screen_is_a_turn_and_a_video_on_the_page_is_not(backend):
 def test_a_small_change_waits_for_the_next_turn(backend):
     client = backend.client
     session_id = sharing(client)
-    post_frame(client, session_id)
+    post_frame(client, session_id, timestamp=1)
     idle(backend, session_id)
     assert post_frame(client, session_id, SCREENS[0], timestamp=2, small=True).json() == {"accepted": False, "reason": "small"}
     assert len(backend.meta.calls) == 1
@@ -404,6 +404,34 @@ def test_a_look_older_than_the_last_frame_does_not_replace_it(backend):
     assert "hint" not in kinds(seen) and session.last_frame.timestamp_ms == 300
 
 
+def test_a_frame_a_look_has_overtaken_changes_nothing(backend):
+    client = backend.client
+    session_id = sharing(client)
+    seen = events_of(backend, session_id)
+    session = backend.store.sessions[session_id]
+    post_frame(client, session_id, SCREENS[0], timestamp=100)
+    idle(backend, session_id)
+    backend.meta.replies = [line("Жми.", show=SHOW)]
+    words(client, session_id)
+    look(client, session_id, [SCREENS[1]], first_taken=300)
+    idle(backend, session_id)
+    calls = len(backend.meta.calls)
+    assert post_frame(client, session_id, SCREENS[0], timestamp=200).json() == {"accepted": False, "reason": "old"}
+    idle(backend, session_id)
+    assert session.last_frame.timestamp_ms == 300 and len(backend.meta.calls) == calls
+    assert session.shown and "left" not in kinds(seen)
+
+
+def test_a_clock_set_back_on_the_phone_does_not_stop_the_frames(backend):
+    client = backend.client
+    session_id = sharing(client)
+    post_frame(client, session_id, SCREENS[0], timestamp=100_000)
+    idle(backend, session_id)
+    assert post_frame(client, session_id, SCREENS[1], timestamp=50_000).json() == {"accepted": True}
+    idle(backend, session_id)
+    assert backend.store.sessions[session_id].last_frame.timestamp_ms == 50_000
+
+
 def test_a_look_that_comes_too_late_is_told_so(backend, monkeypatch):
     client = backend.client
     session_id = sharing(client)
@@ -558,7 +586,7 @@ def test_the_model_sees_the_last_four_different_screens_and_all_the_words(backen
 def test_a_new_look_at_a_screen_replaces_the_old_one_and_the_page_before_stays(backend):
     client = backend.client
     session_id = sharing(client)
-    post_frame(client, session_id, SCREENS[0])
+    post_frame(client, session_id, SCREENS[0], timestamp=1)
     idle(backend, session_id)
     post_frame(client, session_id, SCREENS[1], timestamp=2)
     idle(backend, session_id)
@@ -776,6 +804,26 @@ def test_the_model_hears_that_they_left_before_the_outline_came(backend):
     client = backend.client
     session_id = sharing(client)
     backend.store.sessions[session_id].restarts = friend.MAX_RESTARTS
+    backend.meta.replies = [line("Жми вот сюда.", show=SHOW), line("Вижу.")]
+    post_frame(client, session_id, SCREENS[0], timestamp=1)
+    assert entered.wait(2)
+    post_frame(client, session_id, SCREENS[1], timestamp=2)
+    release.set()
+    assert wait_until(lambda: len(backend.meta.calls) == 2)
+    idle(backend, session_id)
+    assert texts(backend.meta.calls[1].messages[-1]) == [friend.UNSHOWN, friend.SILENT_TURN]
+
+
+def test_the_model_hears_that_a_new_turn_stopped_the_outline(backend, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+
+    def locate(*args):
+        entered.set()
+        assert release.wait(5)
+        return {"box": [0.1, 0.1, 0.9, 0.2], "source": "test-sam", "ms": 7}
+    monkeypatch.setattr(grounding, "locate", locate)
+    client = backend.client
+    session_id = sharing(client)
     backend.meta.replies = [line("Жми вот сюда.", show=SHOW), line("Вижу.")]
     post_frame(client, session_id, SCREENS[0], timestamp=1)
     assert entered.wait(2)
@@ -1114,6 +1162,9 @@ def test_a_product_card_is_not_a_bank_card(backend, monkeypatch, tmp_path):
     (line("Подойдёт банковская карта."), True),
     (line("Подойдёт банковскую карту."), True),
     (line("Это можно картой."), True),
+    (line("Подойдёт кредитная карта."), True),
+    (line("Подойдёт дебетовая карта."), True),
+    (line("Укажите срок действия карты."), True),
     (line("Проверь сумму.", show={"label": "Номер карты", "object": "field", "box": [100, 100, 200, 200]}), True),
     (line("Это Baidu Карты.", private=True), True),
 ])

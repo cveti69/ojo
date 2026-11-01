@@ -54,6 +54,7 @@ NEW_SCREEN_SHARE = 0.38  # Measured on a real call: a looping video reaches 0.37
 SCREENS_KEPT = 4
 ANSWER_SECONDS = 15  # Past this the spare model answers: the person is on the line.
 LOOK_SECONDS = 2  # The phone sends the screen within this, unless iOS holds it back.
+LATE_SECONDS = 10  # The phone gives up on a frame after 5 s, so anything older means its clock has moved.
 MAX_RESTARTS = 2  # A screen that keeps changing still gets an answer.
 MAX_REPLY = 500
 MAX_LABEL = 200
@@ -66,7 +67,7 @@ _PAYMENT = (
     r"|支付|付款|密码|银行卡|验证码|パスワード|クレジットカード|支払|認証コード|비밀번호|결제|카드 ?번호|인증번호|รหัสผ่าน|ชำระเงิน|บัตรเครดิต|รหัสยืนยัน|mật khẩu|thanh toán|số thẻ|mã xác|كلمة المرور|الدفع|رقم البطاقة|رمز التحقق")
 _PRIVATE_SCREEN = re.compile(_PAYMENT + r"|\bкарт[аыуе]\b", re.I)
 # The model can name a map app, so in its own words "карты" alone is not a payment.
-_PRIVATE_WORDS = re.compile(_PAYMENT + r"|(номер|данн|банковск)\w*\s+(\w+\s+)?карт(а|ы|у|е|ой)?\b", re.I)
+_PRIVATE_WORDS = re.compile(_PAYMENT + r"|(номер|данн|банковск|кредитн|дебетов|действия)\w*\s+(\w+\s+)?карт(а|ы|у|е|ой)?\b", re.I)
 
 
 def prepare_frame(jpeg: bytes, source_width: int, source_height: int, timestamp_ms: int,
@@ -269,8 +270,11 @@ class Friend:
 
     def screen(self, session: Session, frame: Frame) -> tuple:
         """A frame from the broadcast. Only a new screen is a turn: a video or a banner on the page is not."""
-        session.last_frame = frame
         session.touch()
+        last = session.last_frame
+        if last and 0 < last.timestamp_ms - frame.timestamp_ms < LATE_SECONDS * 1000:  # A look or the next frame got here first.
+            return False, "old"
+        session.last_frame = frame
         if session.heard:  # The phone is sending the screen for their words.
             return False, "looking"
         if frame.small:
@@ -434,30 +438,28 @@ class Friend:
             session.step_id = "s" + str(session.step_sequence)
             session.texts = [paste]
 
-    def _unshown(self, session: Session, outcome: str, **written: object) -> None:
-        """The voice has gone ahead of the outline. The model hears on its next turn that none came."""
-        session.chat.append({"role": "user", "text": UNSHOWN, "frame": None})
-        session.note("show", outcome=outcome, **written)
-
     async def _show(self, session: Session, frame: Frame, text: str, target: dict, answer: dict, model_ms: int) -> None:
+        """The voice has gone ahead of the outline. Whatever keeps it away, a new turn included, the model hears on its next turn."""
         started = time.perf_counter()
+        unshown = {"role": "user", "text": UNSHOWN, "frame": None}
+        session.chat.append(unshown)
 
         def written() -> dict:  # The words of a payment screen can arrive while this is at work.
             return {"target": None} if _private(session, frame, answer) else {"target": target, "frame": str(frame.timestamp_ms) + ".jpg"}
 
         if _gone(session, frame):  # Over a screen they have left it would only send them back.
-            self._unshown(session, "left", **written())
+            session.note("show", outcome="left", **written())
             return
         location = await run_in_threadpool(grounding.locate, frame.jpeg, frame.width, frame.height,
                                            {"action": "tap", "target": target}, _text_on(session, frame))
         box_ms = _ms(started)
         session.grounding = location
         if not location["box"]:
-            self._unshown(session, "not found", box_ms=box_ms, **written())
+            session.note("show", outcome="not found", box_ms=box_ms, **written())
             return
         image = await run_in_threadpool(hint.render, frame.jpeg, location["box"], text, session.eyes)
         if _gone(session, frame):  # A screen that came while the answer was busy stops nothing, so it can only be seen here.
-            self._unshown(session, "left", box_ms=box_ms, **written())
+            session.note("show", outcome="left", box_ms=box_ms, **written())
             return
         session.step_sequence += 1
         session.step_id = "s" + str(session.step_sequence)
@@ -470,6 +472,7 @@ class Friend:
             event["eyes_box"] = hint.eyes_box(text)
             event["gaze"] = window.gaze(frame.window, location["box"], frame.width, frame.height)
             event["calm"] = _private(session, frame, answer)
+        session.chat[:] = [kept for kept in session.chat if kept is not unshown]
         session.shown = True
         session.publish(event)
         session.note("show", outcome="shown", step=session.step_id, box=location["box"],
