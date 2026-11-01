@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 
 from app import config, friend, language
-from conftest import AUTH, idle, jpeg, line, look, new_session, post_frame, sharing, words
-from test_friend import PAYMENT_SCREEN, SCREENS, SHOW, events_of, kinds, spoken, texts
+from conftest import AUTH, Stream, idle, jpeg, line, look, new_session, post_frame, sharing, words
+from test_friend import PAYMENT_SCREEN, SCREENS, SHOW, events_of, kinds, spoken, texts, wait_until
 
 RU = language.words("ru")
 
@@ -42,7 +43,7 @@ def away(backend, client, session_id, screen=None, said="Не смотри"):
     idle(backend, session_id)
     backend.meta.replies.append(turned())
     words(client, session_id, said)
-    assert look(client, session_id, [SCREENS[1]]).status_code == 200
+    assert look(client, session_id, [SCREENS[1]], first_taken=150).status_code == 200
     idle(backend, session_id)
     played(backend, session_id)
 
@@ -321,6 +322,420 @@ def test_a_payment_screen_stays_calm(backend):
     post_frame(client, session_id, SCREENS[0], 100)
     idle(backend, session_id)
     assert seen[-1]["type"] == "face" and seen[-1]["calm"] is True
+
+
+CLOSED = {"type": "not_looking", "on": True}
+
+
+def line_first():
+    return Stream('{"say": "Не смотрю."', ', "look": false}')
+
+
+def field_first():
+    return Stream("{", '"look": false, "say": "Не смотрю."}')
+
+
+def a_new_answer(say="Вижу новый экран."):
+    return Stream("", json.dumps(line(say), ensure_ascii=False))
+
+
+def on_a_screen(backend, tmp_path, monkeypatch):
+    """A call with one screen in the log. The phone has seen no change, so their words go on that frame."""
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path))
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    backend.meta.replies.append(line("Вижу экран."))
+    post_frame(client, session_id, SCREENS[0], 100)
+    idle(backend, session_id)
+    played(backend, session_id)
+    assert list(tmp_path.glob("*/frames/100.jpg"))
+    return client, session_id, backend.store.sessions[session_id], events_of(backend, session_id)
+
+
+def moved(client, session_id, at=200):
+    assert client.post("/sessions/" + session_id + "/changed", headers=AUTH, json={"at": at, "moved": True}).status_code == 200
+
+
+def write_on(backend, session_id, stream):
+    """The rest of the answer comes, and whatever it set going has run."""
+    stream.go.set()
+    assert stream.ended.wait(5)
+    idle(backend, session_id)
+
+
+def no_frame_left(session, folder):
+    assert session.last_frame is None and session.seen_gray is None
+    assert not any(turn.get("frame") for turn in session.chat)
+    assert not list(folder.glob("*/frames/*")) and not any(row.get("frame") for row in lines_of(folder))
+
+
+def test_the_field_shuts_the_eyes_as_it_is_written(backend):
+    client = backend.client
+    session_id = sharing(client)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    stream = Stream('{"look": false', ', "say": "Не смотрю."}')
+    backend.meta.replies.append(stream)
+    words(client, session_id, "Не смотри")
+    assert look(client, session_id, [SCREENS[0]]).status_code == 200
+    assert stream.written.wait(5) and wait_until(lambda: session.not_looking)
+    assert post_frame(client, session_id, SCREENS[1], 300).json() == {"accepted": False, "reason": "not_looking"}
+    assert spoken(seen) == []
+    write_on(backend, session_id, stream)
+    assert spoken(seen) == ["Не смотрю."] and seen.count(CLOSED) == 1
+    assert kinds(seen).index("not_looking") < kinds(seen).index("say") and len(backend.meta.calls) == 1
+
+
+def test_a_field_after_the_line_needs_no_second_closing(backend):
+    client = backend.client
+    session_id = sharing(client, eyes=True)
+    seen = events_of(backend, session_id)
+    stream = line_first()
+    backend.meta.replies.append(stream)
+    words(client, session_id, "Не смотри")
+    assert look(client, session_id, [SCREENS[0]]).status_code == 200
+    assert wait_until(lambda: spoken(seen))
+    assert CLOSED not in seen
+    write_on(backend, session_id, stream)
+    assert seen.count(CLOSED) == 1 and spoken(seen) == ["Не смотрю."] and len(backend.meta.calls) == 1
+
+
+def test_a_stopped_answer_still_shuts_the_eyes_when_its_line_went_out(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    stream = line_first()
+    backend.meta.replies.append(stream)
+    words(client, session_id, "Не смотри")
+    assert wait_until(lambda: spoken(seen))
+    moved(client, session_id)
+    assert session.answer is None and not session.not_looking
+    write_on(backend, session_id, stream)
+    assert session.not_looking and seen.count(CLOSED) == 1
+    assert spoken(seen) == ["Не смотрю."] and len(backend.meta.calls) == 2
+    no_frame_left(session, tmp_path)
+
+
+def test_the_field_stops_the_answer_a_new_screen_began(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    stream, taken_over = line_first(), Stream("", '{"look": false, "say": "Вижу новый экран."}')
+    backend.meta.replies += [stream, taken_over]
+    words(client, session_id, "Не смотри")
+    assert wait_until(lambda: spoken(seen))
+    assert post_frame(client, session_id, SCREENS[2], 300).json()["accepted"]
+    assert taken_over.written.wait(5)
+    write_on(backend, session_id, stream)
+    assert session.not_looking and session.answer is None
+    no_frame_left(session, tmp_path)
+    write_on(backend, session_id, taken_over)  # It answered the same words, so it closes too, and that changes nothing.
+    assert spoken(seen) == ["Не смотрю."] and seen.count(CLOSED) == 1 and len(backend.meta.calls) == 3
+    no_frame_left(session, tmp_path)
+
+
+def test_their_words_get_one_line_with_no_picture_when_no_frame_came(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    stream = field_first()
+    backend.meta.replies += [stream, line("Хорошо, не смотрю.")]
+    words(client, session_id, "Не смотри")
+    assert stream.written.wait(5)
+    moved(client, session_id)
+    assert session.heard == "Не смотри" and session.settling
+    write_on(backend, session_id, stream)
+    assert session.not_looking and session.heard == "" and not session.settling
+    assert post_frame(client, session_id, SCREENS[2], 300).json() == {"accepted": False, "reason": "not_looking"}
+    assert look(client, session_id, [SCREENS[2]], first_taken=400).status_code == 409
+    messages = asked_with(backend, -1)
+    assert len(backend.meta.calls) == 3 and pictures_in(messages) == 0 and last_words(messages) == "Не смотри " + RU["closed"]
+    assert spoken(seen) == ["Хорошо, не смотрю."] and seen.count(CLOSED) == 1
+    no_frame_left(session, tmp_path)
+
+
+def test_a_frame_that_came_in_time_goes_with_the_answer_it_began(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    stream, taken_over = field_first(), a_new_answer()
+    backend.meta.replies += [stream, taken_over, line("Хорошо, не смотрю.")]
+    words(client, session_id, "Не смотри")
+    assert stream.written.wait(5)
+    moved(client, session_id)
+    assert post_frame(client, session_id, SCREENS[2], 300).json()["accepted"]  # This one was not in the log, the one before it was.
+    assert taken_over.written.wait(5)
+    write_on(backend, session_id, stream)
+    assert session.not_looking
+    messages = asked_with(backend, -1)
+    assert len(backend.meta.calls) == 4 and pictures_in(messages) == 0 and last_words(messages) == "Не смотри " + RU["closed"]
+    write_on(backend, session_id, taken_over)
+    assert spoken(seen) == ["Хорошо, не смотрю."] and seen.count(CLOSED) == 1 and len(backend.meta.calls) == 4
+    no_frame_left(session, tmp_path)
+
+
+def test_a_frame_with_no_signal_ahead_of_it_goes_the_same_way(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    stream, taken_over = field_first(), a_new_answer()
+    backend.meta.replies += [stream, taken_over, line("Хорошо, не смотрю.")]
+    words(client, session_id, "Не смотри")
+    assert stream.written.wait(5)
+    assert post_frame(client, session_id, SCREENS[2], 300).json()["accepted"]
+    assert taken_over.written.wait(5)
+    write_on(backend, session_id, stream)
+    write_on(backend, session_id, taken_over)
+    assert spoken(seen) == ["Хорошо, не смотрю."] and pictures_in(asked_with(backend, -1)) == 0
+    no_frame_left(session, tmp_path)
+
+
+def test_the_field_stops_an_answer_that_has_spoken_and_asks_no_more(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    stream, taken_over = field_first(), Stream('{"say": "Вижу новый экран."', ', "notes": "x"}')
+    backend.meta.replies += [stream, taken_over]
+    words(client, session_id, "Не смотри")
+    assert stream.written.wait(5)
+    assert post_frame(client, session_id, SCREENS[2], 300).json()["accepted"]
+    assert wait_until(lambda: spoken(seen))
+    write_on(backend, session_id, stream)
+    assert session.not_looking and len(backend.meta.calls) == 3 and spoken(seen) == ["Вижу новый экран."]
+    no_frame_left(session, tmp_path)
+    write_on(backend, session_id, taken_over)
+
+
+def test_those_words_inside_a_text_close_nothing(backend):
+    client = backend.client
+    session_id = sharing(client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies.append(line('Здесь написано "look": false.', notes='поле "look": false'))
+    post_frame(client, session_id, SCREENS[0], 100)
+    idle(backend, session_id)
+    assert not backend.store.sessions[session_id].not_looking and "not_looking" not in kinds(seen) and spoken(seen)
+
+
+def test_the_last_frame_goes_when_a_look_at_the_same_screen_took_its_place(backend, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path))
+    client = backend.client
+    session_id = sharing(client)
+    backend.meta.replies.append(line("Вижу экран."))
+    post_frame(client, session_id, SCREENS[0], 100)
+    idle(backend, session_id)
+    played(backend, session_id)
+    session = backend.store.sessions[session_id]
+    assert session.last_frame.timestamp_ms == 100
+    backend.meta.replies.append(turned())
+    words(client, session_id, "Не смотри")
+    assert look(client, session_id, [SCREENS[0]], first_taken=150).status_code == 200  # The same screen keeps the frame that is there.
+    idle(backend, session_id)
+    assert session.not_looking
+    no_frame_left(session, tmp_path)
+
+
+def test_every_frame_of_the_turn_goes_not_only_the_first_and_the_last(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    stream, last = line_first(), a_new_answer()
+    backend.meta.replies += [stream, line("Вижу другой экран."), last]
+    words(client, session_id, "Не смотри")
+    assert wait_until(lambda: spoken(seen))
+    assert post_frame(client, session_id, SCREENS[2], 300).json()["accepted"]
+    idle(backend, session_id)
+    assert list(tmp_path.glob("*/frames/300.jpg"))
+    assert post_frame(client, session_id, SCREENS[3], 400).json()["accepted"]
+    assert last.written.wait(5)
+    write_on(backend, session_id, stream)
+    assert session.not_looking
+    no_frame_left(session, tmp_path)
+    write_on(backend, session_id, last)
+
+
+def test_a_screen_an_earlier_turn_saw_does_not_come_back_with_the_eyes(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    backend.meta.replies.append(turned())
+    words(client, session_id, "Не смотри")  # The screen has not changed, so this turn and the one before it share a frame.
+    idle(backend, session_id)
+    played(backend, session_id)
+    no_frame_left(session, tmp_path)
+    backend.meta.replies += [back(), line("Вижу другой экран.")]
+    words(client, session_id, "Посмотри")
+    idle(backend, session_id)
+    assert look(client, session_id, [SCREENS[2]], first_taken=300).status_code == 200
+    idle(backend, session_id)
+    assert not session.not_looking and pictures_in(asked_with(backend, -1)) == 1
+
+
+def test_a_frame_with_no_tie_to_its_answer_still_goes(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    session.restarts = friend.MAX_RESTARTS
+    stream, taken_over = line_first(), a_new_answer()
+    backend.meta.replies += [stream, taken_over, line("Хорошо, не смотрю.")]
+    words(client, session_id, "Не смотри")
+    assert wait_until(lambda: spoken(seen))
+    assert post_frame(client, session_id, SCREENS[2], 300).json()["reason"] == "busy"
+    number = max(session.lines)
+    assert client.post("/sessions/" + session_id + "/spoken", headers=AUTH, json={"line": number, "said": ""}).status_code == 200
+    assert taken_over.written.wait(5)
+    write_on(backend, session_id, stream)
+    write_on(backend, session_id, taken_over)
+    assert session.not_looking and spoken(seen) == ["Не смотрю.", "Хорошо, не смотрю."]
+    no_frame_left(session, tmp_path)
+
+
+def test_a_line_with_no_tie_goes_out_whatever_the_screen_shows(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    session.restarts = friend.MAX_RESTARTS
+    stream, rest = a_new_answer("Ответ."), threading.Event()
+    backend.meta.after_text = lambda index: rest.wait(5)
+    backend.meta.replies.append(stream)
+    words(client, session_id, "Что это?")
+    assert stream.written.wait(5)
+    assert post_frame(client, session_id, SCREENS[2], 300).json()["reason"] == "busy"
+    stream.go.set()
+    assert wait_until(lambda: spoken(seen)) and session.last_answer["say"] == "Вижу экран."  # The rest of the answer is still to come.
+    rest.set()
+    idle(backend, session_id)
+    assert spoken(seen).count("Ответ.") == 1
+
+
+def test_a_late_call_of_an_earlier_turn_changes_nothing(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    backend.meta.replies.append(line("Вижу экран."))
+    post_frame(client, session_id, SCREENS[0], 100)
+    idle(backend, session_id)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    stream = field_first()
+    backend.meta.replies += [stream, line("Цена сто.")]
+    words(client, session_id, "Не смотри")
+    assert stream.written.wait(5)
+    words(client, session_id, "А сколько стоит?")
+    idle(backend, session_id)
+    write_on(backend, session_id, stream)
+    assert not session.not_looking and "not_looking" not in kinds(seen) and session.last_frame
+    assert spoken(seen) == ["Цена сто."]
+
+
+def test_the_field_with_the_eyes_shut_sends_nothing(backend):
+    client = backend.client
+    session_id = sharing(client)
+    away(backend, client, session_id)
+    seen = events_of(backend, session_id)
+    stream = field_first()
+    backend.meta.replies.append(stream)
+    words(client, session_id, "Точно не смотри")
+    write_on(backend, session_id, stream)
+    assert "not_looking" not in kinds(seen) and spoken(seen) == ["Не смотрю."]
+
+
+def test_a_second_field_leaves_the_line_on_its_way_alone(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    stream, taken_over, reply = field_first(), Stream("", '{"look": false, "say": "Вижу."}'), a_new_answer("Хорошо, не смотрю.")
+    backend.meta.replies += [stream, taken_over, reply]
+    words(client, session_id, "Не смотри")
+    assert stream.written.wait(5)
+    assert post_frame(client, session_id, SCREENS[2], 300).json()["accepted"]
+    assert taken_over.written.wait(5)
+    stream.go.set()
+    assert stream.ended.wait(5) and reply.written.wait(5)
+    taken_over.go.set()
+    assert taken_over.ended.wait(5)
+    write_on(backend, session_id, reply)
+    assert spoken(seen) == ["Хорошо, не смотрю."] and seen.count(CLOSED) == 1 and len(backend.meta.calls) == 4
+
+
+def test_a_field_in_the_moment_of_the_stop_finds_the_answer_stopped(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    stream = field_first()
+    backend.meta.replies += [stream, line("Хорошо, не смотрю.")]
+    words(client, session_id, "Не смотри")
+    assert stream.written.wait(5)
+    session.shown = True
+    publish = session.publish
+
+    def in_that_moment(event):  # The field reaches the loop after this event and ahead of the stop that follows it.
+        publish(event)
+        if event["type"] == "left":
+            stream.go.set()
+            assert stream.ended.wait(5)
+    session.publish = in_that_moment
+    moved(client, session_id)
+    idle(backend, session_id)
+    assert session.not_looking and session.heard == "" and spoken(seen) == ["Хорошо, не смотрю."]
+    no_frame_left(session, tmp_path)
+
+
+def test_a_field_after_the_end_of_the_call_changes_nothing(backend):
+    client = backend.client
+    session_id = sharing(client)
+    seen = events_of(backend, session_id)
+    stream = field_first()
+    backend.meta.replies.append(stream)
+    words(client, session_id, "Не смотри")
+    assert look(client, session_id, [SCREENS[0]]).status_code == 200
+    assert stream.written.wait(5)
+    assert client.post("/sessions/" + session_id + "/end", headers=AUTH).status_code == 200
+    write_on(backend, session_id, stream)
+    assert "not_looking" not in kinds(seen) and len(backend.meta.calls) == 1
+
+
+def test_a_call_that_lost_can_still_close_and_takes_no_frame(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 0.05)
+    client = backend.client
+    session_id = sharing(client)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    main, spare = Stream("", '{"say": "Вижу."}'), field_first()
+    backend.meta.replies += [main, spare, line("Хорошо, не смотрю.")]
+    words(client, session_id, "Не смотри")
+    assert look(client, session_id, [SCREENS[0]]).status_code == 200
+    assert main.written.wait(5) and spare.written.wait(5)
+    write_on(backend, session_id, main)
+    assert spoken(seen) == ["Вижу."]
+    number = max(session.lines)
+    assert client.post("/sessions/" + session_id + "/spoken", headers=AUTH, json={"line": number, "said": ""}).status_code == 200
+    assert session.heard == "Не смотри"
+    write_on(backend, session_id, spare)
+    assert session.not_looking and session.heard == ""
+    assert look(client, session_id, [SCREENS[1]], first_taken=400).status_code == 409
+    assert spoken(seen) == ["Вижу.", "Хорошо, не смотрю."] and pictures_in(asked_with(backend, -1)) == 0
+
+
+def test_the_spare_model_gets_no_picture_after_the_field(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 0.05)
+    client = backend.client
+    session_id = sharing(client)
+    session = backend.store.sessions[session_id]
+    seen = events_of(backend, session_id)
+    main = Stream('{"look": false', ', "say": "Главный."}')
+    backend.meta.replies += [main, line("Запасной.")]
+    words(client, session_id, "Не смотри")
+    assert look(client, session_id, [SCREENS[0]]).status_code == 200
+    assert main.written.wait(5) and wait_until(lambda: len(backend.meta.calls) == 2)
+    assert pictures_in(asked_with(backend, 0)) == 1 and pictures_in(asked_with(backend, 1)) == 0
+    assert wait_until(lambda: session.answer.done())
+    write_on(backend, session_id, main)
+    assert spoken(seen) == ["Запасной."] and seen.count(CLOSED) == 1
+
+
+def test_a_field_the_stream_missed_closes_with_the_answer(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    backend.meta.replies.append('{"say": "Не смотрю.", "lo\\u006fk": false}')
+    words(client, session_id, "Не смотри")
+    idle(backend, session_id)
+    assert session.not_looking and seen.count(CLOSED) == 1
+    no_frame_left(session, tmp_path)
+
+
+def test_eyes_shut_by_a_field_keep_nothing_whatever_the_answer_says(backend, tmp_path, monkeypatch):
+    client, session_id, session, seen = on_a_screen(backend, tmp_path, monkeypatch)
+    backend.meta.replies.append(line("Нажми сюда.", show=SHOW, notes={"look": False}))
+    words(client, session_id, "Куда нажать?")
+    idle(backend, session_id)
+    assert session.not_looking and "hint" not in kinds(seen)
+    no_frame_left(session, tmp_path)
+
+
+def test_the_turn_that_closed_cannot_open(backend):
+    client = backend.client
+    session_id = sharing(client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies.append('{"look": false, "say": "Не смотрю.", "look": true}')
+    words(client, session_id, "Не смотри")
+    assert look(client, session_id, [SCREENS[0]]).status_code == 200
+    idle(backend, session_id)
+    assert backend.store.sessions[session_id].not_looking and seen.count(CLOSED) == 1
+    assert {"type": "not_looking", "on": False} not in seen and spoken(seen) == ["Не смотрю."]
 
 
 def test_the_rule_stays_out_of_the_language_line():

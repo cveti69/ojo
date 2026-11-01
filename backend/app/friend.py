@@ -57,6 +57,7 @@ MAX_RESTARTS = 2  # A screen that keeps changing still gets an answer.
 MAX_REPLY = 500
 MAX_LABEL = 200
 _SAY_FIRST = re.compile(r'\s*\{\s*"say"\s*:\s*"((?:[^"\\]|\\.)*)"', re.S)
+_LOOK_AWAY = re.compile(r'"look"\s*:\s*false')  # Any order of fields. Quotes inside a text come escaped, so this is the field itself.
 # Broad on purpose: a screen wrongly taken for a payment costs one picture in the log, the other way round costs a card number.
 # In the same form as the text it meets: NFKC takes the Thai ำ apart.
 _PAYMENT = unicodedata.normalize("NFKC", (
@@ -375,9 +376,20 @@ class Friend:
         self._start(session, session.words["silent"], frame)
         return True, None
 
-    def _turn_away(self, session: Session) -> None:
-        """From here on no frame is taken for a turn or kept. The phone hears of it ahead of the line that says so."""
+    def _turn_away(self, session: Session, frame: Optional[Frame]) -> None:
+        """From here on no frame is taken for a turn or kept, and those of this turn go from the chat and the log. The last
+        screen can have stood there since an earlier turn that kept it, and a stopped answer leaves it nowhere else."""
+        if session.not_looking:
+            return
         self._left(session)
+        closing = [frame, session.last_frame] + [turn.get("frame") for turn in session.chat[session.open_mark:]]
+        stamps = {seen.timestamp_ms for seen in closing if seen}
+        for turn in session.chat:
+            if turn.get("frame") and turn["frame"].timestamp_ms in stamps:
+                turn["frame"] = None
+        if session.call_log:
+            for timestamp_ms in stamps:
+                session.call_log.forget(timestamp_ms)
         session.seen_gray = session.last_frame = session.changed_at = None
         session.note("not looking", on=True)
         session.publish({"type": "not_looking", "on": True})
@@ -454,27 +466,43 @@ class Friend:
         self._stop(session)
         session.answer = self._run(self._answer(session, session.turn, frame))
 
-    def _on_text(self, session: Session, turn: int, frame: Optional[Frame], started: float, early: dict, model: str) -> tuple:
+    def _on_text(self, session: Session, turn: int, frame: Optional[Frame], tied: Optional[Frame], started: float, early: dict, model: str) -> tuple:
         """The line goes to the voice once it is whole, ahead of the rest of the answer. It reaches the chat at the same
         moment, because the rest may never come. The call runs on in its thread after a new turn, which then has the say,
-        and after the other model won: the second thing returned is what shuts this one up."""
+        and after the other model won: the second thing returned is what shuts this one up. Only one word of it still
+        counts then: not to look holds from where it is written, even if a new screen has stopped this answer by that time."""
         loop, task = asyncio.get_running_loop(), asyncio.current_task()
         found: List[str] = []
         dropped: List[bool] = []
+        closing: List[bool] = []
 
         def deliver(line: str) -> None:
             # With the eyes shut the answer can be one that wants to look, and that one must not speak ahead of the screen.
-            if session.answer is not task or session.ended or early or dropped or session.not_looking or (frame and _gone(session, frame)):
+            if session.answer is not task or session.ended or early or dropped or session.not_looking or (tied and _gone(session, tied)):
                 return
             early.update(line=line, ms=_ms(started), model=model, turn={"role": "assistant", "text": json.dumps({"say": line}, ensure_ascii=False)})
             session.chat.append(early["turn"])
-            session.publish({"type": "say", "turn": turn, "line": session.remember_line(early["turn"]), "frame_ts": _time_of(frame),
+            session.publish({"type": "say", "turn": turn, "line": session.remember_line(early["turn"]), "frame_ts": _time_of(tied),
                              "text_ru": line, "paste_text": None, "timings": {"model_ms": early["ms"]}})
+
+        def turn_away() -> None:
+            if session.turn != turn or session.ended or session.not_looking:
+                return
+            self._turn_away(session, frame)
+            if session.answer is task and not dropped:  # It goes on to its end and says its line.
+                return
+            self._stop(session)  # What took over came with a frame.
+            session.heard, session.settling = "", False  # What waits for one gets none now.
+            if _unanswered(session):
+                self._reask(session)
 
         def on_text(text: str) -> None:
             if not found and first_line(text):
                 found.append(first_line(text))
                 loop.call_soon_threadsafe(deliver, found[0])
+            if not closing and _LOOK_AWAY.search(text):
+                closing.append(True)
+                loop.call_soon_threadsafe(turn_away)
         return on_text, lambda: dropped.append(True)
 
     async def _call(self, session: Session, model: str, messages: List[dict], effort: str, seconds: float, on_text: Callable) -> Optional[tuple]:
@@ -486,11 +514,10 @@ class Friend:
             session.note("no answer", model=model, error=type(error).__name__)
             return None
 
-    async def _ask(self, session: Session, turn: int, frame: Optional[Frame], started: float, early: dict) -> Optional[tuple]:
+    async def _ask(self, session: Session, turn: int, frame: Optional[Frame], tied: Optional[Frame], started: float, early: dict) -> Optional[tuple]:
         """The main model alone while the person can wait. With no line from it by then, or a broken answer, the spare model
         runs beside it. The first whole line has the say and the other call ends unused, but silence from the spare one
         waits for the main one. A line that has already gone out stands, and only the rest of the answer is lost."""
-        messages = messages_of(session)
         effort = session.effort or config.META_TALK_REASONING
         main, spare = config.META_TALK_MODEL, config.META_SPARE_MODEL
         running: dict = {}
@@ -498,10 +525,11 @@ class Friend:
         drops: List[Callable] = []
 
         def call(model: str) -> asyncio.Task:
-            on_text, drop = self._on_text(session, turn, frame, started, early, model)
+            on_text, drop = self._on_text(session, turn, frame, tied, started, early, model)
             drops.append(drop)
             seconds = ANSWER_SECONDS - (time.perf_counter() - started)
-            task = self._run(self._call(session, model, messages, effort, seconds, on_text))
+            # The chat as it is now: by the time the spare model starts the eyes can have shut.
+            task = self._run(self._call(session, model, messages_of(session), effort, seconds, on_text))
             running[task] = model
             return task
 
@@ -539,9 +567,10 @@ class Friend:
     async def _reply(self, session: Session, turn: int, frame: Optional[Frame]) -> None:
         started = time.perf_counter()
         early: dict = {}
+        opened = not session.not_looking  # The field can shut them while this waits, and that is still this turn's doing.
         tied = None if session.restarts >= MAX_RESTARTS else frame  # A screen that keeps changing still gets an answer, whatever it shows by then.
-        got = await self._ask(session, turn, tied, started, early)
-        away = bool(got) and got[2].get("look") is False and not session.not_looking
+        got = await self._ask(session, turn, frame, tied, started, early)
+        away = opened and (session.not_looking or (bool(got) and got[2].get("look") is False))
         if away:
             tied = None  # Their wish holds on any screen, and the phone would drop a line about one it has left.
         if got and tied and not early and _gone(session, tied):  # Nothing in it is about what they see now, and their words go on to that.
@@ -559,7 +588,7 @@ class Friend:
                 session.publish({"type": "quiet", "turn": turn})
             return
         model, reply, answer = got
-        if session.not_looking and answer.get("look") is True:
+        if not opened and answer.get("look") is True:
             self._look_again(session)
             return
         ms = _ms(started)
@@ -577,17 +606,15 @@ class Friend:
         lang = _text(answer.get("lang")).lower()
         if re.fullmatch("[a-z]{2}", lang):
             session.app_lang = lang
-        if frame and (private or away):  # It is not sent again, and what the model noted is enough for the next turns.
+        if frame and private:  # It is not sent again, and what the model noted is enough for the next turns.
             for kept in session.chat:
                 if kept.get("frame") is frame:
                     kept["frame"] = None
-        if frame and away and session.call_log:  # The screen can have stood there since an earlier turn that kept it.
-            session.call_log.forget(frame.timestamp_ms)
         hidden = private or away or _unread(session, frame)
         session.note("answer", turn=turn, model=model, ms=ms, first_ms=early.get("ms"), tokens=reply["usage"].get("completion_tokens"), private=private,
                      frame=session.keep_picture(frame, hidden) if frame else None, **({} if hidden else {"answer": answer}))
         if away:
-            self._turn_away(session)
+            self._turn_away(session, frame)
         said, paste = _line(answer.get("say")), _text(answer.get("paste"))
         self._hand_over(session, paste)
         paste_text = paste if session.text_entry == "clipboard" else None

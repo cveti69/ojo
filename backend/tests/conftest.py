@@ -124,6 +124,13 @@ def receive_type(websocket, kind):
     raise AssertionError("Missing event " + kind)
 
 
+class Stream:
+    """An answer written in two pieces and held between them. The call runs on in its thread, as a stopped one does."""
+    def __init__(self, first, rest):
+        self.first, self.rest = first, rest
+        self.written, self.go, self.ended = threading.Event(), threading.Event(), threading.Event()
+
+
 class FakeMeta:
     def __init__(self):
         self.replies = []
@@ -144,9 +151,17 @@ class FakeMeta:
             self.hook(index)
         if isinstance(response, Exception):
             raise response
+        stream = response if isinstance(response, Stream) else None
+        if stream:
+            on_text(stream.first)
+            stream.written.set()
+            assert stream.go.wait(5)
+            response = stream.first + stream.rest
         text = response if isinstance(response, str) else json.dumps(response, ensure_ascii=False)
         if on_text:
             on_text(text)
+        if stream:
+            stream.ended.set()
         if self.after_text:
             self.after_text(index)
         return {"text": text, "usage": {"completion_tokens": 9}, "ms": 1}

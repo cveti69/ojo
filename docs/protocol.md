@@ -79,12 +79,21 @@ one and the main one is not cancelled. The first whole line has the say, and the
 Silence from the spare model waits for the main one. Nothing by 30 seconds ends the turn.
 
 The answer can carry `look`, and no list of phrases decides it: the model understands. `false` means the person asked the agent not to
-watch the screen at all, in any words and any language. The rules list the field first, and an answer that writes it first sends no
-early line: ahead of the line that says so the server sends `not_looking` with `on: true`. An answer that writes it after `say` speaks
-first, and the state comes with the end of that answer. From then on the server takes no frame for a turn and keeps none:
-`/frames` answers with `reason: not_looking`, `/changed` does nothing, and the frame of that turn leaves the chat and the log. The phone
-stops sending frames and reading text, and the broadcast stays on. Text read before that can still reach `/text`: it keeps a payment
-screen out of the log.
+watch the screen at all, in any words and any language. The server reads this field in the stream, in any order of fields, and sends
+`not_looking` with `on: true` as soon as it is written. The rules list it first, and an answer that writes it first sends no early
+line, so the event goes ahead of the line that says so. An answer that writes it after `say` speaks first, and the event follows.
+From then on the server takes no frame for a turn and keeps none: `/frames` answers with `reason: not_looking`, `/changed` does
+nothing, `/look` answers 409, and the frames of that turn leave the chat and the log, the last frame of the call among them. The spare
+model, if it starts after that, gets no picture. The phone stops sending frames and reading text, and the broadcast stays on. Text
+read before that can still reach `/text`: it keeps a payment screen out of the log.
+
+The field counts even if a new screen has stopped its answer by then, in the same turn. A later turn ignores it. Whatever took over
+from that answer stops, and a look or a wait for a frame is dropped. If no line has gone out, their words go to the model with no
+picture and the note that they asked it not to look, with one line in reply. The search does not know where in the answer it stands,
+so a `look` nested in `notes` closes too: that mistake falls on the safe side.
+
+While the eyes are open, the agent is looking. Until the field is written a frame can still go to the model: a new screen in that time
+restarts the answer with that frame. The server cannot call it back, it only keeps none of the frames of that turn.
 
 With the eyes shut the person's words reach the model with no picture and a note that they asked it not to look, and talk changes
 nothing. `look: true` in that state means they asked it to look again. That answer goes unsaid, the server sends `not_looking` with
