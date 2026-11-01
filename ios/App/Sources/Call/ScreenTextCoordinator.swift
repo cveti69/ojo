@@ -60,7 +60,7 @@ final class ScreenTextCoordinator {
             guard !Task.isCancelled, self.store.screenTextMode == .app,
                   UIApplication.shared.applicationState == .active else { return }
             let background = UIApplication.shared.applicationState == .background
-            let reading = await self.worker.read(jpegData: jpeg, targetLang: targetLang,
+            let reading = await self.worker.read(jpegData: jpeg, screenLang: targetLang,
                                                  onDiagnostic: { journal.append($0) }) {
                 journal.append("Прогрев текста: чтение начинается; phys_footprint: \(ProcessMemory.description) МБ")
             }
@@ -78,7 +78,7 @@ final class ScreenTextCoordinator {
     func recognizeTest(jpeg: Data, targetLang: String, label: String, cpuOnly: Bool = false) async {
         let background = UIApplication.shared.applicationState == .background
         let journal = journal
-        let reading = await worker.read(jpegData: jpeg, targetLang: targetLang, cpuOnly: cpuOnly,
+        let reading = await worker.read(jpegData: jpeg, screenLang: targetLang, cpuOnly: cpuOnly,
                                         onDiagnostic: { journal.append($0) }) {
             journal.append("\(label): чтение начинается; фон перед чтением: \(background ? "да" : "нет"); phys_footprint: \(ProcessMemory.description) МБ")
         }
@@ -102,7 +102,7 @@ final class ScreenTextCoordinator {
                     task = nil
                     consumeLatest()
                 }
-                let reading = await worker.read(jpegData: frame.jpeg, targetLang: client.settings.targetLang,
+                let reading = await worker.read(jpegData: frame.jpeg, screenLang: client.settings.targetLang,
                                                 onDiagnostic: { journal.append($0) }) {
                     if logFirst {
                         journal.append("Первое чтение текста в приложении начинается; фон перед чтением: \(background ? "да" : "нет"); phys_footprint: \(ProcessMemory.description) МБ")

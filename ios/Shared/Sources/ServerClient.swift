@@ -2,20 +2,22 @@ import Foundation
 
 public final class ServerClient: Sendable {
     public let settings: ServerSettings
-    private let session: URLSession
+    let connection: ServerConnection
+    // The slowest frame on real calls took 0.93 s, and 2 s after the words the server takes another one.
+    private static let screenTimeout: TimeInterval = 5
 
-    public init(settings: ServerSettings, session: URLSession? = nil) {
+    public init(settings: ServerSettings, configuration: URLSessionConfiguration? = nil, journal: (@Sendable (String) -> Void)? = nil) {
         self.settings = settings
-        if let session {
-            self.session = session
-        } else {
+        connection = ServerConnection(configuration: configuration ?? {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.timeoutIntervalForRequest = 20
             configuration.timeoutIntervalForResource = 60
             configuration.urlCache = nil
-            self.session = URLSession(configuration: configuration)
-        }
+            return configuration
+        }(), journal: journal)
     }
+
+    deinit { connection.close() }
 
     public func createSession() async throws -> SessionResponse {
         try await json("POST", ["sessions"], body: CreateSessionRequest(settings: settings))
@@ -28,7 +30,8 @@ public final class ServerClient: Sendable {
         request.setValue(String(height), forHTTPHeaderField: "X-Frame-Height")
         request.setValue(String(timestampMS), forHTTPHeaderField: "X-Frame-Ts")
         if small { request.setValue("1", forHTTPHeaderField: "X-Frame-Small") }
-        let (data, response) = try await session.upload(for: request, from: jpeg)
+        request.timeoutInterval = Self.screenTimeout
+        let (data, response) = try await connection.session.upload(for: request, from: jpeg)
         try validate(response)
         return try JSONDecoder().decode(FrameResponse.self, from: data)
     }
@@ -38,7 +41,7 @@ public final class ServerClient: Sendable {
     }
 
     public func sendScreenText(_ lines: [ScreenTextLine], sessionID: String, frameTS: Int64) async throws -> OKResponse {
-        try await json("POST", ["sessions", sessionID, "text"], body: ScreenTextRequest(frameTS: frameTS, lines: lines))
+        try await json("POST", ["sessions", sessionID, "text"], body: ScreenTextRequest(frameTS: frameTS, lines: lines), timeout: Self.screenTimeout)
     }
 
     public func end(sessionID: String) async throws -> OKResponse {
@@ -61,7 +64,7 @@ public final class ServerClient: Sendable {
             components.queryItems = [URLQueryItem(name: "after", value: after)]
             request.url = components.url
         }
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await connection.session.data(for: request)
         try validate(response)
         if (response as? HTTPURLResponse)?.statusCode == 204 { return nil }
         return try JSONDecoder().decode(ServerEvent.self, from: data)
@@ -71,7 +74,7 @@ public final class ServerClient: Sendable {
     public func say(_ wav: Data, sessionID: String) async throws -> SpokenReply {
         var request = try request("POST", ["sessions", sessionID, "say"])
         request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
-        let (data, response) = try await session.upload(for: request, from: wav)
+        let (data, response) = try await connection.session.upload(for: request, from: wav)
         try validate(response)
         return try JSONDecoder().decode(SpokenReply.self, from: data)
     }
@@ -93,7 +96,8 @@ public final class ServerClient: Sendable {
         body.append(Data("--\(boundary)--\r\n".utf8))
         var request = try request("POST", ["sessions", sessionID, "look"])
         request.setValue("multipart/form-data; boundary=" + boundary, forHTTPHeaderField: "Content-Type")
-        let (data, response) = try await session.upload(for: request, from: body)
+        request.timeoutInterval = Self.screenTimeout
+        let (data, response) = try await connection.session.upload(for: request, from: body)
         try validate(response)
         return try JSONDecoder().decode(OKResponse.self, from: data)
     }
@@ -106,7 +110,8 @@ public final class ServerClient: Sendable {
 
     /// Keeps the connection warm, so the voice's first request does not pay for opening it.
     public func health() async throws {
-        let (_, response) = try await session.data(for: request("GET", ["health"]))
+        let request = try request("GET", ["health"])
+        let (_, response) = try await connection.session.data(for: request)
         try validate(response)
     }
 
@@ -116,7 +121,7 @@ public final class ServerClient: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(SpeechRequest(text: text, voice: voice))
         request.timeoutInterval = 2.5  // Later than this, the system voice is the better answer.
-        let (audio, response) = try await session.bytes(for: request)
+        let (audio, response) = try await connection.session.bytes(for: request)
         try validate(response)
         return audio
     }
@@ -141,7 +146,7 @@ public final class ServerClient: Sendable {
         }
         components.scheme = components.scheme == "https" ? "wss" : "ws"
         request.url = components.url
-        return session.webSocketTask(with: request)
+        return connection.session.webSocketTask(with: request)
     }
 
     private func request(_ method: String, _ path: [String]) throws -> URLRequest {
@@ -158,15 +163,16 @@ public final class ServerClient: Sendable {
         return request
     }
 
-    private func json<Body: Encodable, Response: Decodable>(_ method: String, _ path: [String], body: Body) async throws -> Response {
+    private func json<Body: Encodable, Response: Decodable>(_ method: String, _ path: [String], body: Body, timeout: TimeInterval? = nil) async throws -> Response {
         var request = try request(method, path)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
+        if let timeout { request.timeoutInterval = timeout }
         return try await getJSON(request)
     }
 
     private func getJSON<Response: Decodable>(_ request: URLRequest) async throws -> Response {
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await connection.session.data(for: request)
         try validate(response)
         return try JSONDecoder().decode(Response.self, from: data)
     }
@@ -174,6 +180,50 @@ public final class ServerClient: Sendable {
     private func validate(_ response: URLResponse) throws {
         guard let response = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
         guard (200..<300).contains(response.statusCode) else { throw ClientError.http(response.statusCode) }
+    }
+}
+
+/// The connections of one client. One that hangs stays inside its URLSession and takes the next requests down with it,
+/// so a timeout or a lost network starts a new URLSession. Sockets on the old one go on until they end by themselves.
+final class ServerConnection: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private static let lost: Set<URLError.Code> = [.timedOut, .networkConnectionLost, .notConnectedToInternet]
+    // A request that has just picked up the old session would crash if it were invalidated under it.
+    private static let invalidateAfter: TimeInterval = 30
+    private let configuration: URLSessionConfiguration
+    private let journal: (@Sendable (String) -> Void)?
+    private let lock = NSLock()
+    private var current: URLSession?
+
+    init(configuration: URLSessionConfiguration, journal: (@Sendable (String) -> Void)?) {
+        self.configuration = configuration
+        self.journal = journal
+    }
+
+    var session: URLSession {
+        lock.withLock {
+            if let current { return current }
+            let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+            current = session
+            return session
+        }
+    }
+
+    func close() { lock.withLock { current }?.finishTasksAndInvalidate() }
+
+    /// The system reports this ahead of the error, so a hung request names the connection it hung on.
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        let used = metrics.transactionMetrics.last
+        let described = "\(task.originalRequest?.url?.lastPathComponent ?? "запрос"), \(used?.networkProtocolName ?? "неизвестно"), порт \(used?.localPort ?? 0)"
+        if used?.networkProtocolName != nil, used?.isReusedConnection == false { journal?("Новое соединение: \(described)") }
+        guard let code = (task.error as? URLError)?.code, Self.lost.contains(code) else { return }
+        let first = lock.withLock {
+            guard current === session else { return false }  // Another request has done it already.
+            current = nil
+            return true
+        }
+        guard first else { return }
+        journal?("Соединение заменено, код \(code.rawValue): \(described)")
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.invalidateAfter) { session.finishTasksAndInvalidate() }
     }
 }
 

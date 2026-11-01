@@ -182,7 +182,7 @@ final class CallViewModel: ObservableObject {
             guard let self else { return }
             defer { if self.workflowID == id { self.isWorking = false } }
             do {
-                let client = ServerClient(settings: settings)
+                let client = ServerClient(settings: settings, journal: { [journal = self.journal] in journal?.append($0) })
                 let response = try await client.createSession()
                 guard !Task.isCancelled, self.workflowID == id else {
                     self.endRemoteSession(client: client, sessionID: response.sessionID)

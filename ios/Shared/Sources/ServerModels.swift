@@ -55,6 +55,7 @@ public struct OKResponse: Decodable, Sendable { public let ok: Bool }
 public struct FrameResponse: Decodable, Sendable {
     public let accepted: Bool
     public let reason: String?
+    public let lang: String?  // What the model says the screen is written in.
 }
 
 public struct SuggestionsResponse: Decodable, Sendable {

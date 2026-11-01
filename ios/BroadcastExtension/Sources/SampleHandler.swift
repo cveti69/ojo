@@ -75,6 +75,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private var windowFinds = 0
     private var windowMisses = 0
     private var keptFrame: KeptFrame?
+    private var screenLang: String?
     private var finished = true
     private var finishReported = false
     private var lastCheck: TimeInterval = -.infinity
@@ -95,7 +96,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             let settings = store.settings
             guard !settings.token.isEmpty else { throw ClientError.missingToken }
             let run = Run(id: id, sessionID: sessionID, store: store, journal: journal,
-                          client: ServerClient(settings: settings), mailbox: try? ScreenTextMailbox(configuration: configuration),
+                          client: ServerClient(settings: settings, journal: { journal.append($0) }), mailbox: try? ScreenTextMailbox(configuration: configuration),
                           shelf: try? FrameShelf(configuration: configuration))
             let ticket = UUID()
             let asked = store.screenAsked
@@ -312,6 +313,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             windowFinds = 0
             windowMisses = 0
             keptFrame = nil
+            screenLang = nil
             heartbeat = nil
             memoryPressure = nil
             return old
@@ -334,7 +336,8 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         guard reserved else { return }
         let task = Task { [self] in
             do {
-                _ = try await run.client.sendFrame(jpeg, sessionID: run.sessionID, width: Int(size.width), height: Int(size.height), timestampMS: timestamp, small: small)
+                let reply = try await run.client.sendFrame(jpeg, sessionID: run.sessionID, width: Int(size.width), height: Int(size.height), timestampMS: timestamp, small: small)
+                if let lang = reply.lang { lock.withLock { if runID == run.id { screenLang = lang } } }
                 // Any decoded server response confirms delivery, including all skip reasons.
                 frameCompleted(delivered: true, thumbnail: thumbnail, size: size, runID: run.id)
             } catch {
@@ -387,7 +390,8 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 defer { completeText(runID: run.id) }
                 guard isActive(runID: run.id), !Task.isCancelled else { return }
                 let level: ScreenTextLevel = mode == .extensionFast ? .fast : .accurate
-                let reading = await textWorker.read(jpegData: jpeg, targetLang: run.client.settings.targetLang, level: level,
+                let lang = lock.withLock { screenLang }
+                let reading = await textWorker.read(jpegData: jpeg, screenLang: lang, level: level,
                     canRead: { [self] in
                         guard isActive(runID: run.id), run.store.sessionID == run.sessionID,
                               run.store.screenTextMode == mode else { return false }
@@ -405,7 +409,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                     if first { run.journal.append("Первое чтение текста в расширении начинается; \(level.rawValue); phys_footprint: \(ProcessMemory.description) МБ") }
                 }
                 guard !reading.skipped else { return }
-                run.journal.append("Текст в расширении: \(reading.diagnostic)")
+                run.journal.append("Текст в расширении: \(reading.diagnostic); язык: \(lang ?? "сам")")
                 guard reading.error == nil, !Task.isCancelled, isActive(runID: run.id), run.store.screenTextMode == mode else { return }
                 do { _ = try await run.client.sendScreenText(reading.lines, sessionID: run.sessionID, frameTS: timestamp) }
                 catch { if !Task.isCancelled { run.journal.append("Ошибка /text в расширении: \(error.localizedDescription)") } }

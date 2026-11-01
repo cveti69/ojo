@@ -11,7 +11,7 @@ Without it, or with a wrong value, the answer is `401`. Sessions live in the ser
 |---|---|---|---|
 | `POST /sessions` | app | `{"user_lang": "ru", "target_lang": "id", "text_entry": "clipboard", "effort": "medium", "character": "warm", "own_character": "", "eyes": true}`, `eyes` only when the eyes are on | `201 {"session_id": "s_ab12cd34"}` |
 | `POST /transcribe` | app | `audio/wav`: mono, 16 bit, 16 kHz | `200 {"text": "..."}` |
-| `POST /sessions/{id}/frames` | broadcast extension | `image/jpeg` | `202 {"accepted": true}` if the frame became a turn, or `202 {"accepted": false, "reason": "same"}`. `reason`: `same` the same screen, `small` a small change the next turn will see, `looking` the phone is sending the screen for a line, `busy` the answer was restarted twice already. `lang`, once the model has named the language of the screen, two letters: the extension reads the next screens with it |
+| `POST /sessions/{id}/frames` | broadcast extension | `image/jpeg` | `202 {"accepted": true}` if the frame became a turn, or `202 {"accepted": false, "reason": "same"}`. `reason`: `same` the same screen, `small` a small change the next turn will see, `looking` the phone is sending the screen for a line, `busy` the answer was restarted twice already, `old` a newer frame has come. `lang`, once the model has named the language of the screen, two letters: the extension reads the next screens with it |
 | `POST /sessions/{id}/text` | broadcast extension or app | `{"frame_ts": 1793436844526, "lines": [{"text": "Beli sekarang", "words": [{"text": "Beli", "box": [0.1, 0.8, 0.2, 0.83]}]}]}` | `200 {"ok": true}` |
 | `GET /sessions/{id}/suggestions` | keyboard | | `200 {"step_id": "s3", "texts": ["sampo anti ketombe"], "hint_ru": ""}` |
 | `GET /sessions/{id}/hint?after=s3` | app, the fallback without a WebSocket, once a second | | `200` with a `hint` event newer than `after`, otherwise `204` |
@@ -32,8 +32,9 @@ Without it, or with a wrong value, the answer is `401`. Sessions live in the ser
 `target_lang` can be `"auto"`: the model names the app's language from the screen, and until the first screen a translation into it
 gets `409`. `text_entry` takes `"keyboard"` or `"clipboard"`. A frame comes with the headers `X-Frame-Width` and `X-Frame-Height` (the
 source screen size in pixels) and `X-Frame-Ts` (the frame time in milliseconds). The extension sends no new frame while the last
-request is in flight. `X-Frame-Small: 1` means the change is small and has settled, such as a check mark or a price digit. It starts
-no turn, and the frame stays the latest one.
+request is in flight, and gives up on `/frames`, `/text` and `/look` after 5 seconds without an answer. After a timeout or a lost
+network the phone opens a new connection for the next request. `X-Frame-Small: 1` means the change is small and has settled, such as
+a check mark or a price digit. It starts no turn, and the frame stays the latest one.
 
 `effort` picks the model's reasoning depth for the whole call: `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Without it the
 server's value applies. `character` picks the agent's manner: `warm`, `strict`, `brief`, `patient`, or `own` with its text in

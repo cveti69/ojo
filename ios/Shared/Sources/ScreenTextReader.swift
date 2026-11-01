@@ -51,8 +51,8 @@ public struct ScreenTextReader: Sendable {
     ]
 
     // Order matters: with English first, Vision reads Chinese, Thai, Japanese and Korean as nothing.
-    public static func recognitionLanguages(targetLang: String) -> [String] {
-        let code = targetLang.lowercased()
+    public static func recognitionLanguages(screenLang: String?) -> [String] {
+        let code = screenLang?.lowercased() ?? ""
         return (firstLanguages.first { code.hasPrefix($0.0) }.map { [$0.1] } ?? []) + ["en-US"]
     }
 
@@ -64,16 +64,17 @@ public struct ScreenTextReader: Sendable {
         ScreenTextWord(text: text, box: topLeftBox(box ?? lineBox))
     }
 
-    public func read(_ image: CGImage, targetLang: String, level: ScreenTextLevel = .accurate, cpuOnly: Bool = false) throws -> [ScreenTextLine] {
+    /// Detection reads any language on its own. The language of the screen only keeps a rare word of it among the Latin ones,
+    /// and a wrong one takes nothing away, so what the settings say does not matter here.
+    public func read(_ image: CGImage, screenLang: String? = nil, level: ScreenTextLevel = .accurate, cpuOnly: Bool = false) throws -> [ScreenTextLine] {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = level == .fast ? .fast : .accurate
         request.usesLanguageCorrection = false
         if level == .fast {
             request.recognitionLanguages = ["en-US"]
-        } else if targetLang.lowercased() == "auto" {
-            request.automaticallyDetectsLanguage = true
         } else {
-            request.recognitionLanguages = Self.recognitionLanguages(targetLang: targetLang)
+            request.automaticallyDetectsLanguage = true
+            request.recognitionLanguages = Self.recognitionLanguages(screenLang: screenLang)
         }
         if cpuOnly {
             if #available(iOS 17.0, macOS 14.0, *) {
@@ -149,7 +150,7 @@ public final class ScreenTextWorker: Sendable {
     public init() {}
 
     public func read(
-        jpegData: Data, targetLang: String, level: ScreenTextLevel = .accurate, cpuOnly: Bool = false,
+        jpegData: Data, screenLang: String? = nil, level: ScreenTextLevel = .accurate, cpuOnly: Bool = false,
         canRead: @escaping @Sendable () -> Bool = { true },
         onDiagnostic: (@Sendable (String) -> Void)? = nil,
         onStart: @escaping @Sendable () -> Void = {}
@@ -170,14 +171,14 @@ public final class ScreenTextWorker: Sendable {
                         guard canRead() else { skipped = true; return [] }
                         onStart()
                         do {
-                            return try ScreenTextReader().read(image, targetLang: targetLang, level: level, cpuOnly: useCPU)
+                            return try ScreenTextReader().read(image, screenLang: screenLang, level: level, cpuOnly: useCPU)
                         } catch {
                             guard !useCPU, canRead() else { throw error }
                             let originalError = error.localizedDescription
                             retriedOnCPU = true
                             useCPU = true
                             do {
-                                let lines = try ScreenTextReader().read(image, targetLang: targetLang, level: level, cpuOnly: true)
+                                let lines = try ScreenTextReader().read(image, screenLang: screenLang, level: level, cpuOnly: true)
                                 Self.cpuFallback.enable()
                                 Self.cpuFallback.reportIfNeeded(onDiagnostic)
                                 return lines

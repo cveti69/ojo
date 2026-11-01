@@ -26,17 +26,34 @@ private final class MemoryDefaults: UserDefaults, @unchecked Sendable {
     override func synchronize() -> Bool { true }
 }
 
+private final class Notes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+
+    func add(_ line: String) { lock.withLock { lines.append(line) } }
+    var all: [String] { lock.withLock { lines } }
+}
+
 private final class StubState: @unchecked Sendable {
     private let lock = NSLock()
     private var requests: [URLRequest] = []
     private var status: Int?
     private var noHint = false
+    private var failure: URLError.Code?
 
-    func next(status: Int? = nil, noHint: Bool = false) {
+    func next(status: Int? = nil, noHint: Bool = false, failure: URLError.Code? = nil) {
         lock.lock()
         defer { lock.unlock() }
         self.status = status
         self.noHint = noHint
+        self.failure = failure
+    }
+
+    func takeFailure() -> URLError.Code? {
+        lock.lock()
+        defer { lock.unlock() }
+        defer { failure = nil }
+        return failure
     }
 
     func response(to request: URLRequest) -> (Int, String) {
@@ -48,7 +65,7 @@ private final class StubState: @unchecked Sendable {
         if path.hasSuffix("/hint"), noHint { noHint = false; return (204, "") }
         if path == "/api/sessions" { return (201, #"{"session_id":"session-test"}"#) }
         if path.hasSuffix("/voices") { return (200, #"{"voices":[{"id":"voice-1","name":"George"}],"default":"voice-1"}"#) }
-        if path.hasSuffix("/frames") { return (202, #"{"accepted":false,"reason":"busy"}"#) }
+        if path.hasSuffix("/frames") { return (202, #"{"accepted":false,"reason":"busy","lang":"zh"}"#) }
         if path.hasSuffix("/speech") { return (200, "abcd") }
         if path.hasSuffix("/say") {
             return (200, #"{"heard":true,"speech_ms":1200}"#)
@@ -73,6 +90,10 @@ private final class ProtocolStub: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        if let failure = Self.state.takeFailure() {
+            client?.urlProtocol(self, didFailWithError: URLError(failure))
+            return
+        }
         let (status, body) = Self.state.response(to: request)
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil,
                                        headerFields: ["Content-Type": "application/json"])!
@@ -100,9 +121,7 @@ private enum ProtocolChecks {
                                       userLang: "ru", targetLang: "auto", textEntry: .clipboard)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ProtocolStub.self]
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-        let client = ServerClient(settings: settings, session: session)
+        let client = ServerClient(settings: settings, configuration: configuration)
         let created = try await client.createSession()
         try check(created.sessionID == "session-test", "session_id decoding")
         _ = try await client.words("Что это?", sessionID: created.sessionID)
@@ -120,7 +139,7 @@ private enum ProtocolChecks {
         try await client.health()
         let frame = try await client.sendFrame(Data([0xff, 0xd8, 0xff, 0xd9]), sessionID: created.sessionID,
                                                width: 1170, height: 2532, timestampMS: 123456789)
-        try check(!frame.accepted && frame.reason == "busy", "busy frame response")
+        try check(!frame.accepted && frame.reason == "busy" && frame.lang == "zh", "busy frame response")
         let lines = [ScreenTextLine(text: "Beli sekarang", words: [
             ScreenTextWord(text: "Beli", box: [0.1, 0.8, 0.2, 0.83]),
             ScreenTextWord(text: "sekarang", box: [0.21, 0.8, 0.4, 0.83])
@@ -198,10 +217,12 @@ private enum ProtocolChecks {
                   && upload.value(forHTTPHeaderField: "X-Frame-Height") == "2532"
                   && upload.value(forHTTPHeaderField: "X-Frame-Ts") == "123456789"
                   && upload.value(forHTTPHeaderField: "X-Frame-Small") == nil, "frame metadata")
+        try check(upload.timeoutInterval == 5 && lookRequest.timeoutInterval == 5, "an old frame is not worth the wait")
         let screenText = requests.first { $0.url!.path.hasSuffix("/text") }!
         let textBody = try JSONDecoder().decode(ScreenTextRequest.self, from: body(of: screenText))
         try check(screenText.url!.path == "/api/sessions/session-test/text" && screenText.httpMethod == "POST"
                   && screenText.value(forHTTPHeaderField: "Content-Type") == "application/json", "screen text endpoint")
+        try check(screenText.timeoutInterval == 5, "the words of an old frame are not worth the wait")
         try check(textBody.frameTS == Int64(upload.value(forHTTPHeaderField: "X-Frame-Ts")!) && textBody.lines == lines,
                   "text payload matches uploaded frame timestamp and word boxes")
         let poll = requests.first { $0.url!.path.hasSuffix("/hint") }!
@@ -242,6 +263,7 @@ private enum ProtocolChecks {
         guard case .quiet(let quiet) = try JSONDecoder().decode(ServerEvent.self, from: Data(#"{"type":"quiet","turn":6}"#.utf8)), quiet.turn == 6 else {
             throw CheckFailure(description: "quiet event")
         }
+        try await checkConnection(settings: settings, configuration: configuration)
         try checkSpeechDetector()
         try await checkPhraseListener()
         try checkStillness()
@@ -252,6 +274,41 @@ private enum ProtocolChecks {
         try await checkMemoryGate()
         if CommandLine.arguments.contains("--vision") { try await checkVision() }
         print("Protocol checks passed: HTTP, /text, frame_ts, word fallback, languages, mailbox clear, extensionFast, memory gate, token defaults, WAV, lifecycle, events, errors, WebSocket.")
+    }
+
+    private static func checkConnection(settings: ServerSettings, configuration: URLSessionConfiguration) async throws {
+        let notes = Notes()
+        let client = ServerClient(settings: settings, configuration: configuration, journal: { notes.add($0) })
+        let connection = client.connection
+        let first = connection.session
+        ProtocolStub.state.next(status: 503)
+        _ = try? await client.sendFrame(Data([1]), sessionID: "session-test", width: 1, height: 1, timestampMS: 1)
+        try check(connection.session === first, "a server error keeps the connection")
+        ProtocolStub.state.next(failure: .cancelled)
+        _ = try? await client.health()
+        try check(connection.session === first, "a cancelled request keeps the connection")
+        for code in [URLError.Code.timedOut, .networkConnectionLost, .notConnectedToInternet] {
+            let used = connection.session
+            ProtocolStub.state.next(failure: code)
+            do {
+                _ = try await client.sendFrame(Data([1]), sessionID: "session-test", width: 1, height: 1, timestampMS: 1)
+                throw CheckFailure(description: "a dead connection answered")
+            } catch let error as URLError {
+                try check(error.code == code, "the caller gets the error")
+            }
+            try check(connection.session !== used, "a dead connection is replaced")
+            _ = try await client.sendFrame(Data([1]), sessionID: "session-test", width: 1, height: 1, timestampMS: 1)
+        }
+        try check(notes.all.filter { $0.hasPrefix("Соединение заменено") }.count == 3, "every replacement is in the journal")
+        try check(notes.all.contains { $0.hasPrefix("Соединение заменено, код -1001: frames") }, "the journal names the request that failed")
+        let old = connection.session
+        ProtocolStub.state.next(failure: .timedOut)
+        _ = try? await client.health()
+        let newer = connection.session
+        ProtocolStub.state.next(failure: .timedOut)
+        _ = try? await old.data(from: settings.serverURL.appendingPathComponent("health"))
+        try check(newer !== old && connection.session === newer && notes.all.filter { $0.hasPrefix("Соединение заменено") }.count == 4,
+                  "a late failure on the old connection leaves the new one alone")
     }
 
     /// A tone at the given level in dB. Each repetition of the seed gives a slightly different noise.
@@ -732,11 +789,12 @@ private enum ProtocolChecks {
     }
 
     private static func checkScreenTextGeometry() throws {
-        try check(ScreenTextReader.recognitionLanguages(targetLang: "id") == ["en-US"], "Latin recognition language")
-        try check(ScreenTextReader.recognitionLanguages(targetLang: "auto") == ["en-US"], "auto recognition language")
-        try check(ScreenTextReader.recognitionLanguages(targetLang: "zh") == ["zh-Hans", "en-US"], "Chinese recognition languages")
-        try check(ScreenTextReader.recognitionLanguages(targetLang: "zh-Hant") == ["zh-Hant", "en-US"], "Traditional Chinese recognition languages")
-        try check(ScreenTextReader.recognitionLanguages(targetLang: "th") == ["th-TH", "en-US"], "Thai recognition languages")
+        try check(ScreenTextReader.recognitionLanguages(screenLang: "id") == ["en-US"], "Latin recognition language")
+        try check(ScreenTextReader.recognitionLanguages(screenLang: nil) == ["en-US"], "no language named yet")
+        try check(ScreenTextReader.recognitionLanguages(screenLang: "auto") == ["en-US"], "auto recognition language")
+        try check(ScreenTextReader.recognitionLanguages(screenLang: "zh") == ["zh-Hans", "en-US"], "Chinese recognition languages")
+        try check(ScreenTextReader.recognitionLanguages(screenLang: "zh-Hant") == ["zh-Hant", "en-US"], "Traditional Chinese recognition languages")
+        try check(ScreenTextReader.recognitionLanguages(screenLang: "th") == ["th-TH", "en-US"], "Thai recognition languages")
         let box = ScreenTextReader.topLeftBox(CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4))
         try check(zip(box, [0.1, 0.4, 0.4, 0.8]).allSatisfy { abs($0 - $1) < 0.00001 }, "top-left normalized coordinates")
         let clipped = ScreenTextReader.topLeftBox(CGRect(x: -0.1, y: -0.1, width: 1.2, height: 1.2))
@@ -812,15 +870,15 @@ private enum ProtocolChecks {
         try check(cleared == nil, "clear removes JPEG and metadata; repeated clear is harmless")
     }
 
-    private static func syntheticJPEG() throws -> Data {
+    private static func syntheticJPEG(_ text: String = "Beli sekarang") throws -> Data {
         guard let context = CGContext(data: nil, width: 900, height: 300, bitsPerComponent: 8, bytesPerRow: 3600,
                                       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
             throw CheckFailure(description: "synthetic image context")
         }
         context.setFillColor(CGColor(gray: 1, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: 900, height: 300))
-        let string = NSAttributedString(string: "Beli sekarang", attributes: [
-            NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica" as CFString, 72, nil),
+        let string = NSAttributedString(string: text, attributes: [
+            NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica" as CFString, 56, nil),
             NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 0, alpha: 1)
         ])
         context.textPosition = CGPoint(x: 60, y: 120)
@@ -835,7 +893,7 @@ private enum ProtocolChecks {
 
     private static func checkMemoryGate() async throws {
         let jpeg = try syntheticJPEG()
-        let reading = await ScreenTextWorker().read(jpegData: jpeg, targetLang: "id", canRead: { false })
+        let reading = await ScreenTextWorker().read(jpegData: jpeg, canRead: { false })
         try check(reading.skipped && reading.lines.isEmpty && reading.error == nil && !reading.retriedOnCPU,
                   "memory gate skips Vision and CPU retry")
     }
@@ -847,7 +905,7 @@ private enum ProtocolChecks {
             ("accurate", .accurate, false), ("fast", .fast, false), ("accurate, CPU", .accurate, true)
         ]
         for (label, level, cpuOnly) in variants {
-            let reading = await ScreenTextWorker().read(jpegData: jpeg, targetLang: "id", level: level, cpuOnly: cpuOnly,
+            let reading = await ScreenTextWorker().read(jpegData: jpeg, screenLang: "id", level: level, cpuOnly: cpuOnly,
                                                         onDiagnostic: { print($0) })
             print("Vision synthetic check (\(label)): \(reading.diagnostic)")
             if let error = reading.error {
@@ -862,8 +920,17 @@ private enum ProtocolChecks {
                 try check(reading.level == level && (!cpuOnly || reading.cpuOnly), "Vision level/device (\(label))")
             } catch { failures.append(String(describing: error)) }
         }
+        let screens: [(String, String?, String)] = [
+            ("搜索 路线 输入终点 附近", nil, "路线"), ("搜索 路线 输入终点 附近", "id", "路线"), ("Baidu Maps Kuta 路线", "zh", "路线"),
+            ("検索 経路 目的地", nil, "経路"), ("검색 경로 목적지", nil, "경로"), ("ค้นหา เส้นทาง Grab", nil, "ค้นหา"),
+            ("بحث الطريق الوجهة", nil, "الطريق"), ("Поиск Маршрут Метро", "id", "Маршрут"), ("Keranjang Beli Sekarang", "zh", "Keranjang"),
+        ]
+        for (text, lang, word) in screens {
+            let reading = await ScreenTextWorker().read(jpegData: try syntheticJPEG(text), screenLang: lang)
+            if !reading.lines.contains(where: { $0.text.contains(word) }) { failures.append("no \(word) with \(lang ?? "nothing") named") }
+        }
         try check(failures.isEmpty, "Vision checks failed: " + failures.joined(separator: "; "))
-        print("Vision synthetic checks passed: accurate, fast and forced CPU on the same JPEG.")
+        print("Vision synthetic checks passed: accurate, fast and forced CPU on the same JPEG, and any language with or without a hint.")
     }
 
     private static func body(of request: URLRequest) throws -> Data {
