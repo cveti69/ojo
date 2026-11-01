@@ -392,20 +392,46 @@ def test_our_window_is_grey_for_the_model_and_changes_nothing(backend):
     assert post_frame(client, session_id, windowed((40, 200, 40))).json() == {"accepted": False, "reason": "same"}
 
 
-def test_payment_words_read_under_our_window_leave_the_screen_alone(backend):
+def test_payment_words_under_our_window_count_only_without_their_frame(backend):
+    client = backend.client
+    session_id = sharing(client, eyes=True)
+    post_frame(client, session_id, windowed((200, 40, 40)), timestamp=7)
+    idle(backend, session_id)
+    session = backend.store.sessions[session_id]
+    seen = []
+    session.publish = seen.append
+    box = session.last_frame.window
+    middle = [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2] * 2
+    under, beside = [[{"text": "Bayar", "words": [{"text": "Bayar", "box": place}]}] for place in (middle, [0.8, 0.02, 0.9, 0.05])]
+
+    def read(frame_ts, lines):
+        assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={"frame_ts": frame_ts, "lines": lines}).status_code == 200
+
+    read(7, under)
+    assert session.chat[0]["frame"] is not None and not seen
+    read(8, under)  # Its frame has not come, so the window stays in.
+    assert seen == [{"type": "face", "turn": 0, "face": None, "calm": True}]
+    assert session.chat[0]["frame"] is not None
+    read(7, beside)
+    assert session.chat[0]["frame"] is None
+
+
+def test_our_window_comes_out_of_the_words_of_a_look_too(backend):
     client = backend.client
     session_id = sharing(client)
     post_frame(client, session_id, windowed((200, 40, 40)), timestamp=7)
     idle(backend, session_id)
     session = backend.store.sessions[session_id]
-    box = session.last_frame.window
+    words(client, session_id)
+    assert look(client, session_id, [windowed((40, 200, 40))], first_taken=9).status_code == 200
+    idle(backend, session_id)
+    kept = next(turn["frame"] for turn in reversed(session.chat) if turn.get("frame"))
+    assert kept.timestamp_ms == 9 and session.last_frame.timestamp_ms == 7
+    box = kept.window
     middle = [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2] * 2
-    under, beside = [[{"text": "Bayar", "words": [{"text": "Bayar", "box": place}]}] for place in (middle, [0.8, 0.02, 0.9, 0.05])]
-    for frame_ts in (7, 8):  # Its own frame, and one that never came.
-        assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={"frame_ts": frame_ts, "lines": under}).status_code == 200
-    assert session.chat[0]["frame"] is not None
-    assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={"frame_ts": 7, "lines": beside}).status_code == 200
-    assert session.chat[0]["frame"] is None
+    assert client.post("/sessions/" + session_id + "/text", headers=AUTH, json={
+        "frame_ts": 9, "lines": [{"text": "Bayar", "words": [{"text": "Bayar", "box": middle}]}]}).status_code == 200
+    assert next(turn["frame"] for turn in reversed(session.chat) if turn.get("frame")) is kept
 
 
 def test_words_under_our_window_do_not_count(backend):

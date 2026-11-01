@@ -1128,7 +1128,14 @@ def test_the_words_of_the_model_tell_a_map_app_from_a_bank_card(backend, monkeyp
     assert bool(list((folder / "frames").iterdir())) is not private
 
 
-@pytest.mark.parametrize("seen_there", ["Карта", "Карты", "Оплата картой", "Bayar"])
+PAYMENT_WORDS = [
+    "支付", "付款方式", "密码", "银行卡", "验证码", "パスワード", "クレジットカード", "お支払い方法", "認証コード",
+    "비밀번호", "결제하기", "카드 번호", "카드번호", "인증번호", "รหัสผ่าน", "ชำระเงิน", "บัตรเครดิต", "รหัสยืนยัน",
+    "Mật khẩu", "Thanh toán", "Số thẻ", "Mã xác nhận", "كلمة المرور", "الدفع", "رقم البطاقة", "رمز التحقق",
+]
+
+
+@pytest.mark.parametrize("seen_there", ["Карта", "Карты", "Оплата картой", "Bayar"] + PAYMENT_WORDS)
 def test_on_the_screen_a_card_stays_private_whatever_the_model_says(backend, monkeypatch, tmp_path, seen_there):
     monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
     session_id = sharing(backend.client)
@@ -1139,6 +1146,29 @@ def test_on_the_screen_a_card_stays_private_whatever_the_model_says(backend, mon
     folder = next((tmp_path / "calls").iterdir())
     assert next(row for row in lines_of(folder) if row["kind"] == "answer")["private"] is True
     assert not list((folder / "frames").iterdir())
+
+
+@pytest.mark.parametrize("said", PAYMENT_WORDS)
+def test_the_model_naming_a_payment_in_any_language_is_enough(backend, monkeypatch, tmp_path, said):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    session_id = sharing(backend.client)
+    backend.meta.replies = [line("Проверь сумму.", show={"label": said, "object": "field", "box": [100, 100, 200, 200]})]
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    assert next(row for row in lines_of(folder) if row["kind"] == "answer")["private"] is True
+
+
+@pytest.mark.parametrize("seen_there", ["路线 输入终点 搜索 骑行", "検索 経路 目的地", "검색 경로 목적지", "ค้นหา เส้นทาง", "Tìm kiếm Đường đi", "بحث الطريق"])
+def test_a_map_in_those_languages_is_not_a_payment(backend, monkeypatch, tmp_path, seen_there):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    session_id = sharing(backend.client)
+    backend.store.sessions[session_id].remember_text(123, [{"text": seen_there, "box": [0.1, 0.1, 0.3, 0.2], "words": []}])
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    folder = next((tmp_path / "calls").iterdir())
+    assert next(row for row in lines_of(folder) if row["kind"] == "answer")["private"] is False
+    assert list((folder / "frames").iterdir())
 
 
 def test_the_words_on_the_screen_make_it_private_without_the_model(backend, monkeypatch, tmp_path):

@@ -62,7 +62,8 @@ _SAY_FIRST = re.compile(r'\s*\{\s*"say"\s*:\s*"((?:[^"\\]|\\.)*)"', re.S)
 _PAYMENT = (
     r"парол|\bкартой\b|пин-код|оплат|заплат|плат[её]ж|код подтверждения|код из смс"
     r"|password|\bpin\b|cvv|cvc|(credit|debit|bank) card|card (number|details)|payment|billing|\bpay\b|verification code|\botp\b"
-    r"|sandi|kartu|bayar|rekening|transfer bank|kode verifikasi")
+    r"|sandi|kartu|bayar|rekening|transfer bank|kode verifikasi"
+    r"|支付|付款|密码|银行卡|验证码|パスワード|クレジットカード|支払|認証コード|비밀번호|결제|카드 ?번호|인증번호|รหัสผ่าน|ชำระเงิน|บัตรเครดิต|รหัสยืนยัน|mật khẩu|thanh toán|số thẻ|mã xác|كلمة المرور|الدفع|رقم البطاقة|رمز التحقق")
 _PRIVATE_SCREEN = re.compile(_PAYMENT + r"|\bкарт[аыуе]\b", re.I)
 # The model can name a map app, so in its own words "карты" alone is not a payment.
 _PRIVATE_WORDS = re.compile(_PAYMENT + r"|(номер|данн|банковск)\w*\s+(\w+\s+)?карт(а|ы|у|е|ой)?\b", re.I)
@@ -296,10 +297,11 @@ class Friend:
 
     def text_read(self, session: Session, timestamp_ms: int) -> None:
         """The words on a screen can come after its answer, and a payment screen leaves the log and the chat all the same.
-        They can also come ahead of their frame or without it. Our window hardly moves, so the last frame shows where it is."""
-        lines = session.frame_text.get(timestamp_ms) or []
-        box = session.last_frame.window if session.last_frame else None
-        if not _PRIVATE_SCREEN.search(" ".join(line["text"] for line in (window.outside(lines, box) if box else lines))):
+        Our window is taken out only with the frame they were read on: ahead of it, a calm that was not needed does no harm."""
+        known = [session.last_frame] + [kept.get("frame") for kept in session.chat]
+        frame = next((seen for seen in known if seen and seen.timestamp_ms == timestamp_ms), None)
+        lines = (_text_on(session, frame) if frame else session.frame_text.get(timestamp_ms)) or []
+        if not _PRIVATE_SCREEN.search(" ".join(line["text"] for line in lines)):
             return
         for kept in session.chat:
             if kept.get("frame") and kept["frame"].timestamp_ms == timestamp_ms:
