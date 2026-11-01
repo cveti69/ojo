@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from typing import Callable, Coroutine, List, Optional, Set
 
 from PIL import Image, UnidentifiedImageError
@@ -65,6 +66,11 @@ _PAYMENT = (
 _PRIVATE_SCREEN = re.compile(_PAYMENT + r"|\bкарт[аыуе]\b", re.I)
 # The model can name a map app, so in its own words "карты" alone is not a payment.
 _PRIVATE_WORDS = re.compile(_PAYMENT + r"|(номер|данн|банковск|кредитн|дебетов|действия)\w*\s+(\w+\s+)?карт(а|ы|у|е|ой)?\b", re.I)
+
+
+def _names_payment(words: re.Pattern, text: str) -> bool:
+    """The lists above hold whole letters, and a letter can reach us with its accent apart from it."""
+    return bool(words.search(unicodedata.normalize("NFC", text)))
 
 
 def prepare_frame(jpeg: bytes, source_width: int, source_height: int, timestamp_ms: int,
@@ -236,7 +242,7 @@ def _private(session: Session, frame: Optional[Frame], answer: dict) -> bool:
     target = answer.get("show") if isinstance(answer.get("show"), dict) else {}
     said = " ".join((_text(answer.get("say")), _text(target.get("label")), _text(target.get("object"))))
     on_screen = " ".join(line["text"] for line in (_text_on(session, frame) or [])) if frame else ""
-    return bool(_PRIVATE_WORDS.search(said) or _PRIVATE_SCREEN.search(on_screen))
+    return _names_payment(_PRIVATE_WORDS, said) or _names_payment(_PRIVATE_SCREEN, on_screen)
 
 
 def _time_of(frame: Optional[Frame]) -> Optional[int]:
@@ -372,7 +378,7 @@ class Friend:
         known = [session.last_frame] + [kept.get("frame") for kept in session.chat]
         frame = next((seen for seen in known if seen and seen.timestamp_ms == timestamp_ms), None)
         lines = (_text_on(session, frame) if frame else session.frame_text.get(timestamp_ms)) or []
-        if not _PRIVATE_SCREEN.search(" ".join(line["text"] for line in lines)):
+        if not _names_payment(_PRIVATE_SCREEN, " ".join(line["text"] for line in lines)):
             return
         if session.call_log:
             session.call_log.forget(timestamp_ms)
