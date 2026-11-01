@@ -23,7 +23,7 @@ ICON_PHRASE = "icon"
 ICON_REACH = 0.14  # How far the model's guess may land from the real icon, in shares of the frame.
 ICON_MAX_AREA = 0.03  # A target larger than this share of the frame is not an icon.
 ICON_MAX_STRETCH = 2.5  # Icons are nearly square, so a longer guess is a bar or a button, however small.
-SHAPE_WORDS = ("icon", "checkbox", "toggle", "switch", "radio")  # Text next to these is a caption, not the target.
+ROW_SLACK = 0.6  # Of the model's box height. Right icons sat within 0.45 of it from the box, icons of another row 0.79 and more.
 
 
 def _normal(text: str) -> str:
@@ -46,20 +46,14 @@ def _union(boxes: list[list[float]]) -> list[float]:
     return [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)]
 
 
-def snap_to_text(label: str, near: list[float] | None, lines: list[dict], reach: float = TEXT_REACH) -> list[float] | None:
-    """Finds the words that spell the label, weighing the spelling against the distance from the model's guess.
+def _wrapped(lines: list[dict]) -> list[dict]:
+    """A title on two rows is read as two lines, so each line goes on with the one right under it."""
+    placed = [(line["words"], _union([word["box"] for word in line["words"]])) for line in lines if line["words"]]
+    return [{"words": upper + lower} for upper, top in placed for lower, bottom in placed
+            if abs(bottom[1] - top[3]) < top[3] - top[1] and min(top[2], bottom[2]) > max(top[0], bottom[0])]
 
-    `lines` holds {"text", "words": [{"text", "box"}]} with boxes in 0-1 coordinates.
-    """
-    wanted = _normal(label)
-    size = len(wanted.split())
-    if not wanted or size == 0:
-        return None
-    # Chinese and Thai have no spaces, so one label can span several recognised words.
-    spaced = wanted.isascii()
-    counts = {size - 1, size, size + 1} if spaced else range(1, MAX_UNSPACED_WORDS + 1)
-    joiner = " " if spaced else ""
-    wanted = joiner.join(wanted.split())
+
+def _spelled(wanted: str, counts: set[int], joiner: str, near: list[float] | None, lines: list[dict]) -> list[float] | None:
     best: tuple[float, list[float]] | None = None
     for line in lines:
         words = line["words"]
@@ -74,12 +68,29 @@ def snap_to_text(label: str, near: list[float] | None, lines: list[dict], reach:
                     continue
                 box = _union([word["box"] for word in window])
                 distance = math.sqrt(_distance(box, near)) if near else 0
-                if distance > reach:
+                if distance > TEXT_REACH:
                     continue
                 rank = score - TEXT_DISTANCE_WEIGHT * distance
                 if best is None or rank > best[0]:
                     best = (rank, box)
     return best[1] if best else None
+
+
+def snap_to_text(label: str, near: list[float] | None, lines: list[dict]) -> list[float] | None:
+    """Finds the words that spell the label, weighing the spelling against the distance from the model's guess.
+
+    `lines` holds {"text", "words": [{"text", "box"}]} with boxes in 0-1 coordinates.
+    """
+    wanted = _normal(label)
+    size = len(wanted.split())
+    if not wanted or size == 0:
+        return None
+    # Chinese and Thai have no spaces, so one label can span several recognised words.
+    spaced = wanted.isascii()
+    counts = {size - 1, size, size + 1} | (set() if spaced else set(range(1, MAX_UNSPACED_WORDS + 1)))
+    joiner = " " if spaced else ""
+    wanted = joiner.join(wanted.split())
+    return _spelled(wanted, counts, joiner, near, lines) or _spelled(wanted, counts, joiner, near, _wrapped(lines))
 
 
 def snap_with_sam(jpeg: bytes, width: int, height: int, phrase: str, near: list[float] | None) -> dict:
@@ -110,15 +121,31 @@ def _is_stretched(box: list[float], frame_ratio: float) -> bool:
     return max(width, height) > ICON_MAX_STRETCH * min(width, height)
 
 
+def _looks_like_icon(box: list[float] | None, frame_ratio: float) -> bool:
+    return bool(box) and not _is_large(box) and not _is_stretched(box, frame_ratio)
+
+
+def _same_row(near: list[float], box: list[float]) -> bool:
+    return max(near[1] - box[3], box[1] - near[3]) <= ROW_SLACK * (near[3] - near[1])
+
+
 def snap_to_icon(near: list[float] | None, icons: list[list[float]], frame_ratio: float) -> list[float] | None:
-    """Takes the icon closest to the model's guess when the guess looks like an icon at all.
+    """Takes the closest icon under the model's guess when the guess looks like an icon at all. An icon in another row or
+    off to the side is the next button: real calls landed there with a right guess.
 
     `frame_ratio` is the frame's width over its height: boxes are in shares of the frame, not in real proportions.
     """
-    if not near or not icons or _is_large(near) or _is_stretched(near, frame_ratio):
+    if not _looks_like_icon(near, frame_ratio):
         return None
-    box = min(icons, key=lambda candidate: _distance(candidate, near))
-    return box if _distance(box, near) <= ICON_REACH ** 2 else None
+    under = [icon for icon in icons if _same_row(near, icon) and min(near[2], icon[2]) > max(near[0], icon[0])]
+    box = min(under, key=lambda candidate: _distance(candidate, near), default=None)
+    return box if box and _distance(box, near) <= ICON_REACH ** 2 else None
+
+
+def _is_caption(near: list[float] | None, words: list[float], frame_ratio: float) -> bool:
+    """Words beside an icon in its row: a target with no words of its own borrows the nearest ones for its label."""
+    return (_looks_like_icon(near, frame_ratio) and _same_row(near, words)
+            and not words[0] <= center(near)[0] <= words[2] and not near[0] <= center(words)[0] <= near[2])
 
 
 def locate(jpeg: bytes, width: int, height: int, answer: dict, lines: list[dict] | None = None,
@@ -135,12 +162,9 @@ def locate(jpeg: bytes, width: int, height: int, answer: dict, lines: list[dict]
     near = [value / 1000 for value in target["box"]] or None
     if marks and target.get("mark_id") in marks:
         return {"box": marks[target["mark_id"]], "source": "mark", "ms": 0}
-    shape = not target.get("words_first") and any(word in target["object"].lower() for word in SHAPE_WORDS)
-    snapped = snap_to_text(target["label"], near, lines or [], math.inf if shape else TEXT_REACH)
-    if snapped and not shape:
+    snapped = snap_to_text(target["label"], near, lines or [])
+    if snapped and not _is_caption(near, snapped, width / height):
         return {"box": snapped, "source": "text", "ms": 0}
-    if snapped:  # The model's box can be a row off, and the words next to a radio button say which row it is.
-        near = [near[0], snapped[1], near[2], snapped[3]] if near else snapped
     ms = 0
     if target["object"] and not _is_large(near):  # A large target is easy to hit, a search would only cost time.
         try:
@@ -150,7 +174,7 @@ def locate(jpeg: bytes, width: int, height: int, answer: dict, lines: list[dict]
         ms = found["ms"]
         if found["box"]:
             return {"box": found["box"], "source": "sam", "ms": ms}
-    if icons is None and near and not _is_large(near) and not _is_stretched(near, width / height):
+    if icons is None and _looks_like_icon(near, width / height):
         try:
             icons = find_icons(jpeg, width, height)
         except meta.MetaError:
@@ -158,8 +182,6 @@ def locate(jpeg: bytes, width: int, height: int, answer: dict, lines: list[dict]
     icon = snap_to_icon(near, icons or [], width / height)
     if icon:
         return {"box": icon, "source": "icon", "ms": ms}
-    if snapped:
-        return {"box": snapped, "source": "text", "ms": ms}
     return {"box": near, "source": "model" if near else "none", "ms": ms}
 
 

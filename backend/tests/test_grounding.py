@@ -7,21 +7,6 @@ from app.sessions import KEPT_FRAME_TEXTS
 from conftest import AUTH, new_session, real_locate
 
 
-def test_the_words_say_which_row_a_radio_button_is_in(monkeypatch):
-    lines = [{"text": "Next Day", "words": [{"text": "Next", "box": [0.05, 0.75, 0.1, 0.77]}, {"text": "Day", "box": [0.11, 0.75, 0.16, 0.77]}]},
-             {"text": "Reguler", "words": [{"text": "Reguler", "box": [0.05, 0.82, 0.2, 0.84]}]}]
-    radios = [[0.9, 0.74, 0.95, 0.78], [0.9, 0.81, 0.95, 0.85]]
-    monkeypatch.setattr(meta, "sam", lambda image, phrase: {"boxes": [{"box": [value * 1000 for value in box]} for box in radios], "ms": 1})
-    target = {"label": "Reguler", "object": "radio button", "box": [900, 745, 950, 775], "mark_id": None}  # A row too high.
-    found = real_locate(b"", 1000, 1000, {"action": "tap", "target": target}, lines, [])
-    assert found["box"] == radios[1] and found["source"] == "sam"
-    head = {**target, "words_first": True, "box": [50, 790, 250, 810]}  # A row too high, and next to the words.
-    assert real_locate(b"", 1000, 1000, {"action": "tap", "target": head}, lines, [])["source"] == "text"  # No time for SAM.
-    monkeypatch.setattr(meta, "sam", lambda image, phrase: {"boxes": [], "ms": 1})
-    found = real_locate(b"", 1000, 1000, {"action": "tap", "target": target}, lines, [])
-    assert found["box"] == [0.05, 0.82, 0.2, 0.84] and found["source"] == "text"
-
-
 def asked_sam(monkeypatch, answers):
     asked = []
 
@@ -34,7 +19,7 @@ def asked_sam(monkeypatch, answers):
     return asked
 
 
-NAMELESS = {"label": "", "object": "camera icon in the search bar", "box": [500, 140, 560, 180], "mark_id": None, "words_first": True}
+NAMELESS = {"label": "", "object": "camera icon in the search bar", "box": [500, 140, 560, 180], "mark_id": None}
 
 
 def test_sam_looks_for_icons_when_the_name_finds_nothing(monkeypatch):
@@ -101,7 +86,7 @@ def test_text_match_works_in_any_script(label, words, left):
 def test_words_far_from_the_model_box_are_another_place(monkeypatch, right, source):
     asked_sam(monkeypatch, {})
     lines = [{"text": "搜索", "words": [{"text": "搜索", "box": [0.1, 0.13, 0.16, 0.14]}]}]
-    target = {"label": "搜索", "object": "", "box": [right - 130, 106, right, 140], "mark_id": None, "words_first": True}
+    target = {"label": "搜索", "object": "", "box": [right - 130, 106, right, 140], "mark_id": None}
     found = real_locate(b"", 1000, 1000, {"action": "tap", "target": target}, lines, [])
     assert found["source"] == source
 
@@ -132,3 +117,127 @@ def test_long_guess_stays_off_the_icon_next_to_it():
     search_bar = [0.295, 0.03, 0.654, 0.047]
     assert grounding.snap_to_icon(search_bar, [icon], 0.462) is None
     assert grounding.snap_to_icon([0.5, 0.13, 0.58, 0.17], [icon], 0.462) == icon
+
+
+def test_an_icon_in_another_row_is_left_alone():
+    guess = [0.632, 0.148, 0.72, 0.18]
+    above, under = [0.68, 0.079, 0.72, 0.096], [0.69, 0.15, 0.73, 0.18]
+    assert grounding.snap_to_icon(guess, [above], 0.46) is None
+    assert grounding.snap_to_icon(guess, [above, under], 0.46) == under
+
+
+def test_an_icon_of_the_next_button_in_the_row_is_left_alone():
+    assert grounding.snap_to_icon([0.816, 0.135, 0.898, 0.182], [[0.924, 0.171, 0.952, 0.183]], 0.46) is None
+
+
+@pytest.mark.parametrize("gap,kept", [(0.25, True), (0.45, True), (0.75, False)])
+def test_the_row_ends_between_the_right_icons_and_the_next_row(gap, kept):
+    guess = [0.5, 0.14, 0.56, 0.18]
+    top = guess[3] + gap * (guess[3] - guess[1])
+    icon = [0.5, top, 0.54, top + 0.02]
+    assert grounding.snap_to_icon(guess, [icon], 0.46) == (icon if kept else None)
+
+
+def test_the_closest_icon_under_the_guess_wins():
+    close, far = [0.52, 0.15, 0.54, 0.17], [0.5, 0.14, 0.51, 0.15]
+    assert grounding.snap_to_icon([0.5, 0.14, 0.56, 0.18], [far, close], 0.46) == close
+
+
+def test_an_icon_too_far_from_the_middle_of_the_guess_is_left_alone():
+    assert grounding.snap_to_icon([0.1, 0.5, 0.39, 0.6], [[0.38, 0.5, 0.39, 0.51]], 0.46) is None
+
+
+def test_a_large_guess_is_no_icon():
+    assert grounding.snap_to_icon([0.2, 0.2, 0.6, 0.6], [[0.38, 0.38, 0.42, 0.42]], 1) is None
+
+
+TITLE = "Serum Rambut Hitam Alami Ukuran Besar Isi Tiga Botol"
+WRAPPED = [
+    {"text": "Serum Rambut Hitam Alami", "words": [{"text": word, "box": [0.05 + i * 0.1, 0.5, 0.14 + i * 0.1, 0.52]}
+                                                   for i, word in enumerate("Serum Rambut Hitam Alami".split())]},
+    {"text": "Rak Sepatu Lipat Besar", "words": [{"text": word, "box": [0.55 + i * 0.1, 0.525, 0.64 + i * 0.1, 0.545]}
+                                                 for i, word in enumerate("Rak Sepatu Lipat Besar".split())]},
+    {"text": "Ukuran Besar Isi Tiga Botol", "words": [{"text": word, "box": [0.05 + i * 0.08, 0.525, 0.12 + i * 0.08, 0.545]}
+                                                      for i, word in enumerate("Ukuran Besar Isi Tiga Botol".split())]},
+]
+
+
+def test_a_title_on_two_rows_is_found_whole():
+    assert grounding.snap_to_text(TITLE, [0.05, 0.3, 0.45, 0.65], WRAPPED) == pytest.approx([0.05, 0.5, 0.44, 0.545])
+
+
+def test_lines_of_the_next_column_do_not_join():
+    assert grounding.snap_to_text("Serum Rambut Hitam Alami Rak Sepatu Lipat Besar", [0.05, 0.3, 0.95, 0.65], WRAPPED) is None
+
+
+def test_only_the_line_right_under_another_goes_on_with_it():
+    apart = [WRAPPED[0], {**WRAPPED[2], "words": [{**word, "box": [word["box"][0], 0.56, word["box"][2], 0.58]} for word in WRAPPED[2]["words"]]}]
+    assert grounding.snap_to_text(TITLE, [0.05, 0.3, 0.45, 0.65], apart) is None
+
+
+def test_a_line_does_not_go_on_with_the_one_above_it():
+    assert grounding.snap_to_text("Ukuran Besar Isi Tiga Botol Serum Rambut Hitam Alami", [0.05, 0.3, 0.45, 0.65], WRAPPED) is None
+
+
+def test_a_line_does_not_go_on_with_itself():
+    assert grounding.snap_to_text("Alami Alami", [0.05, 0.3, 0.45, 0.65], [text_line("Alami")]) is None
+
+
+def test_a_label_on_one_line_stays_there_when_a_longer_reading_exists():
+    assert grounding.snap_to_text("Serum Rambut Hitam Alami", [0.05, 0.3, 0.45, 0.65], WRAPPED) == pytest.approx([0.05, 0.5, 0.44, 0.52])
+    whole = {"text": "Lihat Semua", "words": [{"text": "Lihat", "box": [0.1, 0.2, 0.2, 0.22]}, {"text": "Semua", "box": [0.2, 0.2, 0.3, 0.22]}]}
+    upper = {"text": "Lihat", "words": [{"text": "Lihat", "box": [0.1, 0.5, 0.2, 0.52]}]}
+    lower = {"text": "Semua", "words": [{"text": "Semua", "box": [0.1, 0.525, 0.2, 0.545]}]}
+    assert grounding.snap_to_text("Lihat Semua", [0.1, 0.5, 0.2, 0.545], [upper, lower, whole]) == pytest.approx([0.1, 0.2, 0.3, 0.22])
+
+
+def test_a_long_title_with_no_ascii_letters_is_found_too():
+    words = "Шампунь для волос мягкий с травами и маслами для ежедневного ухода".split()
+    placed = [{"text": word, "box": [0.05 + i * 0.05, 0.5, 0.09 + i * 0.05, 0.52]} for i, word in enumerate(words[:6])]
+    placed2 = [{"text": word, "box": [0.05 + i * 0.05, 0.525, 0.09 + i * 0.05, 0.545]} for i, word in enumerate(words[6:])]
+    lines = [{"text": " ".join(w["text"] for w in row), "words": row} for row in (placed, placed2)]
+    assert grounding.snap_to_text(" ".join(words), [0.05, 0.4, 0.45, 0.6], lines) == pytest.approx([0.05, 0.5, 0.34, 0.545])
+
+
+CLOSE = {"label": "Detail produk", "object": "close button", "box": [55, 139, 83, 163], "mark_id": None}
+HEADING = [{"text": "Detail produk", "words": [{"text": "Detail", "box": [0.09, 0.17, 0.2, 0.19]}, {"text": "produk", "box": [0.21, 0.17, 0.365, 0.19]}]}]
+
+
+def test_words_beside_an_icon_do_not_win_over_it(monkeypatch):
+    asked = asked_sam(monkeypatch, {"close button": [[50, 140, 90, 165]]})
+    found = real_locate(b"", 1000, 1000, {"action": "tap", "target": CLOSE}, HEADING)
+    assert found["source"] == "sam" and found["box"] == [0.05, 0.14, 0.09, 0.165] and asked == ["close button"]
+
+
+def test_with_nothing_else_found_the_model_keeps_its_icon(monkeypatch):
+    asked_sam(monkeypatch, {})
+    found = real_locate(b"", 1000, 1000, {"action": "tap", "target": CLOSE}, HEADING, [])
+    assert found["source"] == "model" and found["box"] == [0.055, 0.139, 0.083, 0.163]
+
+
+@pytest.mark.parametrize("box", [[100, 170, 300, 190], [130, 100, 200, 150], [120, 200, 180, 230], [100, 160, 200, 200], [55, 100, 83, 124]])
+def test_words_under_or_right_by_the_model_box_win(monkeypatch, box):
+    asked = asked_sam(monkeypatch, {})
+    found = real_locate(b"", 1000, 1000, {"action": "tap", "target": {**CLOSE, "box": box}}, HEADING)
+    assert found["source"] == "text" and asked == []
+
+
+def test_small_words_inside_the_model_box_win(monkeypatch):
+    asked = asked_sam(monkeypatch, {})
+    lines = [{"text": "OK", "words": [{"text": "OK", "box": [0.345, 0.51, 0.358, 0.53]}]}]
+    target = {**CLOSE, "label": "OK", "box": [300, 500, 360, 540]}
+    assert real_locate(b"", 1000, 1000, {"action": "tap", "target": target}, lines)["source"] == "text" and asked == []
+
+
+def test_the_shape_of_the_frame_decides_what_looks_like_an_icon(monkeypatch):
+    asked_sam(monkeypatch, {})
+    lines = [{"text": "Buka", "words": [{"text": "Buka", "box": [0.3, 0.5, 0.4, 0.52]}]}]
+    answer = {"action": "tap", "target": {"label": "Buka", "object": "", "box": [100, 500, 200, 520], "mark_id": None}}
+    assert real_locate(b"", 460, 1000, answer, lines, [])["source"] == "model"
+    assert real_locate(b"", 1000, 1000, answer, lines, [])["source"] == "text"
+
+
+def test_a_wide_model_box_beside_the_words_is_no_icon(monkeypatch):
+    asked = asked_sam(monkeypatch, {})
+    target = {**CLOSE, "box": [380, 165, 700, 195]}
+    assert real_locate(b"", 1000, 1000, {"action": "tap", "target": target}, HEADING)["source"] == "text" and asked == []

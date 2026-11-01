@@ -137,10 +137,6 @@ def load_spec() -> tuple[dict, dict[str, Image.Image], dict[str, Image.Image]]:
     spec = json.loads((HERE / "cases.json").read_text())
     bases = {path.stem: Image.open(path).convert("RGB") for path in sorted(FRAMES.glob("*.png"))}
     steps = [case for case in spec["cases"] if case.get("step")]
-    said: dict[str, str] = {}
-    for report in sorted(REPORTS.glob("*/results.json"), key=lambda path: path.stat().st_mtime):
-        rows = json.loads(report.read_text()).get("rows", [])
-        said.update({row["case"]: row["instruction"] for row in rows if row.get("instruction")})
     view = spec["view"]
     pictures = {}
     names = list(bases)
@@ -148,7 +144,7 @@ def load_spec() -> tuple[dict, dict[str, Image.Image], dict[str, Image.Image]]:
         source = next(case for case in steps if case["frame"] == names[max(index - 1, 0)])
         box = to_unit(source["truth"], view[0], view[1])
         jpeg = small_jpeg(bases[source["frame"]])[0]
-        rendered = hint.render(jpeg, box, said.get(source["id"], "Нажми на выделенную кнопку"))
+        rendered = hint.render(jpeg, box)
         pictures[name] = Image.open(io.BytesIO(rendered)).convert("RGB")
     return spec, bases, pictures
 

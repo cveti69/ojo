@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 APP_NAME = os.environ.get("APP_NAME", "OjO")
 
@@ -32,4 +31,3 @@ MAX_FRAME_BYTES = int(os.environ.get("MAX_FRAME_BYTES", "8388608"))
 MAX_FRAME_PIXELS = int(os.environ.get("MAX_FRAME_PIXELS", "20000000"))
 MAX_AUDIO_BYTES = int(os.environ.get("MAX_AUDIO_BYTES", "16777216"))
 CALLS_DIR = os.environ.get("CALLS_DIR", "")  # A folder outside the repository for a log of every call. Empty keeps nothing.
-HINT_FONT = Path(__file__).resolve().parents[1] / "assets" / "Inter-Bold.otf"

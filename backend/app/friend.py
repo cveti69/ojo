@@ -28,7 +28,7 @@ ROLE = """Ты на телефонном звонке. Слышишь челов
 Новый экран сам по себе не вопрос к тебе. Если человек ничего не спросил, говори, только когда твои слова изменят его следующий шаг.
 Остальное время спокойно наблюдай; открытия передавай коротко и по-человечески.
 Если снимка нет, не говори, что видишь экран.
-Обычно одна короткая фраза. Вторая, только если без неё человек ошибётся."""
+Обычно одна короткая фраза, до 12 слов. Вторая, только если без неё человек ошибётся."""
 RULES = """Не проси пароли и данные карт. Оплату подтверждает только сам человек.
 
 Серый прямоугольник на экране это твоё окошко: в нём человек видит то, что ты обвёл.
@@ -190,15 +190,14 @@ def _line(value: object) -> str:
 
 
 def _target(show: object) -> Optional[dict]:
-    """What to outline, in the shape grounding reads. A bad box goes: the label can still find the place. The person is
-    waiting for the voice, so the words on the screen are enough even next to a radio button."""
+    """What to outline, in the shape grounding reads. A bad box goes: the label can still find the place."""
     if not isinstance(show, dict):
         return None
     label, box = _text(show.get("label"))[:MAX_LABEL], show.get("box")
     box = box if isinstance(box, list) and step.good_box(box) else []
     if not label and not box:
         return None
-    return {"label": label, "object": _text(show.get("object"))[:MAX_LABEL], "box": box, "mark_id": None, "words_first": True}
+    return {"label": label, "object": _text(show.get("object"))[:MAX_LABEL], "box": box, "mark_id": None}
 
 
 def _text_on(session: Session, frame: Frame) -> Optional[list]:
@@ -586,7 +585,7 @@ class Friend:
         if not location["box"]:
             session.note("show", outcome="not found", box_ms=box_ms, **written())
             return
-        image = await run_in_threadpool(hint.render, frame.jpeg, location["box"], text, session.eyes)
+        image = await run_in_threadpool(hint.render, frame.jpeg, location["box"])
         if _gone(session, frame):  # A screen that came while the answer was busy stops nothing, so it can only be seen here.
             session.note("show", outcome="left", box_ms=box_ms, **written())
             return

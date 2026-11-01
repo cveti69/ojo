@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 import json
 import threading
@@ -154,6 +155,16 @@ def test_the_voice_comes_first_and_the_window_after_it(backend):
     assert kinds(seen) == ["say", "hint"]
     assert seen[1]["instruction_ru"] == "Жми зелёную кнопку." and seen[1]["step_id"] == "s1"
     assert seen[1]["timings"]["box_source"] == "test" and seen[1]["image_jpeg_base64"]
+
+
+def test_the_picture_that_goes_out_has_the_outline_on_it(backend):
+    session_id = sharing(backend.client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Жми.", show=SHOW)]
+    post_frame(backend.client, session_id)
+    idle(backend, session_id)
+    image = Image.open(io.BytesIO(base64.b64decode(seen[1]["image_jpeg_base64"]))).convert("RGB")
+    assert sum(1 for red, green, blue in image.getdata() if red > 190 and green > 160 and blue < 80) > 150
 
 
 def test_silence_with_an_outline_uses_the_label(backend):
