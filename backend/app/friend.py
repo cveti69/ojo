@@ -57,20 +57,22 @@ MAX_REPLY = 500
 MAX_LABEL = 200
 _SAY_FIRST = re.compile(r'\s*\{\s*"say"\s*:\s*"((?:[^"\\]|\\.)*)"', re.S)
 # Broad on purpose: a screen wrongly taken for a payment costs one picture in the log, the other way round costs a card number.
-_PAYMENT = (
+# In the same form as the text it meets: NFKC takes the Thai ำ apart.
+_PAYMENT = unicodedata.normalize("NFKC", (
     r"парол|\bкартой\b|пин-код|оплат|заплат|плат[её]ж|код подтверждения|код из смс"
     r"|password|\bpin\b|cvv|cvc|(credit|debit|bank) card|card (number|details)|payment|billing|\bpay\b|verification code|\botp\b"
     r"|sandi|kartu|bayar|rekening|transfer bank|kode verifikasi"
     r"|contraseña|\btarjetas?\b|\bpagar\b|\bpagos?\b|código de (verificación|seguridad)"
-    r"|支付|付款|密码|银行卡|验证码|パスワード|クレジットカード|支払|認証コード|비밀번호|결제|카드 ?번호|인증번호|รหัสผ่าน|ชำระเงิน|บัตรเครดิต|รหัสยืนยัน|mật khẩu|thanh toán|số thẻ|mã xác|كلمة المرور|الدفع|رقم البطاقة|رمز التحقق")
+    r"|支付|付款|密码|银行卡|验证码|パスワード|クレジットカード|支払|認証コード|비밀번호|결제|카드 ?번호|인증번호|รหัสผ่าน|ชำระเงิน|บัตรเครดิต|รหัสยืนยัน|mật khẩu|thanh toán|số thẻ|mã xác|كلمة المرور|الدفع|رقم البطاقة|رمز التحقق"))
 _PRIVATE_SCREEN = re.compile(_PAYMENT + r"|\bкарт[аыуе]\b", re.I)
 # The model can name a map app, so in its own words "карты" alone is not a payment.
 _PRIVATE_WORDS = re.compile(_PAYMENT + r"|(номер|данн|банковск|кредитн|дебетов|действия)\w*\s+(\w+\s+)?карт(а|ы|у|е|ой)?\b", re.I)
 
 
 def _names_payment(words: re.Pattern, text: str) -> bool:
-    """The lists above hold whole letters, and a letter can reach us with its accent apart from it."""
-    return bool(words.search(unicodedata.normalize("NFC", text)))
+    """The lists above hold plain letters, and a screen can spell one wide, half-width or with its accent apart.
+    Only this check sees the plain form: what we keep and show stays as it came."""
+    return bool(words.search(unicodedata.normalize("NFKC", text)))
 
 
 def prepare_frame(jpeg: bytes, source_width: int, source_height: int, timestamp_ms: int,
