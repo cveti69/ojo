@@ -11,6 +11,12 @@ from app import config, landing
 from conftest import TOKEN, new_session
 
 
+@pytest.fixture(autouse=True)
+def page_on(monkeypatch):
+    """The page stays off until the word is given, so it is turned on here, ahead of the app."""
+    monkeypatch.setattr(config, "LANDING", True)
+
+
 @pytest.fixture
 def visitor(backend, monkeypatch, tmp_path):
     """Somebody on the street: no token, and a file to keep the form in."""

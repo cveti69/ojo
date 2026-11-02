@@ -63,6 +63,8 @@ class CreateSession(Payload):
     own_character: str = Field(default="", max_length=500)
     eyes: bool = False
     signals: bool = False
+    fast: bool = False
+    next_step: bool = False
 
 
 class Played(Payload):
@@ -188,6 +190,7 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
     application.state.sessions = sessions
     application.state.friend = friend
     application.state.speech = speech
+    open_paths = ("/health", *landing.PATHS) if config.LANDING else ("/health",)
 
     @application.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, error: RequestValidationError):
@@ -196,7 +199,7 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
     @application.middleware("http")
     async def private_responses(request: Request, call_next):
         # The path the routes go by. The one in `request.url` is read through the Host header, which the sender writes.
-        authorized = request.scope["path"] in ("/health", *landing.PATHS) or valid_token(request.headers.get("x-token"))
+        authorized = request.scope["path"] in open_paths or valid_token(request.headers.get("x-token"))
         if request.url.path.startswith("/debug/"):
             authorized = authorized or valid_token(request.query_params.get("token"))
         if authorized:
@@ -222,16 +225,17 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
         return {"ok": True}
 
     limit = landing.Limit()
+    public = APIRouter()
 
     def public_page(state: str = "", status_code: int = 200) -> HTMLResponse:
         return HTMLResponse(landing.page(state), status_code=status_code, headers=landing.HEADERS)
 
-    @application.get("/", response_class=HTMLResponse)
-    @application.get("/beta", response_class=HTMLResponse)
+    @public.get("/", response_class=HTMLResponse)
+    @public.get("/beta", response_class=HTMLResponse)
     async def page():
         return public_page()
 
-    @application.post("/beta", response_class=HTMLResponse)
+    @public.post("/beta", response_class=HTMLResponse)
     async def beta(request: Request):
         if not limit.allows(request.client.host if request.client else ""):
             return public_page("later", 429)
@@ -252,13 +256,16 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
             return public_page("later", 503)
         return public_page("sent")
 
+    if config.LANDING:
+        application.include_router(public)
+
     router = APIRouter()
 
     @router.post("/sessions", status_code=201)
     async def create_session(body: CreateSession):
         session = sessions.create(body.user_lang, body.target_lang, body.text_entry, body.effort,
-                                  step.manner(body.character, body.own_character), body.eyes, body.signals)
-        return {"session_id": session.id}
+                                  step.manner(body.character, body.own_character), body.eyes, body.signals, body.fast, body.next_step)
+        return {"session_id": session.id, "model": session.models[0][0]}
 
     @router.post("/sessions/{session_id}/frames", status_code=202)
     async def frame(session_id: str, request: Request,
@@ -357,7 +364,7 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
             raise HTTPException(502, "Не удалось распознать речь. Попробуй ещё раз.") from None
         speech_ms = round((time.perf_counter() - started) * 1000)
         if said and not session.ended:
-            friend.heard(session, said)
+            friend.heard(session, said, road="file")
         return {"heard": bool(said), "speech_ms": speech_ms}
 
     @router.post("/sessions/{session_id}/words")
@@ -453,7 +460,7 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
             await websocket.close()
             return
         if session.ears is None:
-            session.ears = ears(lambda said: friend.heard(session, said), lambda **numbers: session.note("ears", **numbers))
+            session.ears = ears(lambda said: friend.heard(session, said, road="stream"), lambda **numbers: session.note("ears", **numbers))
         with contextlib.suppress(WebSocketDisconnect, RuntimeError):
             while True:
                 message = await websocket.receive()

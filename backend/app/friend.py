@@ -10,13 +10,14 @@ import logging
 import re
 import time
 import unicodedata
+from collections import Counter
 from typing import Callable, Coroutine, List, Optional, Set
 
 from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 
 from . import config, grounding, hint, language, meta, step, window
-from .sessions import Frame, Session
+from .sessions import Frame, HeardLine, Session
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ paste: готовый текст, если человеку надо его вс
 private: true, если на последнем экране оплата, карта, пароль или код.
 lang: код языка приложения на последнем экране, две буквы. Экрана нет, не пиши lang.
 notes: записи для себя, любой текст. На следующем ходу они вернутся к тебе."""
+NEXT_STEP = "\nЕсли человек спрашивает, что делать дальше, или ждёт, назови один конкретный шаг на экране, а не вопрос."  # The trial, for its call alone.
 
 GRAY_SIZE = (64, 96)
 FRAME_DIFF_THRESHOLD = 3.0
@@ -54,6 +56,9 @@ LOOK_SECONDS = 2  # The phone sends the screen within this, unless iOS holds it 
 SETTLE_SECONDS = 6.5  # The phone sends a screen that keeps moving after 5 s, as it does for a video.
 LATE_SECONDS = 10  # The phone gives up on a frame after 5 s, so anything older means its clock has moved.
 MAX_RESTARTS = 2  # A screen that keeps changing still gets an answer.
+TWO_ROADS_SECONDS = 10  # The stream came 3 s late on a real call and the file took 4 s, so a line comes by its second road within this.
+SAME_LINE = 0.7  # The share of its words already heard. The one line known to have come twice had 0.82.
+SHORTEST_COPY = 3  # A word or two that comes again is them saying it again: a yes to the next question.
 MAX_REPLY = 500
 MAX_LABEL = 200
 _SAY_FIRST = re.compile(r'\s*\{\s*"say"\s*:\s*"((?:[^"\\]|\\.)*)"', re.S)
@@ -176,7 +181,8 @@ def _rules(session: Session) -> str:
 
 def messages_of(session: Session) -> List[dict]:
     """A plain chat. The words stay for the whole call, and a turn that was never answered joins the next one."""
-    messages: List[dict] = [{"role": "system", "content": ROLE + session.character + "\n\n" + _rules(session)}]
+    role = ROLE + (NEXT_STEP if session.next_step else "") + session.character
+    messages: List[dict] = [{"role": "system", "content": role + "\n\n" + _rules(session)}]
     pictures = set() if session.not_looking else _pictures(session.chat)
     for index, turn in enumerate(session.chat):
         if turn["role"] == "assistant":
@@ -237,6 +243,27 @@ def _plain(text: str) -> str:
     return re.sub(r"\W+", " ", text).strip().lower()
 
 
+def _copy_of(words: Counter, first: Counter) -> bool:
+    """The two roads write one line in different words, so only its share of words counts. All of the first line and
+    more is that line cut short by its road, and the rest must not be lost."""
+    shared, size = sum((words & first).values()), sum(words.values())
+    return shared >= SAME_LINE * size and (shared == size or shared < sum(first.values()))
+
+
+def _second_road(session: Session, said: str, road: Optional[str]) -> bool:
+    """The phone sends a line as a file when the stream is late with it, and the stream can still bring it. A line has
+    one copy, so the same words after that are theirs. What they typed has no road."""
+    now = time.perf_counter()
+    session.heard_lines = [line for line in session.heard_lines if now - line.at < TWO_ROADS_SECONDS]
+    words = Counter(_plain(said).split())
+    if not road or sum(words.values()) < SHORTEST_COPY:
+        return False
+    first = next((line for line in session.heard_lines if line.road != road and _copy_of(words, Counter(_plain(line.said).split()))), None)
+    if first:
+        session.heard_lines.remove(first)
+    return bool(first)
+
+
 def first_line(text: str) -> str:
     """The spoken line of an answer still being written, once it is whole. The model writes it first, and an answer
     that does not simply waits for its end."""
@@ -277,9 +304,12 @@ class Friend:
         task.add_done_callback(self.tasks.discard)
         return task
 
-    def heard(self, session: Session, said: str) -> None:
+    def heard(self, session: Session, said: str, road: Optional[str] = None) -> None:
         """Their words. With the screen on, the answer waits for the screen as it is now, which the phone sends at once."""
-        if _plain(session.open_words).endswith(_plain(said)):  # The same phrase by its second road, the file after the stream.
+        if _plain(session.open_words).endswith(_plain(said)):  # The same phrase by its second road, word for word.
+            return
+        if _second_road(session, said, road):
+            session.note("heard twice", turn=session.turn, said=said)
             return
         if session.open_words:  # They went on before the agent spoke, so both are one line.
             said = session.open_words + " " + said
@@ -288,6 +318,8 @@ class Friend:
             session.open_screen = None
         session.open_words = said
         session.open_mark = len(session.chat)
+        if road:
+            session.heard_lines.append(HeardLine(road, time.perf_counter(), said))
         session.turn += 1
         self._stop(session)
         session.note("heard", turn=session.turn, said=said)
@@ -552,13 +584,12 @@ class Friend:
         runs beside it, and from then on the two start together until the call ends. The first whole line has the say and
         the other call ends unused, but silence from the spare one waits for the main one. A line that has already gone out
         stands, and only the rest of the answer is lost."""
-        effort = session.effort or config.META_TALK_REASONING
-        main, spare = config.META_TALK_MODEL, config.META_SPARE_MODEL
+        (main, main_effort), (spare, spare_effort) = session.models
         running: dict = {}
         ended: dict = {}
         drops: List[Callable] = []
 
-        def call(model: str) -> asyncio.Task:
+        def call(model: str, effort: str) -> asyncio.Task:
             on_text, drop = self._on_text(session, turn, frame, tied, started, early, model)
             drops.append(drop)
             seconds = ANSWER_SECONDS - (time.perf_counter() - started)
@@ -568,13 +599,13 @@ class Friend:
             return task
 
         try:
-            first = call(main)
+            first = call(main, main_effort)
             if not session.spare_beside:
                 await asyncio.wait({first}, timeout=SPARE_SECONDS)
             if not early and not (first.done() and first.result()):
                 session.spare_beside = True
                 session.note("spare", model=spare, ms=_ms(started))
-                call(spare)
+                call(spare, spare_effort)
             while running:
                 done, _ = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
                 ended.update((running.pop(task), task.result()) for task in done)

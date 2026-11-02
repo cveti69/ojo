@@ -9,7 +9,7 @@ Without it, or with a wrong value, the answer is `401`. Sessions live in the ser
 
 | Method and path | Caller | Body | Answer |
 |---|---|---|---|
-| `POST /sessions` | app | `{"user_lang": "es-MX", "target_lang": "id", "text_entry": "clipboard", "effort": "medium", "character": "warm", "own_character": "", "eyes": true, "signals": true}`, `eyes` is always `true` from the eleventh build on, `signals` if the phone sends `/changed` | `201 {"session_id": "s_ab12cd34"}` |
+| `POST /sessions` | app | `{"user_lang": "es-MX", "target_lang": "id", "text_entry": "clipboard", "effort": "medium", "character": "warm", "own_character": "", "eyes": true, "signals": true}`, `eyes` is always `true` from the eleventh build on, `signals` if the phone sends `/changed`. `fast` and `next_step` come only when chosen | `201 {"session_id": "s_ab12cd34", "model": "muse-wonder-1.0"}` |
 | `POST /transcribe` | app | `audio/wav`: mono, 16 bit, 16 kHz | `200 {"text": "..."}` |
 | `POST /sessions/{id}/frames` | broadcast extension | `image/jpeg` | `202 {"accepted": true}` if the frame became a turn, or `202 {"accepted": false, "reason": "same"}`. `reason`: `same` the same screen, `small` a small change the next turn will see, `looking` the phone is sending the screen for a line, `busy` the answer was restarted twice already, `old` a newer frame has come, `not_looking` the person asked the agent not to watch and the frame goes nowhere. `lang`, once the model has named the language of the screen, two letters: the extension reads the next screens with it |
 | `POST /sessions/{id}/changed` | broadcast extension, once for a change and once for a move until the next frame is delivered | `{"at": 1793436844526, "moved": true}`: `at` on the clock of `X-Frame-Ts`, `moved` if the person is leaving the screen | `200 {"ok": true}` |
@@ -45,6 +45,9 @@ a check mark or a price digit. It starts no turn, and the frame stays the latest
 `effort` picks the model's reasoning depth for the whole call: `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Without it the
 server's value applies, `low` for now. `character` picks the agent's manner: `warm`, `strict`, `brief`, `patient`, or `own` with its text in
 `own_character`, up to 500 characters. The manner changes the tone only: the prohibitions and the answer format stay on the server.
+`fast: true` is the Turbo tick: the quick model and the phone's own voice,
+with the screen as in any call, fresh after the person's words. `next_step: true` is a trial tick: one more line in the role, for this
+call. Without it the role and the rules are the same to the byte. The log of a call says whether each of the two was on.
 
 ## The call loop
 
@@ -52,7 +55,9 @@ A call is an ordinary chat with one model. A turn is the person's words or a new
 to say, what to outline, what text to paste, and notes to itself. The whole conversation and the last 4 different screens go to the
 model on every turn.
 
-Words come from the `/listen` stream, from `/say` or from `/words`. With `signals` and no change since the last delivered frame, that
+Words come from the `/listen` stream, from `/say` or from `/words`. The phone sends `/say` only after a whole wait of 2.5 seconds past
+the person's last word, so a file never goes over their next line. If the stream still brings the line, the road that comes second within
+10 seconds is dropped once when 70% of its words are already there, and the log gets `heard twice`. All of the first line and more is kept, a line of one or two words is theirs again, and `/words` has no road. With `signals` and no change since the last delivered frame, that
 frame is the screen as it is now and the answer starts on it at once. Otherwise the server sends `look`, the app asks the extension
 for the screen as it is and sends it to `/look`. There is no point waiting for a frame longer than a second: after 2 seconds the server
 takes the latest frame it has. With no broadcast or no frames, the model gets a note that the screen is not shown.

@@ -27,6 +27,8 @@ More settings:
 | `META_TALK_MODEL` | `muse-wonder-1.0`, the model of the call |
 | `META_TALK_REASONING` | `low`, for both models of the call |
 | `META_SPARE_MODEL` | `muse-spark-1.3`, runs beside the call's model when it has no line after 8 seconds |
+| `META_FAST_MODEL`, `META_FAST_REASONING` | `muse-spark-1.3`, `minimal`: the main model of a Turbo call |
+| `META_FAST_SPARE_MODEL`, `META_FAST_SPARE_REASONING` | `muse-wonder-1.0`, `low`: its spare one, after the same 8 seconds |
 | `META_TEXT_MODEL` | empty, translation for the keyboard needs one |
 | `META_TRANSCRIBE_MODEL` | `muse-voice-transcribe-1.0` |
 | `META_SAM_MODEL` | `sam-3.1` |
@@ -36,6 +38,7 @@ More settings:
 | `ELEVENLABS_VOICE` | the id of the default voice, George |
 | `ELEVENLABS_VOICES` | `id:name` pairs for the voice setting on the phone, separated by commas |
 | `CALLS_DIR` | empty, no log is kept. A folder outside the repository for one log per call: what was heard, every answer, and the frame each answer saw. Folders are 0700, payment and password screens are not stored |
+| `LANDING` | off. Only `on` makes the public page and its form exist. Off, `/` and `/beta` are closed like any other path, with a token or without |
 | `BETA_FILE` | `beta.jsonl` beside `CALLS_DIR`, empty without it, and then the form takes nothing. Outside the repository, 0600: one email and time per line, and nothing else. |
 | `SESSION_TTL_SECONDS` | `3600`, time without requests before a session is removed |
 | `SESSION_CLEANUP_SECONDS` | `30`, how often old sessions are removed |

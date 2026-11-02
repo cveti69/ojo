@@ -30,6 +30,8 @@ public struct ServerSettings: Sendable, Equatable {
     public var thinking: ThinkingLevel = .auto
     public var character: AgentCharacter = .warm
     public var ownCharacter = ""
+    public var fast = false
+    public var nextStep = false
 }
 
 public final class SharedStore: @unchecked Sendable {
@@ -59,7 +61,9 @@ public final class SharedStore: @unchecked Sendable {
             textEntry: TextEntry(rawValue: defaults.string(forKey: "textInput") ?? "") ?? .clipboard,
             thinking: ThinkingLevel(rawValue: defaults.string(forKey: "thinkingLevel") ?? "") ?? .auto,
             character: AgentCharacter(rawValue: defaults.string(forKey: "agentManner") ?? "") ?? .warm,
-            ownCharacter: (defaults.string(forKey: "ownCharacter") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            ownCharacter: (defaults.string(forKey: "ownCharacter") ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            fast: fastMode,
+            nextStep: nextStepTest
         )
     }
 
@@ -185,6 +189,24 @@ public final class SharedStore: @unchecked Sendable {
         get { defaults.bool(forKey: "noiseReduction") }
         set {
             defaults.set(newValue, forKey: "noiseReduction")
+            defaults.synchronize()
+        }
+    }
+
+    /// Calls with the quick model and the phone's own voice. A trial, so it stays off until the person turns it on.
+    public var fastMode: Bool {
+        get { defaults.bool(forKey: "fastMode") }
+        set {
+            defaults.set(newValue, forKey: "fastMode")
+            defaults.synchronize()
+        }
+    }
+
+    /// Calls with one more line in the agent's role. A trial, so it stays off until the person turns it on.
+    public var nextStepTest: Bool {
+        get { defaults.bool(forKey: "nextStepTest") }
+        set {
+            defaults.set(newValue, forKey: "nextStepTest")
             defaults.synchronize()
         }
     }

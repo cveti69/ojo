@@ -41,6 +41,8 @@ struct SettingsScreen: View {
                         Pill(title: words.frameTicks, isOn: model.frame == .ticks) { model.setFrame(.ticks) }
                     }
                     CheckRow(title: words.noiseReduction, isOn: model.noiseReduction) { model.setNoiseReduction(!model.noiseReduction) }
+                    CheckRow(title: words.fastMode, isOn: model.fastMode) { model.setFastMode(!model.fastMode) }
+                    CheckRow(title: words.nextStepTest, isOn: model.nextStepTest) { model.setNextStepTest(!model.nextStepTest) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 28)

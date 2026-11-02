@@ -197,6 +197,21 @@ private enum ProtocolChecks {
         chosen.thinking = .high
         let chosenBody = try JSONSerialization.jsonObject(with: JSONEncoder().encode(CreateSessionRequest(settings: chosen))) as! [String: Any]
         try check(chosenBody["effort"] as? String == "high", "a chosen level reaches the server")
+        var fast = settings
+        fast.fast = true
+        var fastBody = try JSONSerialization.jsonObject(with: JSONEncoder().encode(CreateSessionRequest(settings: fast))) as! [String: Any]
+        try check(fastBody.removeValue(forKey: "fast") as? Bool == true, "a fast call says so when it is created")
+        try check(fastBody.removeValue(forKey: "signals") as? Bool == true && fastBody.removeValue(forKey: "eyes") as? Bool == true
+                  && fastBody as! [String: String] == createBody as! [String: String], "and that is all it changes")
+        var trial = settings
+        trial.nextStep = true
+        var trialBody = try JSONSerialization.jsonObject(with: JSONEncoder().encode(CreateSessionRequest(settings: trial))) as! [String: Any]
+        try check(trialBody.removeValue(forKey: "next_step") as? Bool == true, "a trial call says so when it is created")
+        try check(trialBody.removeValue(forKey: "signals") as? Bool == true && trialBody.removeValue(forKey: "eyes") as? Bool == true
+                  && trialBody as! [String: String] == createBody as! [String: String], "and that is all it changes")
+        let named = try JSONDecoder().decode(SessionResponse.self, from: Data(#"{"session_id":"s_1","model":"muse-spark-1.3"}"#.utf8))
+        let unnamed = try JSONDecoder().decode(SessionResponse.self, from: Data(#"{"session_id":"s_1"}"#.utf8))
+        try check(named.model == "muse-spark-1.3" && unnamed.sessionID == "s_1" && unnamed.model == nil, "the server names the model, and an older one need not")
         let english = ServerSettings(serverURL: settings.serverURL, token: settings.token, userLang: "en-US", targetLang: "auto", textEntry: .clipboard)
         let englishBody = try JSONSerialization.jsonObject(with: JSONEncoder().encode(CreateSessionRequest(settings: english))) as! [String: Any]
         try check(englishBody["user_lang"] as? String == "en-US", "the phone's whole language tag reaches the server")
@@ -298,6 +313,7 @@ private enum ProtocolChecks {
         try checkNetworkWay()
         try checkShelf()
         try checkPauseWords()
+        try checkVoiceChoice()
         try checkCallWords()
         try checkScreenTextGeometry()
         try checkSentences()
@@ -353,6 +369,31 @@ private enum ProtocolChecks {
 
     private static func pcm(_ samples: [Float]) -> [Int16] { samples.map { Int16(max(-1, min(1, $0)) * 32767) } }
 
+    /// The seconds of two real calls, from the end of the phrase the stream was late with.
+    private static func checkFileWait() throws {
+        let start = Date()
+        func at(_ seconds: TimeInterval) -> Date { start.addingTimeInterval(seconds) }
+        var quiet = FileWait(now: start, voice: at(-0.8))
+        try check(quiet.isOver(now: at(2.5), voice: at(-0.8), isSpeaking: false), "in a quiet room the file goes after one wait, as it did")
+
+        var next = FileWait(now: start, voice: at(-0.8))
+        try check(!next.isOver(now: at(2.5), voice: at(2.4), isSpeaking: true), "no file over their next line, which is how one line went twice")
+
+        var dictation = FileWait(now: start, voice: at(-0.8))
+        try check(!dictation.isOver(now: at(2.5), voice: at(2.4), isSpeaking: true), "no file over the second line, which is how a stray um stopped an answer")
+        try check(!dictation.isOver(now: at(5), voice: at(4.1), isSpeaking: true), "nor over the third")
+        try check(!dictation.isOver(now: at(7.5), voice: at(7.4), isSpeaking: true), "however long it is")
+        try check(!dictation.isOver(now: at(10), voice: at(9.9), isSpeaking: true), "and it goes on")
+        try check(!dictation.isOver(now: at(12.5), voice: at(11.1), isSpeaking: false), "a gap between two lines is no silence")
+        try check(dictation.isOver(now: at(15), voice: at(11.1), isSpeaking: false), "a whole wait after their last word is")
+
+        var room = FileWait(now: start, voice: at(-0.8))
+        for seconds in stride(from: 2.5, to: 20, by: 2.5) {
+            try check(!room.isOver(now: at(seconds), voice: at(seconds - 0.1), isSpeaking: true), "a voice holds the file back, \(seconds) s")
+        }
+        try check(room.isOver(now: at(20), voice: at(19.9), isSpeaking: true), "but a room that never goes quiet does not hold it for ever")
+    }
+
     private static func checkSpeechDetector() throws {
         func phrases(_ parts: [Float]...) -> [Phrase] {
             var detector = SpeechDetector()
@@ -406,6 +447,7 @@ private enum ProtocolChecks {
         _ = tailing.takeFresh()
         _ = tailing.add(pcm(room(0.3)))
         try check(tailing.isHearing, "the quiet inside a phrase is still the phrase")
+        try checkFileWait()
         let file = one[0].wav
         try check(file.count == 44 + one[0].samples.count * 2 && file.prefix(4) == Data("RIFF".utf8), "WAV size")
         let header = file.withUnsafeBytes { (rate: $0.loadUnaligned(fromByteOffset: 24, as: UInt32.self),
@@ -1139,6 +1181,24 @@ private enum ProtocolChecks {
         try check(cut.seconds < 2, "only the person's words get through, got \(cut.seconds)")
     }
 
+    private static func checkVoiceChoice() throws {
+        let plain = VoiceChoice(id: "ru-plain", language: "ru-RU", quality: 1)
+        let better = VoiceChoice(id: "ru-better", language: "ru-RU", quality: 2)
+        let best = VoiceChoice(id: "ru-best", language: "ru-RU", quality: 3)
+        let odd = VoiceChoice(id: "ru-odd", language: "ru-RU", quality: 4, isSpecial: true)
+        let foreign = VoiceChoice(id: "en-best", language: "en-US", quality: 3)
+        try check(VoiceChoice.best(of: [plain, better, best, odd, foreign], for: "ru", usual: "ru-plain") == best, "the best voice of the language")
+        try check(VoiceChoice.best(of: [plain, better, odd, foreign], for: "ru-ID", usual: nil) == better, "a phone's region is still its language")
+        try check(VoiceChoice.best(of: [odd, foreign], for: "ru", usual: nil) == nil, "no voice for the language means none")
+        let spain = VoiceChoice(id: "es-spain", language: "es-ES", quality: 1)
+        let mexico = VoiceChoice(id: "es-mexico", language: "es-MX", quality: 1)
+        let richer = VoiceChoice(id: "es-richer", language: "es-ES", quality: 2)
+        try check(VoiceChoice.best(of: [spain, mexico], for: "es_MX", usual: "es-spain") == mexico, "among equals the same accent")
+        try check(VoiceChoice.best(of: [mexico, richer], for: "es-MX", usual: "es-mexico") == richer, "quality goes before the accent")
+        let other = VoiceChoice(id: "ru-other", language: "ru-RU", quality: 1)
+        try check(VoiceChoice.best(of: [plain, other], for: "ru", usual: "ru-plain") == plain, "among equals the voice iOS would take")
+    }
+
     private static func checkPauseWords() throws {
         for language in [CallWords.russian, .english, .spanish] {
             var words = PauseWords(phrases: language.pause, sounds: language.sounds)
@@ -1154,19 +1214,32 @@ private enum ProtocolChecks {
             try check(Set(said).count == language.pause.count, "every pause word gets its turn")
             try check(words.next(now: start.addingTimeInterval(17 * (PauseWords.gap + 1) + 5)) == nil, "pause words stay rare")
         }
-        try check(CallWords.russian.pause.count == 16 && CallWords.english.pause.count == 16 && CallWords.spanish.pause.count == 6, "the waiting phrases of each language")
+        try check(CallWords.russian.pause.count == 13 && CallWords.english.pause.count == 15 && CallWords.spanish.pause.count == 6, "the waiting phrases of each language")
+        try checkNoWaitSoundsLikeYes()
         try checkShortSounds()
         for word in CallWords.russian.pause + CallWords.english.pause {
             try check(!["смотр", "вижу", "look", "watch"].contains { word.lowercased().contains($0) }, "a waiting phrase sounds with the eyes shut too: \(word)")
         }
     }
 
-    private static func checkShortSounds() throws {
-        try check(CallWords.russian.sounds == ["Так.", "Мм.", "Хм."], "the short sounds in Russian")
-        try check(CallWords.english.sounds == ["Hmm.", "Let's see."], "the short sounds in English")
-        try check(CallWords.spanish.sounds == ["Mm.", "A ver."], "the short sounds in Spanish")
+    /// A wait comes right after a question, so what sounds like agreement is heard as the answer.
+    private static func checkNoWaitSoundsLikeYes() throws {
+        let yes = Set(["да", "ага", "угу", "так", "хорошо", "ладно", "окей", "мм", "ok", "okay", "yes", "yeah", "yep", "sure", "right", "mm", "sí", "vale", "claro", "bueno"])
+        for language in [CallWords.russian, .english, .spanish] {
+            for phrase in language.pause + language.sounds {
+                let words = phrase.lowercased().split { !$0.isLetter && $0 != "'" }.map(String.init)
+                try check(yes.isDisjoint(with: words), "a wait must not sound like yes: \(phrase)")
+                try check(words != ["сейчас"], "and a lone word of promise is one too: \(phrase)")
+            }
+        }
+    }
 
-        var words = PauseWords(phrases: CallWords.russian.pause, sounds: CallWords.russian.sounds)
+    private static func checkShortSounds() throws {
+        try check(CallWords.russian.sounds == ["Хм."], "the short sounds in Russian")
+        try check(CallWords.english.sounds == ["Hmm.", "Let's see."], "the short sounds in English")
+        try check(CallWords.spanish.sounds == ["A ver."], "the short sounds in Spanish")
+
+        var words = PauseWords(phrases: CallWords.english.pause, sounds: CallWords.english.sounds)
         var said: [String] = []
         for _ in 0..<8 {
             guard let sound = words.sound(isReady: { _ in true }) else {
@@ -1179,11 +1252,11 @@ private enum ProtocolChecks {
             try check(words.sound(isReady: { _ in true }) == nil, "never a sound on two turns in a row")
             words.newTurn()
         }
-        try check(Set(said).count == CallWords.russian.sounds.count, "every sound gets its turn")
+        try check(Set(said).count == CallWords.english.sounds.count, "every sound gets its turn")
 
         var ready = PauseWords(phrases: CallWords.russian.pause, sounds: CallWords.russian.sounds)
         try check(ready.sound(isReady: { _ in false }) == nil, "a sound not on the phone is skipped")
-        try check(ready.sound(isReady: { $0 == "Мм." }) == "Мм.", "only a sound on the phone goes")
+        try check(ready.sound(isReady: { $0 == "Хм." }) == "Хм.", "only a sound on the phone goes")
 
         var gap = PauseWords(phrases: CallWords.russian.pause, sounds: CallWords.russian.sounds)
         try check(gap.gapLeft() < 0, "the first phrase waits for no gap")
@@ -1194,13 +1267,13 @@ private enum ProtocolChecks {
         try check(gap.next(now: start.addingTimeInterval(PauseWords.gap - 1)) == nil, "the next phrase waits the gap")
         try check(gap.next(now: start.addingTimeInterval(PauseWords.gap)) != nil, "a sound does not move the next phrase")
 
-        var before = PauseWords(phrases: CallWords.russian.pause, sounds: CallWords.russian.sounds)
+        var before = PauseWords(phrases: CallWords.english.pause, sounds: CallWords.english.sounds)
         let sounds = (0..<3000).compactMap { _ -> String? in
             before.newTurn()
             before.newTurn()
-            return before.soundBeforeAnswer { $0 != "Так." }
+            return before.soundBeforeAnswer { $0 != "Hmm." }
         }
-        try check(!sounds.contains("Так."), "a sound before the answer only from what is ready")
+        try check(!sounds.contains("Hmm."), "a sound before the answer only from what is ready")
         try check(sounds.count > 800 && sounds.count < 1200, "a sound before about one answer in three, got \(sounds.count)")
         try check(before.next() != nil, "a sound before an answer does not hold up the next pause")
 
@@ -1240,7 +1313,8 @@ private enum ProtocolChecks {
         }
         try check(zip(russian, strings(.english)).filter { $0 == $1 }.isEmpty, "every English word is written out")
         try check(zip(strings(.english), strings(.spanish)).filter { $0 == $1 }.isEmpty, "every Spanish word is written out")
-        try check(CallWords.russian.greeting == "Привет, чем помочь?", "a Russian call opens as it always did")
+        try check([CallWords.russian, .english, .spanish].map(\.greeting) == ["Чем помочь?", "How can I help?", "¿En qué te ayudo?"],
+                  "a call opens with the question alone: a hello of the phone's would be the second one")
     }
 
     private static func checkSentences() throws {
@@ -1309,6 +1383,19 @@ private enum ProtocolChecks {
         try check(!store.noiseReduction, "the plain sound by default")
         defaults.set(true, forKey: "testSound")  // The tick of the last build, which meant the opposite.
         try check(!store.noiseReduction, "an old tick does not carry over")
+        try check(!store.fastMode && !store.settings.fast, "the fast mode is off until chosen")
+        store.fastMode = true
+        let nextLaunch = try SharedStore(configuration: configuration, defaults: defaults)
+        try check(nextLaunch.settings.fast, "the fast mode stays between launches")
+        store.fastMode = false
+        try check(!store.settings.fast, "and it can be turned off")
+        try check(["ru", "en", "es"].map { CallWords.of($0).fastMode } == ["Турбо", "Turbo", "Turbo"], "the fast mode has its three names")
+        try check(!store.nextStepTest && !store.settings.nextStep, "the trial is off until chosen")
+        store.nextStepTest = true
+        try check(nextLaunch.settings.nextStep, "the trial stays between launches")
+        store.nextStepTest = false
+        try check(!store.settings.nextStep, "and it can be turned off")
+        try check(["ru", "en", "es"].map { CallWords.of($0).nextStepTest } == ["Тест: следующий шаг", "Test: next step", "Prueba: siguiente paso"], "the trial has its three names")
         store.character = .patient
         store.ownCharacter = "  спокойно  "
         try check(store.character == .patient && store.ownCharacter == "спокойно" && store.settings.character == .patient, "the tone stays, with no spaces around it")

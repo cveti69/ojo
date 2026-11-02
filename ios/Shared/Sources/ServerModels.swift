@@ -9,6 +9,8 @@ public struct CreateSessionRequest: Encodable, Sendable {
     public let ownCharacter: String
     public let eyes = true
     public let signals = true  // The broadcast says when the screen changes, so a still one needs no new frame.
+    public let fast: Bool?  // Sent only when chosen: without it the request is what it always was.
+    public let nextStep: Bool?  // The same.
 
     public init(settings: ServerSettings) {
         userLang = settings.userLang
@@ -17,17 +19,20 @@ public struct CreateSessionRequest: Encodable, Sendable {
         effort = settings.thinking == .auto ? nil : settings.thinking
         character = settings.character
         ownCharacter = settings.ownCharacter
+        fast = settings.fast ? true : nil
+        nextStep = settings.nextStep ? true : nil
     }
 
     enum CodingKeys: String, CodingKey {
         case userLang = "user_lang", targetLang = "target_lang", textEntry = "text_entry"
-        case effort, character, ownCharacter = "own_character", eyes, signals
+        case effort, character, ownCharacter = "own_character", eyes, signals, fast, nextStep = "next_step"
     }
 }
 
 public struct SessionResponse: Decodable, Sendable {
     public let sessionID: String
-    enum CodingKeys: String, CodingKey { case sessionID = "session_id" }
+    public let model: String?  // For the log. A server from before the fast mode does not name it.
+    enum CodingKeys: String, CodingKey { case sessionID = "session_id", model }
 }
 
 public struct WordsRequest: Encodable, Sendable { public let text: String }

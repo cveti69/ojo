@@ -22,6 +22,8 @@ final class CallViewModel: ObservableObject {
     @Published private(set) var measuresAppleSpeech = false
     @Published private(set) var hearsOverVoice = false
     @Published private(set) var noiseReduction = false
+    @Published private(set) var fastMode = false
+    @Published private(set) var nextStepTest = false
     @Published private(set) var voices: [Voice] = []
     @Published private(set) var voice = ""
     @Published private(set) var frame = EyesFrame.lace
@@ -57,10 +59,10 @@ final class CallViewModel: ObservableObject {
         var sound: String?  // Sounds straight ahead of the text, as its first sentence, so the voice of the text is asked for at once.
     }
 
-    private static let streamWait: UInt64 = 2_500_000_000  // Past this the server has not heard the phrase, so it goes as a file.
     private static let warmthGap: UInt64 = 20_000_000_000
     private static let screenWait = 1.0
     private static let firstWordAfter = 0.7
+    private static let firstWordFast = 2.0  // By then a fast answer is near, and the word would only be cut off by it.
     private static let soundAfterPhrase: UInt64 = 2_500_000_000
     private static let longWait = 3000  // In ms from the end of speech.
     private static let silenceBeforeSound = 1.5
@@ -140,6 +142,8 @@ final class CallViewModel: ObservableObject {
         measuresAppleSpeech = store?.measuresAppleSpeech ?? false
         hearsOverVoice = store?.hearsOverVoice ?? false
         noiseReduction = store?.noiseReduction ?? false
+        fastMode = store?.fastMode ?? false
+        nextStepTest = store?.nextStepTest ?? false
         frame = EyesFrame(rawValue: store?.windowFrame ?? "") ?? .lace
         language = store?.language ?? ""
         character = store?.character ?? .warm
@@ -244,7 +248,7 @@ final class CallViewModel: ObservableObject {
                 try self.beginLocalCall(withEyes: true)
                 self.speaker.prepare(client: client, journal: self.journal)
                 let own = settings.character == .own ? ", \(settings.ownCharacter.count) знаков" : ""
-                self.journal?.append("Сессия создана; рассуждения: \(settings.thinking.rawValue); характер: \(settings.character.rawValue)\(own)")
+                self.journal?.append("Сессия создана; режим: \(settings.fast ? "турбо" : "обычный"); тест следующего шага: \(settings.nextStep ? "да" : "нет"); модель: \(response.model ?? "?"); рассуждения: \(settings.thinking.rawValue); характер: \(settings.character.rawValue)\(own)")
                 self.connect(client: client, sessionID: response.sessionID)
                 self.status = self.words.greets
                 await self.speaker.speakAndWait(self.words.greeting)
@@ -443,6 +447,18 @@ final class CallViewModel: ObservableObject {
     func setNoiseReduction(_ value: Bool) {
         noiseReduction = value
         store?.noiseReduction = value
+    }
+
+    /// From the next call on: one call keeps one voice.
+    func setFastMode(_ value: Bool) {
+        fastMode = value
+        store?.fastMode = value
+    }
+
+    /// From the next call on: the role of a call is set when it starts.
+    func setNextStepTest(_ value: Bool) {
+        nextStepTest = value
+        store?.nextStepTest = value
     }
 
     func setFrame(_ value: EyesFrame) {
@@ -660,7 +676,7 @@ final class CallViewModel: ObservableObject {
         let turn = heardTurn
         let waits = speechStream?.isOpen == true
         Task { [weak self] in
-            if waits { try? await Task.sleep(nanoseconds: Self.streamWait) }
+            if waits { await self?.waitForStream(turn: turn) }
             guard let self, self.isCallActive, self.heardTurn == turn else { return }
             guard phrase.standsOut else {
                 self.journal?.append("Поток речи не услышал реплику, а файлом она слишком тихая")
@@ -675,6 +691,14 @@ final class CallViewModel: ObservableObject {
                 self.enqueue(Line(text: self.words.failed, turn: turn))
             }
         }
+    }
+
+    private func waitForStream(turn: Int) async {
+        var wait = FileWait(now: Date(), voice: microphone?.lastVoice ?? .distantPast)
+        repeat {
+            try? await Task.sleep(nanoseconds: UInt64(FileWait.step * 1_000_000_000))
+        } while isCallActive && heardTurn == turn
+            && !wait.isOver(now: Date(), voice: microphone?.lastVoice ?? .distantPast, isSpeaking: microphone?.isSpeaking == true)
     }
 
     private func noteDroppedSounds() {
@@ -941,7 +965,7 @@ final class CallViewModel: ObservableObject {
             phrasesThisTurn = 0
             pauseWords.newTurn()
             keepQuiet()
-            fillPause(after: max(Self.firstWordAfter, pauseWords.gapLeft()))
+            fillPause(after: max(client?.settings.fast == true ? Self.firstWordFast : Self.firstWordAfter, pauseWords.gapLeft()))
         case .say(let say):
             hear(say)
         case .look(let event):

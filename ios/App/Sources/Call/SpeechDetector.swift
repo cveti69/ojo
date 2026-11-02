@@ -36,6 +36,28 @@ enum WAV {
     }
 }
 
+/// How long a phrase the stream has not brought stays away from the file road. The stream gets a whole wait after the person's
+/// last word, whichever phrase that was: a file sent over their next line comes back as that line's twin, or as a stray word
+/// that stops its answer.
+struct FileWait {
+    static let step: TimeInterval = 2.5  // Past this the server has not heard the phrase, so it goes as a file.
+    private static let longest: TimeInterval = 20  // A room that never goes quiet must not hold a line back for ever.
+
+    private let started: Date
+    private var voice: Date
+
+    init(now: Date, voice: Date) {
+        started = now
+        self.voice = voice
+    }
+
+    /// Asked after every step.
+    mutating func isOver(now: Date, voice: Date, isSpeaking: Bool) -> Bool {
+        defer { self.voice = voice }
+        return now.timeIntervalSince(started) >= Self.longest || (!isSpeaking && voice == self.voice)
+    }
+}
+
 /// Finds phrases in the endless sound of a call. "Loud" means loud for this room, so it works in a quiet flat and on a street.
 struct SpeechDetector {
     static let sampleRate = 16_000

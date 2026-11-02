@@ -20,6 +20,13 @@ def _real_word(word: dict) -> bool:
     return bool(word["text"].strip()) and right > left and bottom > top
 
 
+@dataclass
+class HeardLine:
+    road: str
+    at: float
+    said: str
+
+
 @dataclass(frozen=True)
 class Frame:
     jpeg: bytes
@@ -46,6 +53,8 @@ class Session:
     character: str = ""
     eyes: bool = False
     signals: bool = False  # The phone says when the screen changes, ahead of the frame.
+    fast: bool = False  # The person chose speed: the quick model. The screen comes as in any call, fresh after their words.
+    next_step: bool = False  # A trial of one more line in the role, for this call.
     chat: List[dict] = field(default_factory=list)  # The call as the model sees it.
     turn: int = 0
     heard: str = ""  # Their words, while the phone sends the screen as it is now.
@@ -54,6 +63,7 @@ class Session:
     open_words: str = ""  # Their last words until the first sound of the answer: more words now are the same line.
     open_mark: int = 0
     open_screen: Optional[Frame] = None  # The first frame those words went with.
+    heard_lines: List[HeardLine] = field(default_factory=list)  # Their lines of the last seconds, past the first sound too: each can still come by its other road.
     seen_gray: Optional[bytes] = None  # The screen of the last turn: a new screen is measured against it.
     restarts: int = 0
     held: bool = False
@@ -94,6 +104,14 @@ class Session:
     def not_looking(self) -> bool:
         """They asked the agent not to watch their screen. What the phone was told is the only record, so the two cannot differ."""
         return bool(self.last_sight and self.last_sight["on"])
+
+    @property
+    def models(self) -> tuple:
+        """The main model and the spare one, each with how deep it thinks."""
+        if self.fast:
+            return (config.META_FAST_MODEL, config.META_FAST_REASONING), (config.META_FAST_SPARE_MODEL, config.META_FAST_SPARE_REASONING)
+        effort = self.effort or config.META_TALK_REASONING
+        return (config.META_TALK_MODEL, effort), (config.META_SPARE_MODEL, effort)
 
     def touch(self) -> None:
         self.last_activity = time.monotonic()
@@ -181,14 +199,15 @@ class SessionStore:
         self.sessions: Dict[str, Session] = {}
 
     def create(self, user_lang: str, target_lang: str, text_entry: str, effort: Optional[str] = None,
-               character: str = "", eyes: bool = False, signals: bool = False) -> Session:
+               character: str = "", eyes: bool = False, signals: bool = False, fast: bool = False, next_step: bool = False) -> Session:
         session = Session(
             id="s_" + uuid.uuid4().hex[:16], user_lang=user_lang, target_lang=target_lang, text_entry=text_entry,
-            effort=effort, character=character, eyes=eyes, signals=signals,
+            effort=effort, character=character, eyes=eyes, signals=signals, fast=fast, next_step=next_step,
         )
         session.call_log = CallLog.start(session.id)
-        session.note("call", user_lang=user_lang, target_lang=target_lang, text_entry=text_entry, eyes=eyes,
-                     model=config.META_TALK_MODEL, spare=config.META_SPARE_MODEL, effort=effort or config.META_TALK_REASONING)
+        (model, main_effort), (spare, spare_effort) = session.models
+        session.note("call", user_lang=user_lang, target_lang=target_lang, text_entry=text_entry, eyes=eyes, fast=fast, next_step=next_step,
+                     model=model, spare=spare, effort=main_effort, spare_effort=spare_effort)
         self.sessions[session.id] = session
         return session
 
