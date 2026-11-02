@@ -21,6 +21,7 @@ final class CallViewModel: ObservableObject {
     @Published private(set) var screenTextMode: ScreenTextMode = .extension
     @Published private(set) var measuresAppleSpeech = false
     @Published private(set) var hearsOverVoice = false
+    @Published private(set) var testSound = false
     @Published private(set) var voices: [Voice] = []
     @Published private(set) var voice = ""
     @Published private(set) var frame = EyesFrame.lace
@@ -59,11 +60,12 @@ final class CallViewModel: ObservableObject {
     private static let streamWait: UInt64 = 2_500_000_000  // Past this the server has not heard the phrase, so it goes as a file.
     private static let warmthGap: UInt64 = 20_000_000_000
     private static let screenWait = 1.0
-    private static let firstWordAfter = 1.5  // A longer word waits this long: while the agent speaks it cannot hear the person.
-    private static let earlySoundAfter = 0.7
+    private static let firstWordAfter = 0.7
+    private static let soundAfterPhrase: UInt64 = 2_500_000_000
     private static let longWait = 3000  // In ms from the end of speech.
     private static let silenceBeforeSound = 1.5
-    private static let mostWords = 2  // On one turn, however long the wait.
+    private static let mostPhrases = 2  // On one turn, however long the wait.
+    private static let endScreenStays: UInt64 = 10_000_000_000
 
     private let audioSession = CallAudioSession()
     private let speaker: any Speaker
@@ -105,8 +107,10 @@ final class CallViewModel: ObservableObject {
     private var droppedSounds = 0
     private var pauseWords = PauseWords(phrases: CallWords.device.pause, sounds: CallWords.device.sounds)
     private var pause: Task<Void, Never>?
-    private var wordsThisTurn = 0
+    private var afterPhrase: Task<Void, Never>?
+    private var phrasesThisTurn = 0
     private var eyes: EyesStage?
+    private var endScreen: Task<Void, Never>?
     private var movedNotice: GroupNotification?
     private var movedAt: Int64 = 0
     private var hintOnWindow = false
@@ -134,6 +138,7 @@ final class CallViewModel: ObservableObject {
         voice = store?.voice ?? ""
         measuresAppleSpeech = store?.measuresAppleSpeech ?? false
         hearsOverVoice = store?.hearsOverVoice ?? false
+        testSound = store?.testSound ?? false
         frame = EyesFrame(rawValue: store?.windowFrame ?? "") ?? .lace
         language = store?.language ?? ""
         character = store?.character ?? .warm
@@ -203,8 +208,10 @@ final class CallViewModel: ObservableObject {
 
     func startCall() {
         guard !isCallActive, !isWorking, let store else { return }
+        endScreen?.cancel()
         lastCall = nil
         isMuted = false
+        audioSession.mode = testSound ? .default : .voiceChat
         soundOutput = audioSession.output(in: words)
         let settings = store.settings
         store.sessionID = nil
@@ -285,7 +292,7 @@ final class CallViewModel: ObservableObject {
         _ = newWorkflow()
         noteDroppedSounds()
         stopHearing()
-        pause?.cancel()
+        keepQuiet()
         speaking?.cancel()
         speaking = nil
         lines.removeAll()
@@ -320,7 +327,10 @@ final class CallViewModel: ObservableObject {
         isWorking = false
         isGreeted = false
         isSharing = false
-        if let callBegan { lastCall = Date().timeIntervalSince(callBegan) }
+        if let callBegan {
+            lastCall = Date().timeIntervalSince(callBegan)
+            leaveEndScreen()
+        }
         callBegan = nil
         seenSteps.removeAll()
         unwrittenPaste = nil
@@ -335,6 +345,17 @@ final class CallViewModel: ObservableObject {
         journal?.append("Звонок завершён; расширение получит сигнал остановки через App Group")
         if let endingClient, let endingID {
             endRemoteSession(client: endingClient, sessionID: endingID)
+        }
+    }
+
+    /// How the call ended stays for a moment, then the screen is the main one again. Only a call that began has this screen.
+    private func leaveEndScreen() {
+        endScreen?.cancel()
+        endScreen = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.endScreenStays)
+            guard let self, !Task.isCancelled else { return }
+            self.lastCall = nil
+            self.status = self.words.ready
         }
     }
 
@@ -413,6 +434,12 @@ final class CallViewModel: ObservableObject {
     func setHearsOverVoice(_ value: Bool) {
         hearsOverVoice = value
         store?.hearsOverVoice = value
+    }
+
+    /// From the next call on: a sound mode lasts a whole call.
+    func setTestSound(_ value: Bool) {
+        testSound = value
+        store?.testSound = value
     }
 
     func setFrame(_ value: EyesFrame) {
@@ -684,6 +711,7 @@ final class CallViewModel: ObservableObject {
                 let heard = await self.speaker.speakAndWait(sound + parts) - sound.count
                 self.currentLine = nil
                 if heard < parts.count { self.tellCut(line.id, said: parts.prefix(max(heard, 0)).joined(separator: " ")) }
+                if line.kind == .filler { self.fillAfterPhrase() }
             }
             self?.speaking = nil
         }
@@ -774,23 +802,39 @@ final class CallViewModel: ObservableObject {
     }
 
     /// A short ready word while the agent thinks, so the line never goes dead. It only ever fills silence.
-    private func fillPause(after seconds: Double, early: Bool = false) {
+    private func fillPause(after seconds: Double) {
         pause?.cancel()
         pause = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            guard let self, !Task.isCancelled, self.isCallActive, self.currentLine == nil, self.lines.isEmpty,
-                  self.waitingHint == nil, self.microphone?.isSpeaking != true,
-                  self.wordsThisTurn < Self.mostWords,
-                  let words = early ? self.pauseWords.earlySound(isReady: { self.speaker.holds($0) }) : self.pauseWords.next() else { return }
-            self.wordsThisTurn += 1
-            self.journal?.append(early ? "Ранний звук" : "Фраза на паузе")
+            guard let self, !Task.isCancelled, self.isLineFree, self.phrasesThisTurn < Self.mostPhrases,
+                  let words = self.pauseWords.next() else { return }
+            self.phrasesThisTurn += 1
+            self.journal?.append("Фраза на паузе")
             self.enqueue(Line(text: words, kind: .filler))
             self.fillPause(after: PauseWords.gap)
         }
     }
 
+    /// The wait goes on after a phrase. An answer, or a turn with none coming, has already cancelled the pause.
+    private func fillAfterPhrase() {
+        guard pause?.isCancelled == false else { return }
+        afterPhrase?.cancel()
+        afterPhrase = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.soundAfterPhrase)
+            guard let self, !Task.isCancelled, self.isLineFree, self.phrasesThisTurn > 0,
+                  let sound = self.pauseWords.sound(isReady: { self.speaker.holds($0) }) else { return }
+            self.journal?.append("Звук после фразы")
+            self.enqueue(Line(text: sound, kind: .filler))
+        }
+    }
+
+    private var isLineFree: Bool {
+        isCallActive && currentLine == nil && lines.isEmpty && waitingHint == nil && microphone?.isSpeaking != true
+    }
+
     private func keepQuiet() {
         pause?.cancel()
+        afterPhrase?.cancel()
     }
 
     private func connect(client: ServerClient, sessionID: String) {
@@ -871,16 +915,17 @@ final class CallViewModel: ObservableObject {
             journal?.append("Ход \(event.turn): услышан через \(sinceVoiceEnded()) мс после конца речи")
             eyes?.wait(for: .reply)
             dropLines { $0.kind != .hint }
-            wordsThisTurn = 0
-            let early = pauseWords.startsEarly() && words.sounds.contains { speaker.holds($0) }
-            fillPause(after: early ? Self.earlySoundAfter : Self.firstWordAfter, early: early)
+            phrasesThisTurn = 0
+            pauseWords.newTurn()
+            keepQuiet()
+            fillPause(after: max(Self.firstWordAfter, pauseWords.gapLeft()))
         case .say(let say):
             hear(say)
         case .look(let event):
             look(turn: event.turn)
         case .quiet(let event):
             guard event.turn == heardTurn else { break }
-            pause?.cancel()
+            keepQuiet()
             eyes?.stopWaiting(for: .reply)
             eyes?.stopWaiting(for: .screen)
             dropLines { $0.kind == .filler }
@@ -921,7 +966,8 @@ final class CallViewModel: ObservableObject {
             tellCut(say.line, said: "")
             return
         }
-        pause?.cancel()
+        keepQuiet()
+        dropLines { $0.kind == .filler }
         eyes?.stopWaiting(for: .reply)
         eyes?.stopWaiting(for: .screen)
         if let text = say.pasteText { placeOnClipboard(text, reason: "Буфер из ответа") }
@@ -934,10 +980,10 @@ final class CallViewModel: ObservableObject {
         answeredTurn = say.turn
     }
 
-    /// After a long wait in silence a short sound goes first, so the person knows the answer is coming.
+    /// After a phrase and a long wait in silence a short sound goes first, so the person knows the answer is coming.
     private func soundBeforeAnswer(_ say: SayEvent) -> String? {
         let start = say.textRU.lowercased()
-        guard say.turn > answeredTurn, sinceVoiceEnded() >= Self.longWait, !isSounding, currentLine == nil, lines.isEmpty,
+        guard say.turn > answeredTurn, phrasesThisTurn > 0, sinceVoiceEnded() >= Self.longWait, !isSounding, currentLine == nil, lines.isEmpty,
               waitingHint == nil, microphone?.isSpeaking != true, Date().timeIntervalSince(lastSounded) >= Self.silenceBeforeSound else { return nil }
         return pauseWords.soundBeforeAnswer { speaker.holds($0) && !start.hasPrefix($0.dropLast().lowercased()) }
     }
@@ -1078,6 +1124,7 @@ final class CallViewModel: ObservableObject {
         speaking?.cancel()
         interruption?.cancel()
         pause?.cancel()
+        afterPhrase?.cancel()
         clipboardTask?.cancel()
         textTestTask?.cancel()
     }

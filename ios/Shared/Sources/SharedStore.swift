@@ -161,6 +161,15 @@ public final class SharedStore: @unchecked Sendable {
         }
     }
 
+    /// Calls in the louder sound mode. A trial, so it stays off until the person turns it on.
+    public var testSound: Bool {
+        get { defaults.bool(forKey: "testSound") }
+        set {
+            defaults.set(newValue, forKey: "testSound")
+            defaults.synchronize()
+        }
+    }
+
     /// The one place the language of a call comes from: its words, the agent's rule and the phone's own voice. Empty follows the phone.
     public var language: String {
         get {

@@ -7,7 +7,8 @@ struct PauseWords {
     private var phrases: Shuffled
     private var sounds: Shuffled
     private var lastSaid = Date.distantPast
-    private var earlyLastTurn = false
+    private var soundThisTurn = false
+    private var soundLastTurn = false
 
     init(phrases: [String], sounds: [String]) {
         self.phrases = Shuffled(phrases)
@@ -20,23 +21,28 @@ struct PauseWords {
         return phrase
     }
 
-    /// About every other turn, and never on two in a row.
-    mutating func startsEarly() -> Bool {
-        earlyLastTurn = !earlyLastTurn && Int.random(in: 0..<4) > 0
-        return earlyLastTurn
+    /// A turn right after a phrase gets its own once this is over.
+    func gapLeft(now: Date = Date()) -> TimeInterval {
+        Self.gap - now.timeIntervalSince(lastSaid)
     }
 
-    /// A sound only if it is on the phone already: a late one is worse than none.
-    mutating func earlySound(now: Date = Date(), isReady: (String) -> Bool) -> String? {
-        guard now.timeIntervalSince(lastSaid) >= Self.gap, let sound = sounds.next(where: isReady) else { return nil }
-        lastSaid = now
+    mutating func newTurn() {
+        soundLastTurn = soundThisTurn
+        soundThisTurn = false
+    }
+
+    /// One on a turn, and never on two in a row. Only if it is on the phone already: a late one is worse than none.
+    /// The next phrase owes it nothing.
+    mutating func sound(isReady: (String) -> Bool) -> String? {
+        guard !soundThisTurn, !soundLastTurn, let sound = sounds.next(where: isReady) else { return nil }
+        soundThisTurn = true
         return sound
     }
 
-    /// About one wait in three. It goes with the answer, so the next pause owes it nothing.
+    /// About one wait in three.
     mutating func soundBeforeAnswer(isReady: (String) -> Bool) -> String? {
         guard Int.random(in: 0..<3) == 0 else { return nil }
-        return sounds.next(where: isReady)
+        return sound(isReady: isReady)
     }
 }
 

@@ -9,6 +9,7 @@ final class CallAudioSession {
     var onActivityChange: ((Bool) -> Void)?
     var onDiagnostic: ((String) -> Void)?
     var onRouteChange: (() -> Void)?
+    var mode = AVAudioSession.Mode.voiceChat  // Taken at every start of the sound, so a new choice works from the next call.
     private var keepAlivePlayer: AVAudioPlayer?
     private var routeChange: AnyCancellable?
 
@@ -29,7 +30,7 @@ final class CallAudioSession {
         let session = AVAudioSession.sharedInstance()
         let ports = session.currentRoute
         let names = { (ports: [AVAudioSessionPortDescription]) in ports.isEmpty ? "нет" : ports.map(\.portType.rawValue).joined(separator: "+") }
-        return "вход \(names(ports.inputs)), выход \(names(ports.outputs)), доступно \(names(session.availableInputs ?? [])), \(Int(session.sampleRate)) Гц, опции \(session.categoryOptions.rawValue)"
+        return "режим \(session.mode.rawValue.replacingOccurrences(of: "AVAudioSessionMode", with: "")), вход \(names(ports.inputs)), выход \(names(ports.outputs)), доступно \(names(session.availableInputs ?? [])), \(Int(session.sampleRate)) Гц, опции \(session.categoryOptions.rawValue)"
     }
 
     /// Where the sound goes now, for the button that changes it.
@@ -47,7 +48,7 @@ final class CallAudioSession {
     func activate() throws {
         let session = AVAudioSession.sharedInstance()
         // AirPods come in by the Bluetooth option. The speaker is only the way when nothing else is connected.
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowAirPlay, .allowBluetoothHFP])
+        try session.setCategory(.playAndRecord, mode: mode, options: [.defaultToSpeaker, .allowAirPlay, .allowBluetoothHFP])
         try session.setActive(true)
         onDiagnostic?("Звук: \(Self.route)")
         onRouteChange?()

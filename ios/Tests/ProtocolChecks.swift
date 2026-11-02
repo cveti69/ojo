@@ -1160,31 +1160,39 @@ private enum ProtocolChecks {
         try check(CallWords.spanish.sounds == ["Ajá.", "Vale.", "Mm."], "the short sounds in Spanish")
 
         var words = PauseWords(phrases: CallWords.russian.pause, sounds: CallWords.russian.sounds)
-        let turns = (0..<4000).map { _ in words.startsEarly() }
-        try check(!zip(turns, turns.dropFirst()).contains { $0 && $1 }, "never an early sound on two turns in a row")
-        let share = Double(turns.filter { $0 }.count) / Double(turns.count)
-        try check(share > 0.35 && share <= 0.5, "an early sound about every other turn, got \(share)")
-
-        let start = Date()
         var said: [String] = []
-        for step in 0..<8 {
-            guard let sound = words.earlySound(now: start.addingTimeInterval(Double(step) * (PauseWords.gap + 1)), isReady: { _ in true }) else {
-                throw CheckFailure(description: "an early sound after a long pause")
+        for _ in 0..<8 {
+            guard let sound = words.sound(isReady: { _ in true }) else {
+                throw CheckFailure(description: "a sound on a turn after a turn with none")
             }
             try check(sound != said.last, "the same sound twice in a row: \(sound)")
             said.append(sound)
+            try check(words.sound(isReady: { _ in true }) == nil, "one sound on a turn")
+            words.newTurn()
+            try check(words.sound(isReady: { _ in true }) == nil, "never a sound on two turns in a row")
+            words.newTurn()
         }
         try check(Set(said).count == CallWords.russian.sounds.count, "every sound gets its turn")
-        try check(words.earlySound(now: start.addingTimeInterval(7 * (PauseWords.gap + 1) + 5), isReady: { _ in true }) == nil, "a sound keeps the same gap as a phrase")
-        try check(words.next(now: start.addingTimeInterval(7 * (PauseWords.gap + 1) + 5)) == nil, "a phrase waits the gap after a sound")
-        try check(words.next(now: start.addingTimeInterval(8 * (PauseWords.gap + 1))) != nil, "a phrase after the gap")
 
         var ready = PauseWords(phrases: CallWords.russian.pause, sounds: CallWords.russian.sounds)
-        try check(ready.earlySound(isReady: { _ in false }) == nil, "a sound not on the phone is skipped")
-        try check(ready.earlySound(isReady: { $0 == "Ага." }) == "Ага.", "only a sound on the phone goes")
+        try check(ready.sound(isReady: { _ in false }) == nil, "a sound not on the phone is skipped")
+        try check(ready.sound(isReady: { $0 == "Ага." }) == "Ага.", "only a sound on the phone goes")
+
+        var gap = PauseWords(phrases: CallWords.russian.pause, sounds: CallWords.russian.sounds)
+        try check(gap.gapLeft() < 0, "the first phrase waits for no gap")
+        let start = Date()
+        try check(gap.next(now: start) != nil, "the first phrase")
+        _ = gap.sound(isReady: { _ in true })
+        try check(abs(gap.gapLeft(now: start.addingTimeInterval(3)) - 5) < 0.001, "a phrase waits out what is left of the gap")
+        try check(gap.next(now: start.addingTimeInterval(PauseWords.gap - 1)) == nil, "the next phrase waits the gap")
+        try check(gap.next(now: start.addingTimeInterval(PauseWords.gap)) != nil, "a sound does not move the next phrase")
 
         var before = PauseWords(phrases: CallWords.russian.pause, sounds: CallWords.russian.sounds)
-        let sounds = (0..<3000).compactMap { _ in before.soundBeforeAnswer { $0 != "Так." } }
+        let sounds = (0..<3000).compactMap { _ -> String? in
+            before.newTurn()
+            before.newTurn()
+            return before.soundBeforeAnswer { $0 != "Так." }
+        }
         try check(!sounds.contains("Так."), "a sound before the answer only from what is ready")
         try check(sounds.count > 800 && sounds.count < 1200, "a sound before about one answer in three, got \(sounds.count)")
         try check(before.next() != nil, "a sound before an answer does not hold up the next pause")

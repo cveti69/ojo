@@ -163,6 +163,34 @@ struct Pill: View {
     }
 }
 
+/// One thing that is on or off, so it stands alone and not among pills.
+struct CheckRow: View {
+    let title: String
+    let isOn: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .opacity(isOn ? 1 : 0)
+                    .frame(width: 26, height: 26)
+                    .background(isOn ? Palette.accent : .clear, in: RoundedRectangle(cornerRadius: 7))
+                    .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(isOn ? Palette.accent : Palette.line, lineWidth: 1.5) }
+                Text(title)
+                    .font(.system(.subheadline, design: .rounded, weight: .medium))
+                    .foregroundStyle(.white)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+}
+
 /// Puts what it holds in a row, and what does not fit on the next one.
 struct Rows: Layout {
     private static let gap: CGFloat = 8

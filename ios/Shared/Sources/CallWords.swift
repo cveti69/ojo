@@ -66,6 +66,7 @@ public struct CallWords: Sendable, Equatable {
     public let frameLace: String
     public let frameGlow: String
     public let frameTicks: String
+    public let testSound: String
     public let language: String
     public let phoneLanguage: String
     public let tone: String
@@ -141,6 +142,7 @@ public struct CallWords: Sendable, Equatable {
         frameLace: "Кружево",
         frameGlow: "Мягкий свет",
         frameTicks: "Чёрточки",
+        testSound: "Тестовый звук",
         language: "Язык",
         phoneLanguage: "Авто",
         tone: "Тон",
@@ -212,6 +214,7 @@ public struct CallWords: Sendable, Equatable {
         frameLace: "Lace",
         frameGlow: "Soft light",
         frameTicks: "Ticks",
+        testSound: "Test sound",
         language: "Language",
         phoneLanguage: "Auto",
         tone: "Tone",
@@ -281,6 +284,7 @@ public struct CallWords: Sendable, Equatable {
         frameLace: "Encaje",
         frameGlow: "Luz suave",
         frameTicks: "Rayitas",
+        testSound: "Sonido de prueba",
         language: "Idioma",
         phoneLanguage: "Automático",
         tone: "Tono",

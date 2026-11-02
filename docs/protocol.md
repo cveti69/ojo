@@ -139,7 +139,7 @@ The server sends JSON strings over the WebSocket.
 On a new connection the server repeats `status`, the last `not_looking` if there was one, the last `hint` and `done`. If no sound of the answer to the last words has played
 (`/played`), it also repeats `heard` and `say`, because that line may have gone to a dead socket.
 
-`heard` means the server heard a phrase. On it the phone drops older lines and, with no answer in 1.5 seconds, says a waiting phrase.
+`heard` means the server heard a phrase. On it the phone drops older lines and, with no answer in 0.7 seconds, says a waiting phrase.
 After a reconnect the server can repeat `heard` and the `say` that has not sounded: the phone keeps the line it already has.
 `read` means a small frame went to the model with no words read on it: the extension reads small frames only then, and the words are
 needed to keep a payment screen out of the log. `say` carries the agent's line ahead of the outline: it goes out as soon as the model has written it, without waiting for the end of
