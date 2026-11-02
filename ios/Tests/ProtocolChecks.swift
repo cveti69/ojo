@@ -1207,13 +1207,15 @@ private enum ProtocolChecks {
         try check(CallWords.device == .of(Locale.preferredLanguages.first ?? "en"), "the words follow the phone")
         func strings(_ words: CallWords) -> [String] {
             Mirror(reflecting: words).children.flatMap { child -> [String] in
-                (child.value as? [String]) ?? [child.value as! String]
+                if let questions = child.value as? [CallQuestion] { return questions.flatMap { [$0.title, $0.answer] } }
+                return (child.value as? [String]) ?? [child.value as! String]
             }
         }
         let russian = strings(.russian)
         for language in [CallWords.russian, .english, .spanish] {
             let all = strings(language)
             try check(all.count - language.pause.count - language.sounds.count == russian.count - CallWords.russian.pause.count - CallWords.russian.sounds.count && all.allSatisfy { !$0.isEmpty }, "every word has its text")
+            try check(language.questions.count == 6, "six questions")
             try check(Set(language.pause).count == language.pause.count, "different waiting phrases")
             let spoken = [language.greeting, language.failed, language.lostHearing, language.noHintYet] + language.pause + language.sounds
             try check(spoken.allSatisfy { $0.last.map { ".?!".contains($0) } == true }, "what is said ends as a sentence")

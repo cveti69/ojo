@@ -24,6 +24,7 @@ final class EyesStage {
     private static let wordsArea = CGRect(x: 60, y: 592, width: 600, height: 318)
     private static let slowestRetry = 8  // In frames: a window that keeps refusing is not worth 30 tries a second.
     private static let longestStep = 0.1  // The drawing does not jump after a long stillness.
+    private static let muteBadge = CGRect(x: 588, y: 40, width: 92, height: 92)  // Inside the border, clear of the window's round corner.
 
     private let surface: any EyesSurface
     private let phrases: CallWords
@@ -40,6 +41,7 @@ final class EyesStage {
     private var words: String?
     private var question: String?
     private var isLinkDown = false
+    private var isMuted = false
     private var notice: String?
     private var backdrop: CGImage?
     private var overlay: CGImage?  // The nose and the word, ready to go over the drawing, as they change far more rarely than it does.
@@ -184,6 +186,13 @@ final class EyesStage {
         tick()
     }
 
+    /// The person turned the microphone off, and the window is where they would forget it.
+    func muted(_ isOn: Bool) {
+        isMuted = isOn
+        shown = nil
+        tick()
+    }
+
     func perform(_ joke: EyesJoke) {
         director.perform(joke, at: clock)
         tick()
@@ -273,10 +282,12 @@ final class EyesStage {
         let started = ProcessInfo.processInfo.systemUptime
         do {
             let sent = try surface.display(background: backdrop) { context in
-                guard let eyesBox else { return }
-                frame.draw(motion, on: context)
-                if let overlay { Self.drawUpright(overlay, on: context) }
-                EyesPainter.draw(pose, in: eyesBox, on: context)
+                if let eyesBox {
+                    frame.draw(motion, on: context)
+                    if let overlay { Self.drawUpright(overlay, on: context) }
+                    EyesPainter.draw(pose, in: eyesBox, on: context)
+                }
+                if isMuted { Self.drawMuteBadge(on: context) }
             }
             if sent {
                 shown = pose
@@ -288,6 +299,30 @@ final class EyesStage {
             }
         } catch { journal?.append("Глаза: кадр не собран: \(error.localizedDescription)") }
         drawing += ProcessInfo.processInfo.systemUptime - started
+    }
+
+    /// The muted microphone of the button in the app, on white with a black edge, so it shows on any hint. These colours
+    /// have no violet in them, so the search for the window's border passes them by.
+    private static func drawMuteBadge(on context: CGContext) {
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.setFillColor(UIColor.black.cgColor)
+        context.fillEllipse(in: muteBadge)
+        context.setFillColor(UIColor.white.cgColor)
+        context.fillEllipse(in: muteBadge.insetBy(dx: 4, dy: 4))
+        let scale = muteBadge.width * 0.66 / 24  // The icon's own square.
+        context.translateBy(x: muteBadge.midX - 12 * scale, y: muteBadge.midY - 12 * scale)
+        context.scaleBy(x: scale, y: scale)
+        context.setStrokeColor(UIColor.black.cgColor)
+        context.setLineWidth(2.2)
+        context.setLineCap(.round)
+        context.addPath(CGPath(roundedRect: CGRect(x: 9, y: 3.5, width: 6, height: 11), cornerWidth: 3, cornerHeight: 3, transform: nil))
+        context.addArc(center: CGPoint(x: 12, y: 11.5), radius: 6, startAngle: .pi, endAngle: 0, clockwise: true)
+        context.move(to: CGPoint(x: 12, y: 17.5))
+        context.addLine(to: CGPoint(x: 12, y: 20.5))
+        context.move(to: CGPoint(x: 4.5, y: 4.5))
+        context.addLine(to: CGPoint(x: 19.5, y: 19.5))
+        context.strokePath()
     }
 
     /// A picture goes in with its origin at the bottom left, and the surface's context is turned over.

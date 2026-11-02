@@ -30,6 +30,12 @@ final class CallViewModel: ObservableObject {
     @Published private(set) var status = CallWords.device.ready
     @Published private(set) var lastInstruction = CallWords.device.noHints
     @Published private(set) var windowState: HintWindowState = .inactive
+    @Published private(set) var callBegan: Date?
+    @Published private(set) var lastCall: TimeInterval?
+    @Published private(set) var isMuted = false
+    @Published private(set) var isNotLooking = false
+    @Published private(set) var isLinkDown = false
+    @Published private(set) var soundOutput = ""
 
     let window: any HintWindowPresenting
     let screenShare = ScreenSharePicker()
@@ -168,6 +174,11 @@ final class CallViewModel: ObservableObject {
             self?.audioIsActive = active
             self?.journal?.append("Аудиосессия активна: \(active ? "да" : "нет")")
         }
+        audioSession.onDiagnostic = { [weak self] in self?.journal?.append($0) }
+        audioSession.onRouteChange = { [weak self] in
+            guard let self else { return }
+            self.soundOutput = self.audioSession.output(in: self.words)
+        }
         NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
             .receive(on: RunLoop.main)
             .sink { [weak self] in self?.handleAudioInterruption($0) }
@@ -192,6 +203,9 @@ final class CallViewModel: ObservableObject {
 
     func startCall() {
         guard !isCallActive, !isWorking, let store else { return }
+        lastCall = nil
+        isMuted = false
+        soundOutput = audioSession.output(in: words)
         let settings = store.settings
         store.sessionID = nil
         store.notLooking = false
@@ -252,6 +266,14 @@ final class CallViewModel: ObservableObject {
         }
     }
 
+    /// The call and the screen go on: only the person's sound stops, here on the phone.
+    func toggleMute() {
+        isMuted.toggle()
+        microphone?.mute(isMuted)
+        eyes?.muted(isMuted)
+        journal?.append("Микрофон \(isMuted ? "выключен" : "включён") кнопкой")
+    }
+
     func askForScreen() {
         // iOS may want a real tap here, so the big button stays under the system sheet either way.
         journal?.append(screenShare.open() ? "Запрошено окно трансляции" : "Окно трансляции: системная кнопка не найдена")
@@ -285,6 +307,8 @@ final class CallViewModel: ObservableObject {
         hintOnWindow = false
         if let endingID, store?.sessionID == endingID { store?.sessionID = nil }
         store?.notLooking = false
+        isNotLooking = false
+        isLinkDown = false
         textCoordinator?.stop()
         startWindowWhenReady = false
         testTimer?.invalidate()
@@ -296,6 +320,8 @@ final class CallViewModel: ObservableObject {
         isWorking = false
         isGreeted = false
         isSharing = false
+        if let callBegan { lastCall = Date().timeIntervalSince(callBegan) }
+        callBegan = nil
         seenSteps.removeAll()
         unwrittenPaste = nil
         lastJPEG = nil
@@ -530,8 +556,10 @@ final class CallViewModel: ObservableObject {
         if withEyes {
             let stage = EyesStage(surface: window, phrases: words, frame: frame, journal: journal)
             stage.start()
+            stage.muted(isMuted)  // The button works from the first moment of a call, before the eyes are there.
             eyes = stage
         } else { try window.display(image: TestFrameFactory.make(title: words.waitingHint)) }
+        callBegan = Date()
         isCallActive = true
         lastInstruction = words.waitingHint
     }
@@ -552,6 +580,7 @@ final class CallViewModel: ObservableObject {
 
     private func makeMicrophone(client: ServerClient, sessionID: String) -> CallMicrophone {
         let microphone = CallMicrophone(sharedEngine: hearsOverVoice ? (speaker as? ServerSpeaker)?.engine : nil)
+        microphone.mute(isMuted)
         microphone.onDiagnostic = { [weak self] in self?.journal?.append($0) }
         microphone.onLost = { [weak self] in
             guard let self else { return }
@@ -769,7 +798,10 @@ final class CallViewModel: ObservableObject {
         let connection = HintEventConnection(client: client)
         connection.onEvent = { [weak self] in self?.receive($0) }
         connection.onDiagnostic = { [weak self] in self?.journal?.append($0) }
-        connection.onReachable = { [weak self] in self?.eyes?.linkChanged(isUp: $0) }
+        connection.onReachable = { [weak self] isUp in
+            self?.isLinkDown = !isUp
+            self?.eyes?.linkChanged(isUp: isUp)
+        }
         connection.onSessionExpired = { [weak self] in
             guard let self else { return }
             self.endCall()
@@ -864,6 +896,7 @@ final class CallViewModel: ObservableObject {
         case .read(let event):
             store?.textAsked = event.frameTS
         case .notLooking(let event):
+            isNotLooking = event.on
             store?.notLooking = event.on
             eyes?.notLooking(event.on)
             journal?.append("Сервер: \(event.on ? "не смотрим" : "смотрим снова")")

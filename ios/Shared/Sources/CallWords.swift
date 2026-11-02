@@ -1,5 +1,16 @@
 import Foundation
 
+/// One question on the questions screen.
+public struct CallQuestion: Sendable, Equatable {
+    public let title: String
+    public let answer: String
+
+    init(_ title: String, _ answer: String) {
+        self.title = title
+        self.answer = answer
+    }
+}
+
 /// What the app says and shows by itself on a call, in the language of the phone. The agent's own lines come from the model, so on
 /// a phone in any other language the agent goes on in that language and only these words are English.
 public struct CallWords: Sendable, Equatable {
@@ -39,10 +50,16 @@ public struct CallWords: Sendable, Equatable {
     public let openWindow: String
     public let call: String
     public let hangUp: String
+    public let soundSpeaker: String
+    public let soundHeadphones: String
+    public let chooseSound: String
+    public let mute: String
+    public let muted: String
+    public let muteMicrophone: String
+    public let unmuteMicrophone: String
 
     // In the settings.
     public let settingsTitle: String
-    public let journal: String
     public let copyJournal: String
     public let journalCopied: String
     public let frame: String
@@ -58,8 +75,13 @@ public struct CallWords: Sendable, Equatable {
     public let tonePatient: String
     public let toneOwn: String
     public let toneOwnHint: String
+    public let toneOwnExample: String
     public let voice: String
-    public let done: String
+    public let back: String
+
+    // On the questions screen.
+    public let questionsTitle: String
+    public let questions: [CallQuestion]
 
     public static var device: CallWords { of(Locale.preferredLanguages.first ?? "en") }
 
@@ -105,8 +127,14 @@ public struct CallWords: Sendable, Equatable {
         openWindow: "Открыть окно",
         call: "Позвонить",
         hangUp: "Завершить",
+        soundSpeaker: "Динамик",
+        soundHeadphones: "Наушники",
+        chooseSound: "Выбрать, куда идёт звук",
+        mute: "Выключить",
+        muted: "Выключен",
+        muteMicrophone: "Выключить микрофон",
+        unmuteMicrophone: "Включить микрофон",
         settingsTitle: "Настройки",
-        journal: "Журнал",
         copyJournal: "Скопировать журнал",
         journalCopied: "Журнал скопирован",
         frame: "Рамка",
@@ -114,16 +142,26 @@ public struct CallWords: Sendable, Equatable {
         frameGlow: "Мягкий свет",
         frameTicks: "Чёрточки",
         language: "Язык",
-        phoneLanguage: "Как на телефоне",
-        tone: "Тон разговора",
+        phoneLanguage: "Авто",
+        tone: "Тон",
         toneWarm: "Тёплый",
         toneStrict: "Строгий",
         toneBrief: "Очень краткий",
         tonePatient: "Терпеливый",
         toneOwn: "Свой текст",
-        toneOwnHint: "Каким быть агенту",
+        toneOwnHint: "Каким быть OjO",
+        toneOwnExample: "Спокойный, немного с юмором",
         voice: "Голос",
-        done: "Готово"
+        back: "Назад",
+        questionsTitle: "Вопросы",
+        questions: [
+            CallQuestion("Что OjO видит и слышит?", "Твой экран, только пока ты его показываешь, и твой голос во время звонка. Они идут на наш сервер и в ИИ Meta. То, что говорит OjO, идёт в ElevenLabs для голоса. Пока идут тесты, мы храним слова и экраны из звонков, чтобы исправлять ошибки. Экраны оплаты, которые распознаём, не храним."),
+            CallQuestion("Как сделать, чтобы он не смотрел?", "Скажи «Не смотри». Глаза закроются, и экран перестанет до него доходить. Скажи «Смотри», когда будет можно."),
+            CallQuestion("А пароли и карты?", "OjO видит то же, что и ты, поэтому скажи «Не смотри», прежде чем их вводить. Сам он их никогда не просит."),
+            CallQuestion("Он может нажать или оплатить за меня?", "Нет. Нажимаешь всегда ты, и оплату подтверждаешь только ты. OjO показывает и говорит, где нажать."),
+            CallQuestion("Как взять текст, который он написал?", "OjO скопирует его за тебя. Нажми на поле и выбери «Вставить»."),
+            CallQuestion("Я не вижу маленькое окно", "Открой Настройки iPhone › Основные › Картинка в картинке и включи Автозапуск «Картинки в картинке». Нажми на окно, чтобы вернуться в OjO.")
+        ]
     )
 
     public static let english = CallWords(
@@ -159,9 +197,15 @@ public struct CallWords: Sendable, Equatable {
         showScreen: "Show your screen",
         openWindow: "Open the window",
         call: "Call",
-        hangUp: "End call",
+        hangUp: "End",
+        soundSpeaker: "Speaker",
+        soundHeadphones: "Headphones",
+        chooseSound: "Choose where the sound goes",
+        mute: "Mute",
+        muted: "Muted",
+        muteMicrophone: "Mute the microphone",
+        unmuteMicrophone: "Unmute the microphone",
         settingsTitle: "Settings",
-        journal: "Log",
         copyJournal: "Copy the log",
         journalCopied: "Log copied",
         frame: "Frame",
@@ -169,16 +213,26 @@ public struct CallWords: Sendable, Equatable {
         frameGlow: "Soft light",
         frameTicks: "Ticks",
         language: "Language",
-        phoneLanguage: "Same as the phone",
-        tone: "Tone of the call",
+        phoneLanguage: "Auto",
+        tone: "Tone",
         toneWarm: "Warm",
         toneStrict: "Strict",
         toneBrief: "Very brief",
         tonePatient: "Patient",
         toneOwn: "My own words",
-        toneOwnHint: "What the agent should be like",
+        toneOwnHint: "What OjO should be like",
+        toneOwnExample: "Calm, a little funny",
         voice: "Voice",
-        done: "Done"
+        back: "Back",
+        questionsTitle: "Questions",
+        questions: [
+            CallQuestion("What does OjO see and hear?", "Your screen, only while you share it, and your voice during a call. They go to our server and Meta's AI. What OjO says goes to ElevenLabs for the voice. While we test, we keep the words and screens from calls to fix problems. Payment screens we recognize aren't kept."),
+            CallQuestion("How do I make it look away?", "Say “Don't look.” Its eyes close and your screen stops reaching it. Say “Look” when you're ready."),
+            CallQuestion("What about passwords and cards?", "OjO sees what you see, so say “Don't look” before you type them. It never asks for them."),
+            CallQuestion("Can it tap or pay for me?", "No. You always do the tapping, and only you confirm a payment. It points and tells you where."),
+            CallQuestion("How do I use the text it writes?", "OjO copies it for you. Tap the field and choose Paste."),
+            CallQuestion("I don't see the small window", "Open iPhone Settings › General › Picture in Picture and turn on Start PiP Automatically. Tap the window to come back to OjO.")
+        ]
     )
 
     public static let spanish = CallWords(
@@ -213,8 +267,14 @@ public struct CallWords: Sendable, Equatable {
         openWindow: "Abrir la ventana",
         call: "Llamar",
         hangUp: "Colgar",
+        soundSpeaker: "Altavoz",
+        soundHeadphones: "Auriculares",
+        chooseSound: "Elegir adónde va el sonido",
+        mute: "Silenciar",
+        muted: "Silenciado",
+        muteMicrophone: "Silenciar el micrófono",
+        unmuteMicrophone: "Activar el micrófono",
         settingsTitle: "Ajustes",
-        journal: "Registro",
         copyJournal: "Copiar el registro",
         journalCopied: "Registro copiado",
         frame: "Marco",
@@ -222,15 +282,25 @@ public struct CallWords: Sendable, Equatable {
         frameGlow: "Luz suave",
         frameTicks: "Rayitas",
         language: "Idioma",
-        phoneLanguage: "Como en el teléfono",
-        tone: "Tono de la llamada",
+        phoneLanguage: "Automático",
+        tone: "Tono",
         toneWarm: "Cálido",
         toneStrict: "Estricto",
         toneBrief: "Muy breve",
         tonePatient: "Paciente",
         toneOwn: "Texto propio",
-        toneOwnHint: "Cómo debe ser el agente",
+        toneOwnHint: "Cómo debe ser OjO",
+        toneOwnExample: "Tranquilo, con algo de humor",
         voice: "Voz",
-        done: "Listo"
+        back: "Atrás",
+        questionsTitle: "Preguntas",
+        questions: [
+            CallQuestion("¿Qué ve y oye OjO?", "Tu pantalla, solo mientras la compartes, y tu voz durante la llamada. Van a nuestro servidor y a la IA de Meta. Lo que dice OjO va a ElevenLabs para la voz. Mientras hacemos pruebas, guardamos las palabras y las pantallas de las llamadas para arreglar problemas. Las pantallas de pago que reconocemos no se guardan."),
+            CallQuestion("¿Cómo hago que no mire?", "Di «No mires». Cierra los ojos y tu pantalla deja de llegarle. Di «Mira» cuando quieras."),
+            CallQuestion("¿Y las contraseñas y las tarjetas?", "OjO ve lo mismo que tú, así que di «No mires» antes de escribirlas. Nunca te las pide."),
+            CallQuestion("¿Puede tocar o pagar por mí?", "No. Siempre tocas tú, y solo tú confirmas un pago. OjO señala y te dice dónde."),
+            CallQuestion("¿Cómo uso el texto que escribe?", "OjO te lo copia. Toca el campo y elige Pegar."),
+            CallQuestion("No veo la ventana pequeña", "Abre Ajustes del iPhone › General › Imagen dentro de imagen y activa Iniciar modo PiP automáticamente. Toca la ventana para volver a OjO.")
+        ]
     )
 }

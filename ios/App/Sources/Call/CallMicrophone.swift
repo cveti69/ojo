@@ -6,6 +6,7 @@ import Combine
 final class CallMicrophone {
     private static let ringing: TimeInterval = 0.3  // The agent's last word still sounds in the room this long.
     private static let restartLimit = 5  // In a row, less than a minute apart: more means the route will not settle.
+    private static let secondTry: UInt64 = 500_000_000  // A new route can take a moment to give its sound.
 
     var onDiagnostic: ((String) -> Void)?
     var onLost: (() -> Void)?
@@ -24,6 +25,7 @@ final class CallMicrophone {
     private var configurationChange: AnyCancellable?
     private var restarts = 0
     private var lastRestart = Date.distantPast
+    private var nextTry: Task<Void, Never>?
 
     /// Hearing over the agent's voice takes the voice's own engine: only then can iOS take the voice out of what it hears.
     init(sharedEngine: AVAudioEngine? = nil) {
@@ -44,12 +46,19 @@ final class CallMicrophone {
     }
 
     func stop() {
+        nextTry?.cancel()
+        nextTry = nil
         configurationChange = nil
         engine?.inputNode.removeTap(onBus: 0)
         if sharedEngine == nil { engine?.stop() }
         engine = nil
         isOn = false
         listener.forget()
+    }
+
+    /// The person's own switch: the engine keeps running, so turning it back on needs no permission from iOS.
+    func mute(_ isOn: Bool) {
+        listener.mute(isOn)
     }
 
     func measure(with probe: AppleSpeechProbe) {
@@ -96,7 +105,16 @@ final class CallMicrophone {
         restarts = Date().timeIntervalSince(lastRestart) < 60 ? restarts + 1 : 1
         lastRestart = Date()
         onDiagnostic?("Микрофон: звук изменился, перезапуск \(restarts)")
-        if restarts > Self.restartLimit || !start() { onLost?() }
+        guard restarts <= Self.restartLimit else {
+            onLost?()
+            return
+        }
+        guard !start() else { return }
+        nextTry = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.secondTry)
+            guard let self, !Task.isCancelled, !self.start() else { return }
+            self.onLost?()
+        }
     }
 
     // Nonisolated because the microphone calls back on its own thread.

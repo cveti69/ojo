@@ -22,7 +22,9 @@ open App.xcodeproj
 
 1. The main screen works like a phone: one button to call and one to end. The app's own words on a call are in
    `Shared/Sources/CallWords.swift`, in Russian, English and Spanish by the language chosen in settings or else the phone's, English
-   for any other. "⋯" opens the settings: the log, the frame, the language, the tone of the call and the voice.
+   for any other. Between calls the left corner opens the settings, on one page: the language, the voice, the tone, the frame and
+   the button that copies the log. The right corner opens the questions. On a call the red button has the system's own list of where
+   sound goes on its left and the switch for the microphone on its right, which stops sound on the phone and leaves the call running.
 2. A call creates a session, turns on `.playAndRecord`, says hello and opens the microphone. Right after the greeting the app asks
    iOS for the system broadcast sheet. If it does not open, the "Show your screen" button stays, with the real system button under it.
 3. `CallMicrophone` listens until the end of the call, also from another app: iOS gives a background app the microphone only if it
@@ -83,11 +85,12 @@ allow third-party keyboards, and there the clipboard does the job.
 Always on. In a call, the window shows two eyes drawn in code between hints, the nose of the icon, a word under them, and between the
 border and the eyes the drawing chosen in settings, from `EyesFrame`. `EyesDirector` decides how they move and `EyesStage` draws, up to
 30 pictures a second in motion and none at rest. The word comes from real events of the call. On a payment, card or password screen
-the eyes only rest. They shut only on the server's `not_looking`, when frames really stop.
+the eyes only rest. They shut only on the server's `not_looking`, when frames really stop, in the window and on the call screen.
+While the person's microphone is off, a white mark stays in the corner of the window, over the eyes and over a hint.
 
 ## Checks
 
-"Журнал" in settings shows the log and copies it. The log is `events.log` in the App Group, limited to about 256 KB. It holds facts and
+"Скопировать журнал" at the bottom of settings copies the log. The log is `events.log` in the App Group, limited to about 256 KB. It holds facts and
 timings, not what was said. The older checks screen stays in the code with no way to it.
 
 From the repository root:

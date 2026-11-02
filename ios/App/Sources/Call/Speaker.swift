@@ -1,4 +1,5 @@
 import AVFAudio
+import Combine
 import Shared
 
 @MainActor
@@ -59,6 +60,7 @@ final class ServerSpeaker: Speaker {
     private var client: ServerClient?
     private var journal: SharedJournal?
     private var playback: Task<Void, Never>?
+    private var configurationChange: AnyCancellable?
     private var kept: [String: Data] = [:]
     private var lineNumber = 0  // Stopping fires the marks of what was on the player too, and this tells them from real ones.
     private var partsOut = 0  // Sentences with sound on the player.
@@ -74,6 +76,20 @@ final class ServerSpeaker: Speaker {
         self.fallback = fallback
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
+        configurationChange = NotificationCenter.default.publisher(for: .AVAudioEngineConfigurationChange, object: engine)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.resume() }
+    }
+
+    /// iOS stops the engine when sound takes a new way, for example to headphones. What is on the player goes on from there,
+    /// and a chain with no microphone in it keeps its format: the output converts.
+    private func resume() {
+        guard client != nil, !engine.isRunning else { return }
+        do {
+            try engine.start()
+            if isSounding, engine.isRunning { player.play() }  // The route can change again at any moment.
+            journal?.append("Голос сервера: звук изменился, движок снова идёт")
+        } catch { journal?.append("Голос сервера: движок не запустился после смены звука: \(error.localizedDescription)") }
     }
 
     func prepare(client: ServerClient, journal: SharedJournal?) {

@@ -3,75 +3,93 @@ import SwiftUI
 
 struct SettingsScreen: View {
     @ObservedObject var model: CallViewModel
-
-    var body: some View {
-        let words = model.words
-        Form {
-            Section {
-                NavigationLink(words.journal) { JournalScreen(model: model) }
-            }
-            Section {
-                Picker(words.frame, selection: Binding(get: { model.frame }, set: { model.setFrame($0) })) {
-                    Text(words.frameLace).tag(EyesFrame.lace)
-                    Text(words.frameGlow).tag(EyesFrame.glow)
-                    Text(words.frameTicks).tag(EyesFrame.ticks)
-                }
-                Picker(words.language, selection: Binding(get: { model.language }, set: { model.setLanguage($0) })) {
-                    Text(words.phoneLanguage).tag("")
-                    Text("Русский").tag("ru")
-                    Text("English").tag("en")
-                    Text("Español").tag("es")
-                }
-                Picker(words.tone, selection: Binding(get: { model.character }, set: { model.setCharacter($0) })) {
-                    Text(words.toneWarm).tag(AgentCharacter.warm)
-                    Text(words.toneStrict).tag(AgentCharacter.strict)
-                    Text(words.toneBrief).tag(AgentCharacter.brief)
-                    Text(words.tonePatient).tag(AgentCharacter.patient)
-                    Text(words.toneOwn).tag(AgentCharacter.own)
-                }
-                if model.character == .own {
-                    TextField(words.toneOwnHint, text: Binding(get: { model.ownCharacter }, set: { model.setOwnCharacter($0) }), axis: .vertical)
-                        .lineLimit(2...5)
-                }
-                if !model.voices.isEmpty {
-                    Picker(words.voice, selection: Binding(get: { model.voice }, set: { model.setVoice($0) })) {
-                        ForEach(model.voices) { Text($0.name).tag($0.id) }
-                    }
-                }
-            }
-        }
-        .navigationTitle(words.settingsTitle)
-        .task { await model.loadVoices() }
-    }
-}
-
-/// What the phone wrote down about its calls: times and states, with no frames and no words.
-private struct JournalScreen: View {
-    @ObservedObject var model: CallViewModel
-    @State private var log = ""
+    let back: () -> Void
     @State private var copied = false
 
     var body: some View {
-        Form {
-            Section {
-                Button(copied ? model.words.journalCopied : model.words.copyJournal) {
-                    UIPasteboard.general.string = log
-                    copied = true
+        let words = model.words
+        VStack(spacing: 0) {
+            PageHeader(title: words.settingsTitle, backLabel: words.back, back: back)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    group(words.language) {
+                        Pill(title: words.phoneLanguage, isOn: model.language == "") { model.setLanguage("") }
+                        Pill(title: "English", isOn: model.language == "en") { model.setLanguage("en") }
+                        Pill(title: "Русский", isOn: model.language == "ru") { model.setLanguage("ru") }
+                        Pill(title: "Español", isOn: model.language == "es") { model.setLanguage("es") }
+                    }
+                    if !model.voices.isEmpty {
+                        group(words.voice) {
+                            ForEach(model.voices) { voice in
+                                Pill(title: voice.name, isOn: model.voice == voice.id) { model.setVoice(voice.id) }
+                            }
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        group(words.tone) {
+                            Pill(title: words.toneWarm, isOn: model.character == .warm) { model.setCharacter(.warm) }
+                            Pill(title: words.toneStrict, isOn: model.character == .strict) { model.setCharacter(.strict) }
+                            Pill(title: words.toneBrief, isOn: model.character == .brief) { model.setCharacter(.brief) }
+                            Pill(title: words.tonePatient, isOn: model.character == .patient) { model.setCharacter(.patient) }
+                            Pill(title: words.toneOwn, isOn: model.character == .own) { model.setCharacter(.own) }
+                        }
+                        if model.character == .own { ownTone }
+                    }
+                    group(words.frame) {
+                        Pill(title: words.frameLace, isOn: model.frame == .lace) { model.setFrame(.lace) }
+                        Pill(title: words.frameGlow, isOn: model.frame == .glow) { model.setFrame(.glow) }
+                        Pill(title: words.frameTicks, isOn: model.frame == .ticks) { model.setFrame(.ticks) }
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 28)
+                .padding(.bottom, 20)
             }
-            Section {
-                Text(log)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
+            .scrollIndicators(.hidden)
+            .scrollDismissesKeyboard(.interactively)
+            Button {
+                UIPasteboard.general.string = model.journal?.contents() ?? ""
+                copied = true
+            } label: {
+                Text(copied ? words.journalCopied : words.copyJournal)
+                    .font(.system(.subheadline, design: .rounded, weight: .medium))
+                    .foregroundStyle(Palette.muted)
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 44)
             }
+            .buttonStyle(.plain)
         }
-        .navigationTitle(model.words.journal)
-        .task {
-            while !Task.isCancelled {
-                log = model.journal?.contents() ?? ""
-                do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { break }
-            }
+        .padding(.top, 17)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 14)
+        .task { await model.loadVoices() }
+    }
+
+    private var ownTone: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            caption(model.words.toneOwnHint)
+            TextField(model.words.toneOwnExample, text: Binding(get: { model.ownCharacter }, set: { model.setOwnCharacter($0) }), axis: .vertical)
+                .font(.system(.subheadline, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(1...5)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .frame(minHeight: 44)
+                .overlay { RoundedRectangle(cornerRadius: 22).strokeBorder(Palette.line, lineWidth: 1.5) }
         }
+    }
+
+    private func group<Pills: View>(_ title: String, @ViewBuilder pills: () -> Pills) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            caption(title)
+            Rows { pills() }
+        }
+    }
+
+    private func caption(_ text: String) -> some View {
+        Text(text)
+            .font(.system(.footnote, design: .rounded, weight: .medium))
+            .foregroundStyle(Palette.muted)
     }
 }
 

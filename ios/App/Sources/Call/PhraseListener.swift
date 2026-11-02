@@ -12,6 +12,7 @@ final class PhraseListener: @unchecked Sendable {
     private var detector = SpeechDetector()
     private var converter: AVAudioConverter?
     private var deafUntil = Date.distantPast
+    private var isMuted = false
     private var echoPeak: Float?
     private var measure: (@Sendable (AVAudioPCMBuffer, Bool) -> Void)?
 
@@ -44,6 +45,7 @@ final class PhraseListener: @unchecked Sendable {
 
     func hear(_ buffer: AVAudioPCMBuffer) {
         lock.withLock {
+            guard !isMuted else { return }
             let samples = convert(buffer)
             if Date() < deafUntil {
                 if let phrase = detector.finish() { output.yield(phrase) }
@@ -68,6 +70,15 @@ final class PhraseListener: @unchecked Sendable {
     /// There is no echo filter, so the microphone must not take the agent's voice for the person's.
     func deafen(until date: Date) {
         lock.withLock { deafUntil = date }
+    }
+
+    /// The person's own switch. What they said before it is a phrase like any other, and past it no sound goes anywhere.
+    func mute(_ isOn: Bool) {
+        lock.withLock {
+            guard isOn != isMuted else { return }
+            isMuted = isOn
+            if isOn, let phrase = detector.finish() { output.yield(phrase) }
+        }
     }
 
     func forget() {
