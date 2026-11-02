@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.websockets import WebSocketDisconnect
 
-from . import config, debug, meta, step
+from . import config, debug, landing, meta, step
 from .ears import Ears
 from .friend import Friend, prepare_frame
 from .sessions import Frame, Session, SessionStore
@@ -195,7 +195,8 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
 
     @application.middleware("http")
     async def private_responses(request: Request, call_next):
-        authorized = request.url.path == "/health" or valid_token(request.headers.get("x-token"))
+        # The path the routes go by. The one in `request.url` is read through the Host header, which the sender writes.
+        authorized = request.scope["path"] in ("/health", *landing.PATHS) or valid_token(request.headers.get("x-token"))
         if request.url.path.startswith("/debug/"):
             authorized = authorized or valid_token(request.query_params.get("token"))
         if authorized:
@@ -219,6 +220,37 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
     @application.get("/health")
     async def health():
         return {"ok": True}
+
+    limit = landing.Limit()
+
+    def public_page(state: str = "", status_code: int = 200) -> HTMLResponse:
+        return HTMLResponse(landing.page(state), status_code=status_code, headers=landing.HEADERS)
+
+    @application.get("/", response_class=HTMLResponse)
+    @application.get("/beta", response_class=HTMLResponse)
+    async def page():
+        return public_page()
+
+    @application.post("/beta", response_class=HTMLResponse)
+    async def beta(request: Request):
+        if not limit.allows(request.client.host if request.client else ""):
+            return public_page("later", 429)
+        try:
+            form = landing.read_form(await asyncio.wait_for(read_body(request, landing.MAX_BODY_BYTES), landing.BODY_SECONDS))
+        except HTTPException:
+            return public_page("invalid", 413)
+        except asyncio.TimeoutError:
+            return public_page("later", 408)
+        if form is None:
+            return public_page("invalid", 400)
+        if form.get("extra", [""])[0]:  # A field no person sees. A bot gets the same thanks and learns nothing.
+            return public_page("sent")
+        email = form.get("email", [""])[0].strip()
+        if not landing.is_email(email):
+            return public_page("invalid", 400)
+        if not await run_in_threadpool(landing.keep, email):
+            return public_page("later", 503)
+        return public_page("sent")
 
     router = APIRouter()
 

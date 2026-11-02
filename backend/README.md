@@ -13,7 +13,7 @@ export ELEVENLABS_API_KEY='your Eleven Labs key, without it the phone reads line
 ```
 
 Pass secrets through the environment: the server does not read `.env`. The phone needs an HTTPS address through a proxy or a tunnel.
-`GET /health` needs no token, every other request needs `X-Token`. The protocol is in [../docs/protocol.md](../docs/protocol.md).
+`GET /health` and the public page need no token: `GET /` and `GET /beta` show it, `POST /beta` takes its form. Every other request needs `X-Token`. The protocol is in [../docs/protocol.md](../docs/protocol.md).
 
 The debug page is `/debug/SESSION_ID?token=SHARED_TOKEN` and refreshes once a second. It also accepts `X-Token`. Uvicorn's standard
 logs hide the token in the query. In the logs of an outer HTTPS proxy that takes its own setting.
@@ -36,6 +36,7 @@ More settings:
 | `ELEVENLABS_VOICE` | the id of the default voice, George |
 | `ELEVENLABS_VOICES` | `id:name` pairs for the voice setting on the phone, separated by commas |
 | `CALLS_DIR` | empty, no log is kept. A folder outside the repository for one log per call: what was heard, every answer, and the frame each answer saw. Folders are 0700, payment and password screens are not stored |
+| `BETA_FILE` | `beta.jsonl` beside `CALLS_DIR`, empty without it, and then the form takes nothing. Outside the repository, 0600: one email and time per line, and nothing else. |
 | `SESSION_TTL_SECONDS` | `3600`, time without requests before a session is removed |
 | `SESSION_CLEANUP_SECONDS` | `30`, how often old sessions are removed |
 | `MAX_FRAME_BYTES` / `MAX_FRAME_PIXELS` | `8388608` / `20000000` |

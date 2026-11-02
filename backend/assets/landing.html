@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<title>OjO</title>
+<meta name="description" content="On a call, OjO sees your iPhone screen and shows you where to tap.">
+<meta property="og:title" content="OjO">
+<meta property="og:description" content="On a call, OjO sees your iPhone screen and shows you where to tap.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22'/%3E%3Cellipse cx='31' cy='46' rx='16' ry='25' fill='%23fff'/%3E%3Cellipse cx='69' cy='46' rx='16' ry='25' fill='%23fff'/%3E%3Ccircle cx='33' cy='53' r='8'/%3E%3Ccircle cx='67' cy='53' r='8'/%3E%3C/svg%3E">
+<style>
+:root{--accent:#9628F5;--accent-hover:#A645F7;--red:#FF453A;--muted:#A1A1AA;--label:#D1D1D6;--line:#3A3A3C;--control:#2C2C2E}
+*{box-sizing:border-box}
+html{background:#000;-webkit-text-size-adjust:100%}
+body{margin:0;background:#000;color:#fff;font:17px/1.5 ui-rounded,-apple-system,BlinkMacSystemFont,system-ui,sans-serif}
+main{width:min(100%,1000px);margin:0 auto;padding:48px 20px 56px;display:grid;gap:72px}
+:focus-visible{outline:3px solid #fff;outline-offset:2px}
+
+header{text-align:center}
+.face{display:block;width:clamp(150px,18vw,196px);height:auto;margin:0 auto}
+.eye{transform-box:fill-box;transform-origin:center;animation:blink 9s infinite}
+@keyframes blink{0%,40%,41.5%,90%,91.5%,93.5%,95%,100%{transform:scaleY(1)}40.75%,90.75%,94.25%{transform:scaleY(.04)}}
+h1{margin:12px 0 0;font-size:30px;line-height:1.2;font-weight:700}
+.lead{max-width:17em;margin:20px auto 0;font-size:clamp(30px,5.4vw,52px);line-height:1.28;font-weight:700;text-wrap:balance}
+.outlined{display:inline-block;padding:0 .2em .04em;border:3px solid var(--accent);border-radius:.32em;line-height:1.16;white-space:nowrap}
+
+.video{width:min(100%,760px);aspect-ratio:16/9;margin:0 auto;padding:16px;display:grid;place-content:center;justify-items:center;gap:12px;border:3px solid var(--accent);border-radius:22px;background:#0B0B0C;color:var(--label);font-size:15px;text-align:center}
+.video span{width:64px;height:64px;border-radius:50%;background:var(--control);display:grid;place-items:center}
+.video svg{width:26px;height:26px;margin-left:3px;fill:#fff}
+.video p{margin:0}
+
+h2{margin:0;font-size:26px;line-height:1.25;font-weight:700}
+.steps{margin:24px 0 0;padding:0;list-style:none;display:grid;gap:28px}
+.steps li{display:grid;grid-template-columns:56px 1fr;column-gap:16px;align-items:start}
+.icon{width:56px;height:56px;border-radius:50%;background:var(--accent);display:grid;place-items:center}
+.icon svg{width:26px;height:26px}
+h3{margin:0;font-size:19px;line-height:1.3;font-weight:600}
+.steps p{margin:4px 0 0;color:var(--label);font-size:16px;text-wrap:pretty}
+
+.request{width:min(100%,520px);margin:0 auto;scroll-margin-top:24px}
+.request>p{margin:8px 0 0;color:var(--label);text-wrap:balance}
+form{margin-top:20px;display:grid;gap:8px}
+label{color:var(--label);font-size:15px}
+.row{display:grid;gap:12px}
+input{width:100%;height:52px;padding:0 16px;border:1px solid var(--line);border-radius:14px;background:var(--control);color:#fff;font:inherit}
+input::placeholder{color:var(--muted);opacity:1}
+button{height:52px;padding:0 28px;border:0;border-radius:26px;background:var(--accent);color:#fff;font:inherit;font-weight:600;white-space:nowrap;cursor:pointer}
+button:active{background:var(--accent-hover)}
+@media (hover:hover){button:hover{background:var(--accent-hover)}}
+.away{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+.answer{display:none;margin:20px 0 0;font-weight:600}
+.problem{color:var(--red)}
+.problem+form{margin-top:12px}
+[data-state=sent] .sent,[data-state=invalid] .invalid,[data-state=later] .later{display:block}
+[data-state=sent] form{display:none}
+
+.data{width:min(100%,640px);margin:0 auto;padding-top:28px;border-top:1px solid var(--line);color:var(--muted);font-size:15px}
+.data h2{color:#fff;font-size:17px;font-weight:600}
+.data p{margin:8px 0 0;text-wrap:pretty}
+
+@media (min-width:560px){.row{grid-template-columns:1fr auto}}
+@media (min-width:760px){
+  main{padding:72px 32px 72px;gap:96px}
+  h2{text-align:center}
+  .steps{margin-top:36px;grid-template-columns:repeat(3,1fr);gap:40px}
+  .steps li{display:block;text-align:center}
+  .icon{width:64px;height:64px;margin:0 auto 14px}
+  .request{text-align:center}
+  label{display:block;text-align:left}
+  .data h2{text-align:left}
+}
+@media (prefers-reduced-motion:reduce){.eye{animation:none}}
+</style>
+</head>
+<body>
+<main data-state="">
+  <header>
+    <svg class="face" viewBox="140 150 744 710" role="img" aria-label="OjO's eyes">
+      <g class="eye"><ellipse cx="303.2" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="315.2" cy="490" r="75.6" fill="#000000"/><circle cx="349.98" cy="461.27" r="22.68" fill="#FFFFFF"/></g>
+      <g class="eye"><ellipse cx="720.8" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="708.8" cy="490" r="75.6" fill="#000000"/><circle cx="743.58" cy="461.27" r="22.68" fill="#FFFFFF"/></g>
+      <path d="M477 620A35 35 0 0 1 547 620L547 744A97 97 0 0 1 366 792.5A35 35 0 0 1 426.62 757.5A27 27 0 0 0 477 744Z" fill="#9628F5"/>
+    </svg>
+    <h1>OjO</h1>
+    <p class="lead">On a call, OjO sees your iPhone screen and shows you <span class="outlined">where to tap</span></p>
+  </header>
+
+  <section class="video" aria-label="Demo video">
+    <span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></svg></span>
+    <p>The 3-minute demo is coming soon</p>
+  </section>
+
+  <section aria-labelledby="how">
+    <h2 id="how">How it works</h2>
+    <ol class="steps">
+      <li>
+        <div class="icon"><svg viewBox="0 0 24 24" aria-hidden="true" fill="#FFFFFF"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg></div>
+        <div><h3>Call</h3><p>Tap Call and say what you're trying to do.</p></div>
+      </li>
+      <li>
+        <div class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.2" fill="none" stroke="#FFFFFF" stroke-width="1.9"/><circle cx="12" cy="12" r="4.8" fill="#FFFFFF"/></svg></div>
+        <div><h3>Show your screen</h3><p>Share your iPhone screen, so OjO sees what you see.</p></div>
+      </li>
+      <li>
+        <div class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5.5" width="20" height="13" rx="4.5" fill="none" stroke="#FFFFFF" stroke-width="1.9"/><rect x="6.5" y="10" width="11" height="4" rx="2" fill="#FFFFFF"/></svg></div>
+        <div><h3>OjO outlines what you need</h3><p>It shows you the spot and tells you what to do. You always do the tapping.</p></div>
+      </li>
+    </ol>
+  </section>
+
+  <section class="request" id="beta" aria-labelledby="try">
+    <h2 id="try">Try OjO</h2>
+    <p>The beta is for iPhone and by request. Leave your email and we'll write to you.</p>
+    <div class="answer sent" role="status">Thanks. We'll write to you by email.</div>
+    <div class="answer problem invalid" role="alert">Please check your email address.</div>
+    <div class="answer problem later" role="alert">We can't take your request right now. Please try again later.</div>
+    <form method="post" action="/beta#beta">
+      <label for="email">Email</label>
+      <div class="row">
+        <input id="email" name="email" type="email" required maxlength="254" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="you@example.com">
+        <button type="submit">Request beta</button>
+      </div>
+      <div class="away" aria-hidden="true">
+        <label for="extra">Leave this empty</label>
+        <input id="extra" name="extra" type="text" tabindex="-1" autocomplete="off">
+      </div>
+    </form>
+  </section>
+
+  <section class="data" aria-labelledby="data">
+    <h2 id="data">Your data</h2>
+    <p>This form keeps your email and the time you asked, and nothing else. We use them only to write to you about the beta.</p>
+    <p>On a call, your screen, only while you share it, and your voice go to our server and Meta's AI. What OjO says goes to ElevenLabs for the voice. While we test, we keep the words and screens from calls to fix problems. Payment screens we recognize aren't kept.</p>
+  </section>
+</main>
+</body>
+</html>
