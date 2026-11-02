@@ -22,9 +22,10 @@ connections = Pool()
 
 
 class MetaError(RuntimeError):
-    def __init__(self, status: int, detail: str):
+    def __init__(self, status: int, detail: str, reason: Optional[str] = None):
         super().__init__(f"Meta API {status}: {detail}")
         self.status = status
+        self.reason = reason
 
 
 def _request(method: str, path: str, payload: dict | None = None, timeout: float = 60) -> dict:
@@ -98,9 +99,19 @@ def _events(response) -> Iterator[dict]:
         try:
             event = json.loads(data)
         except ValueError:
-            raise MetaError(502, "Некорректный ответ.") from None
+            raise MetaError(502, "Некорректный ответ.", "broken stream") from None
         if isinstance(event, dict):
             yield event
+
+
+def _reason(body: bytes) -> Optional[str]:
+    """Meta's own name for a refusal, for the call log. Only its type and code: the message can repeat the request."""
+    try:
+        error = json.loads(body)["error"]
+        names = [error[field] for field in ("type", "code") if error.get(field) is not None]
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+    return " ".join(re.sub(r"[^A-Za-z0-9_.-]", "", str(name))[:40] for name in names).strip() or None
 
 
 def chat_json(model: str, messages: list, effort: str, timeout: float = 60,
@@ -116,7 +127,7 @@ def chat_json(model: str, messages: list, effort: str, timeout: float = 60,
     }).encode()
     headers = {"Authorization": f"Bearer {config.META_API_KEY}", "Content-Type": "application/json"}
     started = time.perf_counter()
-    text, usage = "", {}
+    text, usage, rest = "", {}, b""
     try:
         connection, response = connections.send("POST", f"{config.META_API_BASE}/chat/completions", data, headers, timeout)
         try:
@@ -129,15 +140,15 @@ def chat_json(model: str, messages: list, effort: str, timeout: float = 60,
                             text += piece
                             if on_text:
                                 on_text(text)
-            response.read()
+            rest = response.read()
         except BaseException:
             connection.close()
             raise
         connections.finished(connection)
-    except (http.client.HTTPException, OSError):
-        raise MetaError(502, "Сервис недоступен.") from None
+    except (http.client.HTTPException, OSError) as error:
+        raise MetaError(502, "Сервис недоступен.", type(error).__name__) from None
     if response.status >= 400:
-        raise MetaError(response.status, "Запрос отклонён.")
+        raise MetaError(response.status, "Запрос отклонён.", _reason(rest))
     return {"text": text, "usage": usage, "ms": round((time.perf_counter() - started) * 1000)}
 
 

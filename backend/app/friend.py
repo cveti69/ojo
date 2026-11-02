@@ -525,8 +525,9 @@ class Friend:
             reply = await asyncio.wait_for(run_in_threadpool(meta.chat_json, model, messages, effort, seconds + 1, on_text), seconds)
             return model, reply, read(reply["text"])
         except Exception as error:
-            log.warning("Answer from %s: %s", model, type(error).__name__)
-            session.note("no answer", model=model, error=type(error).__name__)
+            refused = {"status": error.status, "reason": error.reason} if isinstance(error, meta.MetaError) else {}
+            log.warning("Answer from %s: %s %s", model, type(error).__name__, refused)
+            session.note("no answer", model=model, error=type(error).__name__, **refused)
             return None
 
     async def _ask(self, session: Session, turn: int, frame: Optional[Frame], tied: Optional[Frame], started: float, early: dict) -> Optional[tuple]:

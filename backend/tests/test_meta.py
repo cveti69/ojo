@@ -147,7 +147,7 @@ def test_a_broken_stream_is_an_error_and_keeps_no_connection(monkeypatch):
     use_connections(monkeypatch, FakeConnection([(200, b"data: {not json\n\n")]))
     with pytest.raises(meta.MetaError) as error:
         meta.chat_json("test-model", [], "medium", 16)
-    assert error.value.status == 502 and meta.connections.kept == []
+    assert error.value.status == 502 and error.value.reason == "broken stream" and meta.connections.kept == []
 
 
 def test_a_refused_answer_gives_its_status(monkeypatch):
@@ -155,6 +155,38 @@ def test_a_refused_answer_gives_its_status(monkeypatch):
     with pytest.raises(meta.MetaError) as error:
         meta.chat_json("test-model", [], "medium", 16)
     assert error.value.status == 429
+
+
+def test_a_refusal_gives_its_type_and_code_and_not_its_message(monkeypatch):
+    body = {"error": {"message": "слова из запроса", "type": "rate_limit_error", "code": "too_many_requests"}}
+    use_connections(monkeypatch, FakeConnection([(429, json.dumps(body).encode())]))
+    with pytest.raises(meta.MetaError) as error:
+        meta.chat_json("test-model", [], "medium", 16)
+    assert error.value.status == 429 and error.value.reason == "rate_limit_error too_many_requests"
+    assert "слова" not in str(error.value)
+
+
+@pytest.mark.parametrize("body", [b"slow down", b"\xff", b"[]", b"{}", b'{"error": "too many"}', b'{"error": {"message": "x"}}'])
+def test_a_refusal_that_does_not_name_itself_has_no_reason(monkeypatch, body):
+    use_connections(monkeypatch, FakeConnection([(500, body)]))
+    with pytest.raises(meta.MetaError) as error:
+        meta.chat_json("test-model", [], "medium", 16)
+    assert error.value.status == 500 and error.value.reason is None
+
+
+def test_a_reason_stays_a_short_name_whatever_meta_sends(monkeypatch):
+    body = {"error": {"type": "слова из запроса", "code": "a b:c" + "d" * 99}}
+    use_connections(monkeypatch, FakeConnection([(400, json.dumps(body).encode())]))
+    with pytest.raises(meta.MetaError) as error:
+        meta.chat_json("test-model", [], "medium", 16)
+    assert error.value.reason == "abc" + "d" * 37
+
+
+def test_a_lost_connection_is_named(monkeypatch):
+    use_connections(monkeypatch, FakeConnection([ConnectionResetError()]))
+    with pytest.raises(meta.MetaError) as error:
+        meta.chat_json("test-model", [], "medium", 16)
+    assert error.value.status == 502 and error.value.reason == "ConnectionResetError"
 
 
 def test_a_connection_is_used_again(monkeypatch):

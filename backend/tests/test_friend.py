@@ -1164,6 +1164,18 @@ def test_the_log_says_when_no_answer_came(backend, monkeypatch, tmp_path):
     assert [line["model"] for line in lines_of(folder) if line["kind"] == "no answer"] == ["test-talk", "test-spare"]
 
 
+def test_the_log_keeps_the_code_and_type_of_a_refusal_and_nothing_else(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    session_id = new_session(backend.client)
+    backend.meta.replies = [meta.MetaError(429, "Запрос отклонён.", "rate_limit_error"), OSError("down")]
+    words(backend.client, session_id)
+    idle(backend, session_id)
+    refused, lost = [line for line in lines_of(next((tmp_path / "calls").iterdir())) if line["kind"] == "no answer"]
+    assert (refused["error"], refused["status"], refused["reason"]) == ("MetaError", 429, "rate_limit_error")
+    assert set(refused) == {"at", "kind", "model", "error", "status", "reason"}
+    assert lost["error"] == "OSError" and set(lost) == {"at", "kind", "model", "error"}
+
+
 @pytest.mark.parametrize("reply", [line("Сумма 34 900, проверь сам.", private=True, show=SHOW),
                                    line("Введи пароль сам.", show=SHOW)])
 def test_a_private_screen_is_not_written_down_and_not_sent_again(backend, monkeypatch, tmp_path, reply):
