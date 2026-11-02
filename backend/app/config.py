@@ -21,7 +21,8 @@ ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVENLABS_MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_v4_turbo")
 ELEVENLABS_VOICE = os.environ.get("ELEVENLABS_VOICE", "JBFqnCBsd6RMkjVDRZzb")
 VOICES = dict(pair.split(":", 1) for pair in os.environ.get(
-    "ELEVENLABS_VOICES", "JBFqnCBsd6RMkjVDRZzb:George,O4dZDLAkF4Zo2yKOh6R4:Done,xyu8HSCv1JYrhLx4m8UG:Ariana").split(","))
+    "ELEVENLABS_VOICES", "JBFqnCBsd6RMkjVDRZzb:George,O4dZDLAkF4Zo2yKOh6R4:Done,xyu8HSCv1JYrhLx4m8UG:Ariana,"
+    "gYGXjks6FzTWwNQ6X7hC:Monique,7zoixx2reelPHqsL6WsW:Odom,H1bMkFdFKqJn79KaV9qt:Gordon,snODv2VnG1inLn1Ba0dk:Jeremy").split(","))
 
 SHARED_TOKEN = os.environ.get("SHARED_TOKEN", "")
 
