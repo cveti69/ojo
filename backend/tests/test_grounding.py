@@ -144,6 +144,93 @@ def test_text_match_keeps_different_chinese_labels_apart():
     assert grounding.snap_to_text("取消订单", [0.1, 0.8, 0.3, 0.85], [text_line("立即", "购买")]) is None
 
 
+GO_THERE = [0.78, 0.93, 0.9, 0.955]
+BUTTON = [0.711, 0.955, 0.984, 0.992]  # Where the model put that button on a real call: a row under its words.
+
+
+def test_a_model_that_gets_one_sign_wrong_still_finds_the_button():
+    lines = [line_of(("导航", [0.52, 0.93, 0.62, 0.955])), line_of(("到这去", GO_THERE))]
+    assert grounding.snap_to_text("到达去", BUTTON, lines) == GO_THERE
+
+
+def test_the_outline_stands_on_those_words_and_not_on_the_model_box(monkeypatch):
+    asked_sam(monkeypatch, {})
+    target = {"label": "到达去", "object": "go there button", "box": [711, 955, 984, 992], "mark_id": None}
+    found = real_locate(b"", 460, 1000, {"action": "tap", "target": target}, [line_of(("到这去", GO_THERE))], [])
+    assert found["source"] == "text" and found["box"] == GO_THERE
+
+
+def test_a_word_read_sign_by_sign_counts_too():
+    lines = [line_of(("到", [0.78, 0.93, 0.82, 0.955]), ("这", [0.82, 0.93, 0.86, 0.955]), ("去", [0.86, 0.93, 0.9, 0.955]))]
+    assert grounding.snap_to_text("到达去", BUTTON, lines) == GO_THERE
+
+
+def test_four_signs_can_have_one_wrong_too():
+    assert grounding.snap_to_text("公共交道", [0.01, 0.15, 0.15, 0.18], [line_of(("公共交通", [0.01, 0.158, 0.14, 0.176]))])
+
+
+@pytest.mark.parametrize("box", [[0.78, 0.5, 0.9, 0.53], [0.1, 0.93, 0.2, 0.955], [0.78, 0.86, 0.9, 0.89]])
+def test_a_like_word_away_from_the_model_box_is_another_word(box):
+    assert grounding.snap_to_text("到达去", BUTTON, [line_of(("到这去", box))]) is None
+
+
+def test_the_words_at_the_edge_of_that_reach_still_count():
+    box = [0.78, 0.89, 0.9, 0.92]  # Their middle stands 0.05 above the box.
+    assert grounding.snap_to_text("到达去", BUTTON, [line_of(("到这去", box))]) == box
+
+
+def test_the_exact_word_goes_before_a_nearer_like_one():
+    exact = [0.55, 0.85, 0.65, 0.88]
+    assert grounding.snap_to_text("到达去", BUTTON, [line_of(("到这去", GO_THERE)), line_of(("到达去", exact))]) == exact
+
+
+def test_two_like_words_leave_it_to_the_model_box():
+    lines = [line_of(("到这去", GO_THERE)), line_of(("到那去", [0.8, 0.96, 0.9, 0.98]))]
+    assert grounding.snap_to_text("到达去", BUTTON, lines) is None
+
+
+def test_the_same_like_word_twice_is_the_nearer_one():
+    lines = [line_of(("到这去", [0.78, 0.89, 0.9, 0.92])), line_of(("到这去", GO_THERE))]
+    assert grounding.snap_to_text("到达去", BUTTON, lines) == GO_THERE
+
+
+def test_the_same_like_word_twice_in_the_box_is_the_one_nearer_its_middle():
+    second = [0.3, 0.505, 0.4, 0.525]
+    assert grounding.snap_to_text("到达去", [0.1, 0.5, 0.6, 0.54], [line_of(("到这去", [0.11, 0.505, 0.21, 0.525])), line_of(("到这去", second))]) == second
+
+
+def test_two_words_at_the_ends_of_a_line_are_not_one_word():
+    lines = [line_of(("取消", [0.1, 0.5, 0.18, 0.53]), ("订阅", [0.82, 0.5, 0.9, 0.53]))]
+    assert grounding.snap_to_text("取消订单", [0.45, 0.5, 0.55, 0.54], lines) is None
+
+
+def test_a_word_of_another_script_is_no_like_word():
+    assert grounding.snap_to_text("到达去", BUTTON, [line_of(("到a去", GO_THERE))]) is None
+
+
+def test_a_like_word_on_two_rows_counts_against_another_one():
+    lines = [line_of(("到这", [0.8, 0.93, 0.86, 0.945])), line_of(("去", [0.8, 0.947, 0.83, 0.96])), line_of(("到那去", [0.88, 0.93, 0.96, 0.96]))]
+    assert grounding.snap_to_text("到达去", BUTTON, lines) is None
+
+
+@pytest.mark.parametrize("label,word", [("上一页", "下一页"), ("未支付", "已支付"), ("到达去", "到这里"), ("公共交通", "公共汽车")])
+def test_a_first_sign_or_a_second_wrong_sign_makes_another_word(label, word):
+    assert grounding.snap_to_text(label, BUTTON, [line_of((word, GO_THERE))]) is None
+
+
+@pytest.mark.parametrize("label,word", [("导航", "导游"), ("去", "到"), ("Buy", "Bay"), ("Cart", "Card"), ("Код", "Кот"), ("Вход", "Вниз"), ("ログイン", "ログアン"), ("ซื้อ", "ซือ้"), ("到a去", "到这去")])
+def test_short_words_and_other_scripts_stay_as_they_were(label, word):
+    assert grounding.snap_to_text(label, BUTTON, [line_of((word, GO_THERE))]) is None
+
+
+def test_with_no_model_box_a_like_word_is_no_guess():
+    assert grounding.snap_to_text("到达去", None, [line_of(("到这去", GO_THERE))]) is None
+
+
+def test_five_signs_pass_by_their_spelling_as_before():
+    assert grounding.snap_to_text("加入购物袋", [0.1, 0.2, 0.3, 0.25], [line_of(("加入购物车", [0.1, 0.5, 0.3, 0.55]))])
+
+
 def test_long_guess_stays_off_the_icon_next_to_it():
     icon = [0.49, 0.128, 0.6, 0.177]
     search_bar = [0.295, 0.03, 0.654, 0.047]

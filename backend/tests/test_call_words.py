@@ -12,7 +12,8 @@ from app import config, friend
 from conftest import FakeEars, idle, line, new_session, say, words
 from test_friend import blocked, events_of, kinds, played, spoken, wait_until
 
-TRIAL = "Если человек спрашивает, что делать дальше, или ждёт, назови один конкретный шаг на экране, а не вопрос."
+TRIAL = ("Если человек спрашивает, что делать дальше, или ждёт, назови один конкретный шаг на экране, а не вопрос.\n"
+         "Если человеку нужен текст и поле для него видно на экране, в этом же ответе дай paste, обведи поле в show и скажи одним шагом нажать на него и вставить, а не два хода подряд.")
 
 
 def log_of(tmp_path):
@@ -59,7 +60,7 @@ def test_without_the_tick_the_model_is_told_what_it_always_was(backend, changes)
     assert TRIAL not in first_system(backend)
 
 
-def test_with_the_tick_only_the_one_line_is_added(backend):
+def test_with_the_tick_only_its_two_lines_are_added(backend):
     session_id = new_session(backend.client, next_step=True)
     words(backend.client, session_id)
     idle(backend, session_id)

@@ -6,6 +6,7 @@ import io
 import math
 import unicodedata
 from pathlib import Path
+from typing import Iterator
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -14,6 +15,9 @@ from . import meta
 MIN_TEXT_MATCH = 0.78
 TEXT_DISTANCE_WEIGHT = 1  # A spelling 0.1 worse still wins when it is 10% of the frame closer: the model's box can be a row off.
 TEXT_REACH = 0.4  # On the bench and on real calls words outside the model's box sat within 0.33 of its middle or past 0.66: there it is another place.
+MISREAD_SIGNS = (3, 4)  # The Chinese words one wrong sign keeps under MIN_TEXT_MATCH: 0.67 and 0.75. From five on they pass by themselves.
+MISREAD_REACH = 0.05  # From the model's box. On a real call in Baidu Maps the words it meant stood up to 0.045 off it.
+MISREAD_SOLID = 0.6  # The share of its width the words of one word fill: two words at the ends of a line are not one.
 MAX_UNSPACED_WORDS = 6
 FONT = Path(__file__).parent.parent / "assets" / "Inter-Bold.otf"
 MARK_FONT_SIZE = 13
@@ -63,28 +67,57 @@ def _wrapped(lines: list[dict]) -> list[dict]:
             if abs(bottom[1] - top[3]) < top[3] - top[1] and min(top[2], bottom[2]) > max(top[0], bottom[0])]
 
 
-def _spelled(wanted: str, counts: set[int], joiner: str, near: list[float] | None, lines: list[dict]) -> list[float] | None:
-    best: tuple[tuple[float, float], list[float]] | None = None
+def _windows(counts: set[int], joiner: str, lines: list[dict]) -> Iterator[tuple[str, list[float], list[dict]]]:
+    """Every run of words on a line that has one of these lengths, with its spelling, its box and its words."""
     for line in lines:
         words = line["words"]
         for start in range(len(words)):
             for count in counts:
                 window = words[start:start + count]
-                if not window or len(window) != count:
-                    continue
-                text = joiner.join(_normal(" ".join(word["text"] for word in window)).split())
-                score = difflib.SequenceMatcher(None, wanted, text).ratio()
-                if score < MIN_TEXT_MATCH:
-                    continue
-                box = _union([word["box"] for word in window])
-                middle = math.sqrt(_distance(box, near)) if near else 0
-                away = _away(box, near) if near else 0
-                if away and middle > TEXT_REACH:
-                    continue
-                rank = (score - TEXT_DISTANCE_WEIGHT * away, -middle)  # The same words twice in the box: the ones nearer its middle.
-                if best is None or rank > best[0]:
-                    best = (rank, box)
+                if window and len(window) == count:
+                    yield joiner.join(_normal(" ".join(word["text"] for word in window)).split()), _union([word["box"] for word in window]), window
+
+
+def _spelled(wanted: str, counts: set[int], joiner: str, near: list[float] | None, lines: list[dict]) -> list[float] | None:
+    best: tuple[tuple[float, float], list[float]] | None = None
+    for text, box, _ in _windows(counts, joiner, lines):
+        score = difflib.SequenceMatcher(None, wanted, text).ratio()
+        if score < MIN_TEXT_MATCH:
+            continue
+        middle = math.sqrt(_distance(box, near)) if near else 0
+        away = _away(box, near) if near else 0
+        if away and middle > TEXT_REACH:
+            continue
+        rank = (score - TEXT_DISTANCE_WEIGHT * away, -middle)  # The same words twice in the box: the ones nearer its middle.
+        if best is None or rank > best[0]:
+            best = (rank, box)
     return best[1] if best else None
+
+
+def _is_han(text: str) -> bool:
+    return all(unicodedata.name(sign, "").startswith("CJK UNIFIED") for sign in text)
+
+
+def _one_sign_off(wanted: str, text: str) -> bool:
+    """The first sign must stand: 上一页 and 下一页, 未支付 and 已支付 differ only there."""
+    return len(text) == len(wanted) and _is_han(text) and text[0] == wanted[0] and sum(sign != other for sign, other in zip(wanted, text)) == 1
+
+
+def _is_solid(box: list[float], words: list[dict]) -> bool:
+    return sum(word["box"][2] - word["box"][0] for word in words) >= MISREAD_SOLID * (box[2] - box[0])
+
+
+def _misread(wanted: str, counts: set[int], near: list[float] | None, lines: list[dict]) -> list[float] | None:
+    """A model can get one sign of a short Chinese word wrong, as 到达去 for the 到这去 on a button. Another word on the screen
+    is worse than the model's rough box, so this counts only right at that box, and not if two words could be the one it meant."""
+    if not near or not _is_han(wanted) or not MISREAD_SIGNS[0] <= len(wanted) <= MISREAD_SIGNS[1]:
+        return None
+    found: dict[str, tuple[tuple[float, float], list[float]]] = {}
+    for text, box, words in _windows(counts, "", lines + _wrapped(lines)):
+        if _one_sign_off(wanted, text) and _is_solid(box, words) and _away(box, near) <= MISREAD_REACH:
+            place = ((_away(box, near), _distance(box, near)), box)
+            found[text] = min(found.get(text, place), place, key=lambda seen: seen[0])
+    return next(iter(found.values()))[1] if len(found) == 1 else None
 
 
 def snap_to_text(label: str, near: list[float] | None, lines: list[dict]) -> list[float] | None:
@@ -101,7 +134,7 @@ def snap_to_text(label: str, near: list[float] | None, lines: list[dict]) -> lis
     counts = {size - 1, size, size + 1} | (set() if spaced else set(range(1, MAX_UNSPACED_WORDS + 1)))
     joiner = " " if spaced else ""
     wanted = joiner.join(wanted.split())
-    return _spelled(wanted, counts, joiner, near, lines) or _spelled(wanted, counts, joiner, near, _wrapped(lines))
+    return _spelled(wanted, counts, joiner, near, lines) or _spelled(wanted, counts, joiner, near, _wrapped(lines)) or _misread(wanted, counts, near, lines)
 
 
 def snap_with_sam(jpeg: bytes, width: int, height: int, phrase: str, near: list[float] | None) -> dict:
