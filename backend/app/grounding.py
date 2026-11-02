@@ -13,7 +13,7 @@ from . import meta
 
 MIN_TEXT_MATCH = 0.78
 TEXT_DISTANCE_WEIGHT = 1  # A spelling 0.1 worse still wins when it is 10% of the frame closer: the model's box can be a row off.
-TEXT_REACH = 0.4  # On the bench and on real calls words sat within 0.33 of the model's box or past 0.66: there it is another place.
+TEXT_REACH = 0.4  # On the bench and on real calls words outside the model's box sat within 0.33 of its middle or past 0.66: there it is another place.
 MAX_UNSPACED_WORDS = 6
 FONT = Path(__file__).parent.parent / "assets" / "Inter-Bold.otf"
 MARK_FONT_SIZE = 13
@@ -43,6 +43,12 @@ def _distance(first: list[float], second: list[float]) -> float:
     return (ax - bx) ** 2 + (ay - by) ** 2
 
 
+def _away(box: list[float], near: list[float]) -> float:
+    """How far words stand from the model's box. A row fills the frame and its name stands at one end, so anywhere inside is as close."""
+    x, y = center(box)
+    return math.hypot(max(near[0] - x, x - near[2], 0), max(near[1] - y, y - near[3], 0))
+
+
 def _union(boxes: list[list[float]]) -> list[float]:
     return [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)]
 
@@ -55,7 +61,7 @@ def _wrapped(lines: list[dict]) -> list[dict]:
 
 
 def _spelled(wanted: str, counts: set[int], joiner: str, near: list[float] | None, lines: list[dict]) -> list[float] | None:
-    best: tuple[float, list[float]] | None = None
+    best: tuple[tuple[float, float], list[float]] | None = None
     for line in lines:
         words = line["words"]
         for start in range(len(words)):
@@ -68,10 +74,11 @@ def _spelled(wanted: str, counts: set[int], joiner: str, near: list[float] | Non
                 if score < MIN_TEXT_MATCH:
                     continue
                 box = _union([word["box"] for word in window])
-                distance = math.sqrt(_distance(box, near)) if near else 0
-                if distance > TEXT_REACH:
+                middle = math.sqrt(_distance(box, near)) if near else 0
+                away = _away(box, near) if near else 0
+                if away and middle > TEXT_REACH:
                     continue
-                rank = score - TEXT_DISTANCE_WEIGHT * distance
+                rank = (score - TEXT_DISTANCE_WEIGHT * away, -middle)  # The same words twice in the box: the ones nearer its middle.
                 if best is None or rank > best[0]:
                     best = (rank, box)
     return best[1] if best else None

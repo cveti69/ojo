@@ -91,6 +91,38 @@ def test_words_far_from_the_model_box_are_another_place(monkeypatch, right, sour
     assert found["source"] == source
 
 
+def line_of(*words):
+    return {"text": " ".join(text for text, _ in words), "words": [{"text": text, "box": box} for text, box in words]}
+
+
+GENERAL = [line_of(("такие", [0.093, 0.314, 0.18, 0.327]), ("как", [0.19, 0.314, 0.25, 0.327]), ("обновление", [0.267, 0.311, 0.5, 0.331]), ("ПО", [0.51, 0.311, 0.566, 0.331])),
+           line_of(("Обновление", [0.184, 0.478, 0.42, 0.492]), ("ПО", [0.43, 0.478, 0.473, 0.492]))]
+CAMERA = [line_of(("Камера", [0.185, top, 0.319, bottom])) for top, bottom in ((0.122, 0.139), (0.176, 0.192), (0.277, 0.29))] + [
+    line_of(("Передняя", [0.186, 0.252, 0.36, 0.268]), ("камера", [0.366, 0.253, 0.505, 0.268]), ("зеркально", [0.51, 0.252, 0.701, 0.268]))]
+
+
+@pytest.mark.parametrize("label,near,lines,row", [
+    ("Обновление ПО", [0.046, 0.434, 0.952, 0.494], GENERAL, 0.478),
+    ("Обновление ПО", [0.046, 0.429, 0.952, 0.494], GENERAL, 0.478),
+    ("Камера", [0.046, 0.096, 0.954, 0.156], CAMERA, 0.122),
+])
+def test_a_row_keeps_its_name_when_the_same_word_stands_nearer_its_middle(label, near, lines, row):
+    assert grounding.snap_to_text(label, near, lines)[1] == row
+
+
+def test_the_same_words_twice_in_the_box_are_the_ones_nearer_its_middle():
+    lines = [line_of(("Beli", [0.1, 0.5, 0.2, 0.52])), line_of(("Beli", [0.4, 0.52, 0.5, 0.54]))]
+    assert grounding.snap_to_text("Beli", [0.05, 0.45, 0.95, 0.6], lines)[0] == pytest.approx(0.4)
+
+
+def test_words_past_the_reach_stay_another_place_however_near_the_edge_of_the_box():
+    assert grounding.snap_to_text("Cari", [0.49, 0.09, 0.86, 0.12], [line_of(("Cari", [0.1, 0.13, 0.26, 0.14]))]) is None
+
+
+def test_words_inside_a_wide_box_are_not_past_the_reach():
+    assert grounding.snap_to_text("Cari", [0.02, 0.82, 0.98, 0.89], [line_of(("Cari", [0.03, 0.85, 0.09, 0.86]))])
+
+
 def test_a_label_found_anywhere_needs_no_model_box():
     assert grounding.snap_to_text("Beli", None, [text_line("Beli")])
 
