@@ -138,6 +138,7 @@ private enum ProtocolChecks {
         _ = try await client.played(turn: 3, sessionID: created.sessionID)
         _ = try await client.spoken(line: 7, said: "Первая фраза.", sessionID: created.sessionID)
         _ = try await client.screenChanged(at: 1_761_000_000_123, moved: true, sessionID: created.sessionID)
+        _ = try await client.screenChanged(at: 1_761_000_000_124, moved: true, opening: true, sessionID: created.sessionID)
         try await client.health()
         let frame = try await client.sendFrame(Data([0xff, 0xd8, 0xff, 0xd9]), sessionID: created.sessionID,
                                                width: 1170, height: 2532, timestampMS: 123456789)
@@ -220,6 +221,10 @@ private enum ProtocolChecks {
         let changedRequest = requests.first { $0.url!.path.hasSuffix("/changed") }!
         let changedBody = try JSONSerialization.jsonObject(with: body(of: changedRequest)) as! [String: Any]
         try check((changedBody["at"] as? NSNumber)?.int64Value == 1_761_000_000_123 && changedBody["moved"] as? Bool == true, "changed body")
+        try check(changedBody["opening"] == nil, "a plain move is the same as from the last version")
+        let openingRequest = requests.last { $0.url!.path.hasSuffix("/changed") }!
+        let openingBody = try JSONSerialization.jsonObject(with: body(of: openingRequest)) as! [String: Any]
+        try check(openingBody["opening"] as? Bool == true, "a move with our window says so")
         let translate = requests.first { $0.url!.path.hasSuffix("/translate") }!
         let translateBody = try JSONSerialization.jsonObject(with: body(of: translate)) as! [String: String]
         try check(translateBody["from"] == "ru" && translateBody["to"] == "auto" && translateBody["session_id"] == created.sessionID,
@@ -361,6 +366,8 @@ private enum ProtocolChecks {
         try check(one.count == 1, "a short pause stays inside the phrase, got \(one.count)")
         try check(abs(one[0].seconds - 3.6) < 0.25, "phrase keeps its start and a little quiet, got \(one[0].seconds)")
         try check(one[0].noiseFloor < -55 && one[0].loudest > -30, "phrase levels")
+        try check(Phrase(samples: [], noiseFloor: -32, loudest: -17).standsOut, "a phrase 15 dB over the noise goes as a file")
+        try check(!Phrase(samples: [], noiseFloor: -32, loudest: -17.5).standsOut, "a quieter one does not")
         try check(phrases(room(1), voice(1), room(0.5)).isEmpty, "a phrase is not over before the pause is")
         try check(phrases(room(1), voice(1), room(1.2), voice(1), room(1.2)).count == 2, "a long pause splits phrases")
         let long = phrases(room(1), voice(20))
@@ -1155,9 +1162,9 @@ private enum ProtocolChecks {
     }
 
     private static func checkShortSounds() throws {
-        try check(CallWords.russian.sounds == ["Угу.", "Ага.", "Так.", "Мм."], "the short sounds in Russian")
-        try check(CallWords.english.sounds == ["Mm-hm.", "Okay.", "Right.", "Got it."], "the short sounds in English")
-        try check(CallWords.spanish.sounds == ["Ajá.", "Vale.", "Mm."], "the short sounds in Spanish")
+        try check(CallWords.russian.sounds == ["Так.", "Мм.", "Хм."], "the short sounds in Russian")
+        try check(CallWords.english.sounds == ["Hmm.", "Let's see."], "the short sounds in English")
+        try check(CallWords.spanish.sounds == ["Mm.", "A ver."], "the short sounds in Spanish")
 
         var words = PauseWords(phrases: CallWords.russian.pause, sounds: CallWords.russian.sounds)
         var said: [String] = []
@@ -1176,7 +1183,7 @@ private enum ProtocolChecks {
 
         var ready = PauseWords(phrases: CallWords.russian.pause, sounds: CallWords.russian.sounds)
         try check(ready.sound(isReady: { _ in false }) == nil, "a sound not on the phone is skipped")
-        try check(ready.sound(isReady: { $0 == "Ага." }) == "Ага.", "only a sound on the phone goes")
+        try check(ready.sound(isReady: { $0 == "Мм." }) == "Мм.", "only a sound on the phone goes")
 
         var gap = PauseWords(phrases: CallWords.russian.pause, sounds: CallWords.russian.sounds)
         try check(gap.gapLeft() < 0, "the first phrase waits for no gap")
@@ -1296,6 +1303,12 @@ private enum ProtocolChecks {
         store.language = ""
         try check(store.settings.userLang == Locale.preferredLanguages.first ?? "en", "and back to the phone's")
         try check(store.windowFrame.isEmpty, "no frame chosen yet")
+        store.windowOpeningAt = 5_000
+        try check(store.movedWithWindow(at: 5_480) && store.movedWithWindow(at: 4_920), "a move goes with our window, a little before or after")
+        try check(!store.movedWithWindow(at: 6_000) && !store.movedWithWindow(at: 4_000), "and not a second away")
+        try check(!store.noiseReduction, "the plain sound by default")
+        defaults.set(true, forKey: "testSound")  // The tick of the last build, which meant the opposite.
+        try check(!store.noiseReduction, "an old tick does not carry over")
         store.character = .patient
         store.ownCharacter = "  спокойно  "
         try check(store.character == .patient && store.ownCharacter == "спокойно" && store.settings.character == .patient, "the tone stays, with no spaces around it")

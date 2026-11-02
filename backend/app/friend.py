@@ -120,6 +120,16 @@ def _gone(session: Session, frame: Frame) -> bool:
     return bool(session.last_frame) and changed_share(session.last_frame.gray, frame.gray) >= NEW_SCREEN_SHARE
 
 
+def _behind(session: Session, tied: Optional[Frame]) -> bool:
+    """The answer is about a screen they have left. The one they asked for in our app goes on: our app is not what they meant."""
+    return bool(tied) and session.answer is not session.kept and _gone(session, tied)
+
+
+def _away_from(session: Session, frame: Frame) -> bool:
+    """Over a screen they have left, or over our own app, an outline would only send them back."""
+    return _gone(session, frame) or frame.timestamp_ms < session.left_app_at
+
+
 def _still(session: Session) -> bool:
     """The phone has seen no change since its last frame, so that frame is the screen as it is now."""
     return session.signals and bool(session.last_frame) and session.changed_at is None
@@ -328,18 +338,24 @@ class Friend:
             session.last_frame = frame
         self._start(session, said if frame else said + " " + session.words["unseen"], frame)
 
-    def changed(self, session: Session, at: int, moved: bool) -> None:
+    def changed(self, session: Session, at: int, moved: bool, opening: bool = False) -> None:
         """The phone saw the screen change, ahead of the frame that will show it. Moved means they are leaving it, so what
         was being said about it stops. Their words stay, and their answer waits for the new screen. A screen that keeps
-        moving, like a video, stops an answer no more often than one that keeps sending new frames."""
+        moving, like a video, stops an answer no more often than one that keeps sending new frames. Opening means it moved
+        with our window, as they left our app: the answer under way stays through that, and through the first frame after it."""
+        if opening:
+            session.left_app_at = at
         if session.not_looking or (session.last_frame and at <= session.last_frame.timestamp_ms):  # That frame got here first.
             return
         session.changed_at = max(at, session.changed_at or 0)
         if not moved:
             return
-        session.note("moved", at=at)
+        session.note("moved", at=at, **({"opening": True} if opening else {}))
         self._left(session)
         busy = self._busy(session)
+        if busy and opening:
+            session.kept = session.answer
+            return
         if session.heard or (busy and session.restarts >= MAX_RESTARTS):
             return
         if busy:
@@ -374,7 +390,7 @@ class Friend:
         if session.eyes:
             session.publish({"type": "reading", "turn": session.turn})
         if self._busy(session):
-            if session.restarts >= MAX_RESTARTS:
+            if session.restarts >= MAX_RESTARTS or session.answer is session.kept:
                 session.held = True
                 return False, "busy"
             session.restarts += 1
@@ -493,7 +509,7 @@ class Friend:
 
         def deliver(line: str) -> None:
             # With the eyes shut the answer can be one that wants to look, and that one must not speak ahead of the screen.
-            if session.answer is not task or session.ended or early or dropped or session.not_looking or (tied and _gone(session, tied)):
+            if session.answer is not task or session.ended or early or dropped or session.not_looking or _behind(session, tied):
                 return
             early.update(line=line, ms=_ms(started), model=model, turn={"role": "assistant", "text": json.dumps({"say": line}, ensure_ascii=False)})
             session.chat.append(early["turn"])
@@ -528,12 +544,14 @@ class Friend:
             refused = {"status": error.status, "reason": error.reason} if isinstance(error, meta.MetaError) else {}
             log.warning("Answer from %s: %s %s", model, type(error).__name__, refused)
             session.note("no answer", model=model, error=type(error).__name__, **refused)
+            session.spare_beside = True  # Even if its line has gone out and stands.
             return None
 
     async def _ask(self, session: Session, turn: int, frame: Optional[Frame], tied: Optional[Frame], started: float, early: dict) -> Optional[tuple]:
         """The main model alone while the person can wait. With no line from it by then, or a broken answer, the spare model
-        runs beside it. The first whole line has the say and the other call ends unused, but silence from the spare one
-        waits for the main one. A line that has already gone out stands, and only the rest of the answer is lost."""
+        runs beside it, and from then on the two start together until the call ends. The first whole line has the say and
+        the other call ends unused, but silence from the spare one waits for the main one. A line that has already gone out
+        stands, and only the rest of the answer is lost."""
         effort = session.effort or config.META_TALK_REASONING
         main, spare = config.META_TALK_MODEL, config.META_SPARE_MODEL
         running: dict = {}
@@ -551,8 +569,10 @@ class Friend:
 
         try:
             first = call(main)
-            await asyncio.wait({first}, timeout=SPARE_SECONDS)
+            if not session.spare_beside:
+                await asyncio.wait({first}, timeout=SPARE_SECONDS)
             if not early and not (first.done() and first.result()):
+                session.spare_beside = True
                 session.note("spare", model=spare, ms=_ms(started))
                 call(spare)
             while running:
@@ -589,7 +609,7 @@ class Friend:
         away = opened and (session.not_looking or (bool(got) and got[2].get("look") is False))
         if away:
             tied = None  # Their wish holds on any screen, and the phone would drop a line about one it has left.
-        if got and tied and not early and _gone(session, tied):  # Nothing in it is about what they see now, and their words go on to that.
+        if got and not early and _behind(session, tied):  # Nothing in it is about what they see now, and their words go on to that.
             session.restarts += 1
             session.held = session.held or bool(session.open_words)
             session.note("left behind", turn=turn, model=got[0], ms=_ms(started))
@@ -665,7 +685,7 @@ class Friend:
             hidden = _private(session, frame, answer) or _unread(session, frame)
             return {"target": None} if hidden else {"target": target, "frame": str(frame.timestamp_ms) + ".jpg"}
 
-        if _gone(session, frame):  # Over a screen they have left it would only send them back.
+        if _away_from(session, frame):
             session.note("show", outcome="left", **written())
             return
         location = await run_in_threadpool(grounding.locate, frame.jpeg, frame.width, frame.height,
@@ -676,7 +696,7 @@ class Friend:
             session.note("show", outcome="not found", box_ms=box_ms, **written())
             return
         image = await run_in_threadpool(hint.render, frame.jpeg, location["box"])
-        if _gone(session, frame):  # A screen that came while the answer was busy stops nothing, so it can only be seen here.
+        if _away_from(session, frame):  # A screen that came while the answer was busy stops nothing, so it can only be seen here.
             session.note("show", outcome="left", box_ms=box_ms, **written())
             return
         session.step_sequence += 1

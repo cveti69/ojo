@@ -25,6 +25,9 @@ ICON_MAX_AREA = 0.03  # A target larger than this share of the frame is not an i
 ICON_MAX_STRETCH = 2.5  # Icons are nearly square, so a longer guess is a bar or a button, however small.
 ROW_SLACK = 0.6  # Of the model's box height. Right icons sat within 0.45 of it from the box, icons of another row 0.79 and more.
 CAPTION_SLACK = 0.8  # Wider: on a real call a checkbox took the shop's name 0.7 above it for its label.
+WHOLE_MAX_AREA = 0.25  # A box past this share of the frame points at nothing. The largest on real calls was 19%.
+FIELD_GAP = 0.01  # In shares of the frame. A field's caption stands right on it: 0.005 on a real call, and a box a row off stood 0.013 below its words.
+FIELD_INDENT = 0.02  # And starts where the field starts, 0.005 off on that call: the words of a button stand in its middle.
 
 
 def _normal(text: str) -> str:
@@ -156,9 +159,20 @@ def _is_caption(near: list[float] | None, words: list[float], frame_ratio: float
             and not words[0] <= center(near)[0] <= words[2] and not near[0] <= center(words)[0] <= near[2])
 
 
+def _whole(near: list[float] | None, words: list[float]) -> str | None:
+    """The model means all of its large box: a card or a field, not the words that name it, which are lost in the window.
+    Words only half in say the box is off, and there the words stand. On the bench the box covered 87% of the target
+    against 10%, and its middle missed 3 of 152 that the words hit. Returns the source of the box, if it is to be taken."""
+    if not _is_large(near) or (near[2] - near[0]) * (near[3] - near[1]) > WHOLE_MAX_AREA:
+        return None
+    if near[0] <= words[0] and words[2] <= near[2] and near[1] <= words[1] and words[3] <= near[3]:
+        return "whole"
+    return "field" if center(words)[1] < near[1] and near[1] - words[3] <= FIELD_GAP and abs(words[0] - near[0]) <= FIELD_INDENT else None
+
+
 def locate(jpeg: bytes, width: int, height: int, answer: dict, lines: list[dict] | None = None,
            icons: list[list[float]] | None = None, marks: dict[int, list[float]] | None = None) -> dict:
-    """Picks the final box: a mark, text on screen, SAM by name, an icon, then the model's own box.
+    """Picks the final box: a mark, text on screen or the large box it stands in, SAM by name, an icon, then the model's own box.
 
     Without `icons` SAM looks for them here, and only when nothing before it found the place. On the bench that order hit 35
     of 40 against 33 with icons first: a name found is nearly always right, and an icon can be a neighbour of the target.
@@ -172,7 +186,8 @@ def locate(jpeg: bytes, width: int, height: int, answer: dict, lines: list[dict]
         return {"box": marks[target["mark_id"]], "source": "mark", "ms": 0}
     snapped = snap_to_text(target["label"], near, lines or [])
     if snapped and not _is_caption(near, snapped, width / height):
-        return {"box": snapped, "source": "text", "ms": 0}
+        whole = _whole(near, snapped)
+        return {"box": near if whole else snapped, "source": whole or "text", "ms": 0}
     ms = 0
     if target["object"] and not _is_large(near):  # A large target is easy to hit, a search would only cost time.
         try:

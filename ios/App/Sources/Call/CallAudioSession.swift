@@ -9,7 +9,7 @@ final class CallAudioSession {
     var onActivityChange: ((Bool) -> Void)?
     var onDiagnostic: ((String) -> Void)?
     var onRouteChange: (() -> Void)?
-    var mode = AVAudioSession.Mode.voiceChat  // Taken at every start of the sound, so a new choice works from the next call.
+    var mode = AVAudioSession.Mode.default  // Taken at every start of the sound, so a new choice works from the next call.
     private var keepAlivePlayer: AVAudioPlayer?
     private var routeChange: AnyCancellable?
 

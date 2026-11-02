@@ -4,6 +4,7 @@ import UIKit
 protocol HintWindowPresenting: EyesSurface {
     var inlineView: UIView { get }
     var onStateChange: ((HintWindowState) -> Void)? { get set }
+    var onOpening: (() -> Void)? { get set }
     var onRepeatHint: (() -> Void)? { get set }
     var onDiagnostic: ((String) -> Void)? { get set }
 

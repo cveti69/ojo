@@ -13,6 +13,7 @@ final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
     var inlineView: UIView { sourceView }
     var onStateChange: ((HintWindowState) -> Void)?
     var onRepeatHint: (() -> Void)?
+    var onOpening: (() -> Void)?
     var onDiagnostic: ((String) -> Void)?
 
     private let sourceView = SampleBufferView()
@@ -319,6 +320,7 @@ extension PictureInPictureHintWindow: AVPictureInPictureControllerDelegate {
         Task { @MainActor [weak self] in
             guard let self, let controller = self.controller, ObjectIdentifier(controller) == identifier else { return }
             self.onDiagnostic?("Окно начинает открываться")
+            self.onOpening?()
         }
     }
 

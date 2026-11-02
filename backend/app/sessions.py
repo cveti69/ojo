@@ -58,6 +58,9 @@ class Session:
     restarts: int = 0
     held: bool = False
     answer: Optional[asyncio.Task] = None
+    kept: Optional[asyncio.Task] = None  # The answer under way as they left our app: the window opening does not stop it.
+    left_app_at: int = 0  # On the clock of the frames. What is older shows our own app, which is nothing to outline.
+    spare_beside: bool = False  # The main model let this call down once, so from then on the spare one starts with it.
     ears: Any = None
     app_lang: Optional[str] = None  # What the model says the screen is written in.
     texts: List[str] = field(default_factory=list)

@@ -4,7 +4,7 @@ BUNDLE_IDENTIFIER_PREFIX = com.example.ojo
 APP_GROUP_IDENTIFIER = group.com.example.ojo
 DEVELOPMENT_TEAM =
 CODE_SIGN_STYLE = Automatic
-MARKETING_VERSION = 1.0.0
+MARKETING_VERSION = 1.0.1
 CURRENT_PROJECT_VERSION = 1
 // The empty expansion preserves the double slash in an xcconfig value.
 DEFAULT_SERVER_URL = https:/$()/your-server.example.com

@@ -40,7 +40,7 @@ struct SettingsScreen: View {
                         Pill(title: words.frameGlow, isOn: model.frame == .glow) { model.setFrame(.glow) }
                         Pill(title: words.frameTicks, isOn: model.frame == .ticks) { model.setFrame(.ticks) }
                     }
-                    CheckRow(title: words.testSound, isOn: model.testSound) { model.setTestSound(!model.testSound) }
+                    CheckRow(title: words.noiseReduction, isOn: model.noiseReduction) { model.setNoiseReduction(!model.noiseReduction) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 28)

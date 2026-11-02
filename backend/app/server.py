@@ -77,6 +77,7 @@ class Spoken(Payload):
 class ScreenChange(Payload):
     at: int = Field(ge=0)
     moved: bool = False
+    opening: bool = False  # It moved with our window, as they left our app.
 
 
 class Words(Payload):
@@ -257,7 +258,7 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
     async def screen_changed(session_id: str, body: ScreenChange):
         session = session_or_404(session_id)
         require_active(session)
-        friend.changed(session, body.at, body.moved)
+        friend.changed(session, body.at, body.moved, body.opening)
         return {"ok": True}
 
     @router.post("/sessions/{session_id}/text")

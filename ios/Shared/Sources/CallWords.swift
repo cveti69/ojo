@@ -66,7 +66,7 @@ public struct CallWords: Sendable, Equatable {
     public let frameLace: String
     public let frameGlow: String
     public let frameTicks: String
-    public let testSound: String
+    public let noiseReduction: String
     public let language: String
     public let phoneLanguage: String
     public let tone: String
@@ -99,7 +99,7 @@ public struct CallWords: Sendable, Equatable {
         pause: ["Сейчас подумаю.", "Секунду.", "Так, дай подумать.", "Минутку.", "Сейчас скажу.", "Погоди секунду.",
                 "Момент.", "Сейчас.", "Дай соображу.", "Сейчас прикину.", "Уже разбираюсь.", "Секундочку.", "Ага, сейчас.",
                 "Один момент.", "Уже думаю.", "Скоро отвечу."],
-        sounds: ["Угу.", "Ага.", "Так.", "Мм."],
+        sounds: ["Так.", "Мм.", "Хм."],
         failed: "Не получилось ответить, повтори, пожалуйста.",
         lostHearing: "Я перестал тебя слышать. Открой наше приложение на секунду, и снова услышу.",
         noHintYet: "Пока нет подсказки. Ожидайте.",
@@ -142,7 +142,7 @@ public struct CallWords: Sendable, Equatable {
         frameLace: "Кружево",
         frameGlow: "Мягкий свет",
         frameTicks: "Чёрточки",
-        testSound: "Тестовый звук",
+        noiseReduction: "Шумоподавление",
         language: "Язык",
         phoneLanguage: "Авто",
         tone: "Тон",
@@ -171,7 +171,7 @@ public struct CallWords: Sendable, Equatable {
         pause: ["Let me think.", "One second.", "Hold on.", "Just a moment.", "Let me see.", "Give me a second.",
                 "One moment.", "One sec.", "Let me work that out.", "Let me think about that.", "Working on it.", "Just a second.",
                 "Okay, one sec.", "One moment, please.", "Thinking it over.", "I'll tell you in a sec."],
-        sounds: ["Mm-hm.", "Okay.", "Right.", "Got it."],
+        sounds: ["Hmm.", "Let's see."],
         failed: "Sorry, I couldn't answer. Please say that again.",
         lostHearing: "I can't hear you anymore. Open our app for a second and I'll hear you again.",
         noHintYet: "No hint yet. Please wait.",
@@ -214,7 +214,7 @@ public struct CallWords: Sendable, Equatable {
         frameLace: "Lace",
         frameGlow: "Soft light",
         frameTicks: "Ticks",
-        testSound: "Test sound",
+        noiseReduction: "Noise reduction",
         language: "Language",
         phoneLanguage: "Auto",
         tone: "Tone",
@@ -241,7 +241,7 @@ public struct CallWords: Sendable, Equatable {
     public static let spanish = CallWords(
         greeting: "Hola, ¿en qué te ayudo?",
         pause: ["Déjame pensar.", "Un segundo.", "Espera.", "Un momento.", "A ver.", "Dame un segundo."],
-        sounds: ["Ajá.", "Vale.", "Mm."],
+        sounds: ["Mm.", "A ver."],
         failed: "No pude responder. Repítelo, por favor.",
         lostHearing: "Ya no te oigo. Abre nuestra app un segundo y volveré a oírte.",
         noHintYet: "Aún no hay ninguna pista. Espera un momento.",
@@ -284,7 +284,7 @@ public struct CallWords: Sendable, Equatable {
         frameLace: "Encaje",
         frameGlow: "Luz suave",
         frameTicks: "Rayitas",
-        testSound: "Sonido de prueba",
+        noiseReduction: "Reducción de ruido",
         language: "Idioma",
         phoneLanguage: "Automático",
         tone: "Tono",

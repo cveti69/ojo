@@ -744,7 +744,7 @@ def test_a_call_that_lost_can_still_close_and_takes_no_frame(backend, monkeypatc
     session = backend.store.sessions[session_id]
     seen = events_of(backend, session_id)
     main, spare = Stream("", '{"say": "Вижу."}'), field_first()
-    backend.meta.replies += [main, spare, line("Хорошо, не смотрю.")]
+    backend.meta.replies += [main, spare, line("Хорошо, не смотрю."), line("Хорошо, не смотрю.")]  # By then the two start together.
     words(client, session_id, "Не смотри")
     assert look(client, session_id, [SCREENS[0]]).status_code == 200
     assert main.written.wait(5) and spare.written.wait(5)

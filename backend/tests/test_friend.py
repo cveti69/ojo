@@ -2397,3 +2397,257 @@ def test_a_line_the_phone_dropped_waits_if_the_screen_is_still_changing(backend,
     changed(client, session_id, 3000)
     cut(client, session_id, 1)
     assert session.heard == "Что тут?" and session.settling and len(backend.meta.calls) == 1
+
+
+def test_after_a_failure_the_spare_model_starts_with_the_main_one_until_the_call_ends(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 30)
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [OSError("down"), line("Запасной.")]
+    words(backend.client, session_id, "Первое")
+    assert wait_until(lambda: spoken(seen) == ["Запасной."])
+    idle(backend, session_id)
+    played(backend, session_id, 1)
+    release = threading.Event()
+    backend.meta.hook = lambda index: release.wait(5) if backend.meta.calls[index - 1].model == "test-talk" else None
+    backend.meta.replies = [line("Дальше."), line("Дальше.")]
+    try:
+        words(backend.client, session_id, "Второе")
+        assert wait_until(lambda: len(backend.meta.calls) == 4 and spoken(seen)[-1] == "Дальше.")
+    finally:
+        release.set()
+    assert sorted(call.model for call in backend.meta.calls[2:]) == ["test-spare", "test-talk"]
+
+
+def test_a_main_answer_that_breaks_after_its_line_counts_as_a_failure(backend):
+    session_id = new_session(backend.client)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = ['{"say": "Вот ответ.", "show": {"label"']
+    words(backend.client, session_id, "Первое")
+    idle(backend, session_id)
+    assert spoken(seen) == ["Вот ответ."] and backend.store.sessions[session_id].spare_beside
+
+
+def test_a_stopped_answer_is_no_failure_of_the_main_model(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 30)
+    entered, release = blocked(backend, only=1)
+    session_id = new_session(backend.client)
+    try:
+        words(backend.client, session_id, "Первое")
+        assert entered.wait(2)
+        words(backend.client, session_id, "Второе")
+        assert wait_until(lambda: len(backend.meta.calls) == 2)
+    finally:
+        release.set()
+    idle(backend, session_id)
+    assert [call.model for call in backend.meta.calls] == ["test-talk", "test-talk"] and not backend.store.sessions[session_id].spare_beside
+
+
+def test_a_late_answer_counts_as_a_failure_for_the_rest_of_the_call(backend, monkeypatch):
+    monkeypatch.setattr(friend, "SPARE_SECONDS", 0.05)
+    entered, release = blocked(backend, only=1)
+    session_id = new_session(backend.client)
+    try:
+        words(backend.client, session_id, "Первое")
+        assert wait_until(lambda: len(backend.meta.calls) == 2)
+    finally:
+        release.set()
+    idle(backend, session_id)
+    assert backend.store.sessions[session_id].spare_beside
+
+
+def test_a_line_in_time_leaves_the_call_as_it_was(backend):
+    session_id = new_session(backend.client)
+    words(backend.client, session_id, "Первое")
+    idle(backend, session_id)
+    assert [call.model for call in backend.meta.calls] == ["test-talk"] and not backend.store.sessions[session_id].spare_beside
+
+
+def left_app(client, session_id, at):
+    """The screen moved with our window, as they left our app."""
+    assert client.post("/sessions/" + session_id + "/changed", headers=AUTH, json={"at": at, "moved": True, "opening": True}).status_code == 200
+
+
+def asked_in_our_app(backend, reply, **frames):
+    """Their words on our own screen, and the answer waiting."""
+    session_id = sharing(backend.client, signals=True)
+    still_screen(backend, session_id, **frames)
+    seen = events_of(backend, session_id)
+    entered, release = blocked(backend, only=2)
+    backend.meta.replies = [reply]
+    words(backend.client, session_id, "Как найти шампунь?")
+    assert entered.wait(2)
+    return session_id, seen, release
+
+
+def test_the_answer_under_way_stays_as_they_leave_our_app(backend):
+    session_id, seen, release = asked_in_our_app(backend, line("Открой магазин."))
+    try:
+        left_app(backend.client, session_id, 2000)
+        assert "quiet" not in kinds(seen)
+    finally:
+        release.set()
+    idle(backend, session_id)
+    assert spoken(seen) == ["Открой магазин."] and len(backend.meta.calls) == 2
+
+
+def test_a_plain_move_still_stops_the_answer_of_a_phone_that_says_nothing_of_the_window(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    session_id, seen, release = asked_in_our_app(backend, line("Открой магазин."))
+    try:
+        changed(backend.client, session_id, 2000, moved=True)
+    finally:
+        release.set()
+    time.sleep(0.05)
+    assert spoken(seen) == []
+    assert ["opening" in row for row in lines_of(next((tmp_path / "calls").iterdir())) if row["kind"] == "moved"] == [False]
+
+
+def test_the_first_frame_after_leaving_waits_for_that_answer(backend):
+    client = backend.client
+    session_id, seen, release = asked_in_our_app(backend, line("Открой магазин."))
+    backend.meta.replies.append(line("Вижу магазин."))
+    try:
+        left_app(client, session_id, 2000)
+        post_frame(client, session_id, SCREENS[1], timestamp=3000)
+    finally:
+        release.set()
+    assert wait_until(lambda: len(backend.meta.calls) == 3)
+    idle(backend, session_id)
+    assert spoken(seen) == ["Открой магазин.", "Вижу магазин."]
+    assert pictures(backend.meta.calls[2].messages[-1]) == [meta.data_url(SCREENS[1])]
+
+
+def test_an_answer_with_its_line_at_the_end_is_not_left_behind_by_that_frame(backend):
+    client = backend.client
+    session_id, seen, release = asked_in_our_app(backend, {"notes": "Спросил про шампунь.", "say": "Открой магазин."})
+    backend.meta.replies.append(line("Вижу магазин."))
+    try:
+        left_app(client, session_id, 2000)
+        post_frame(client, session_id, SCREENS[1], timestamp=3000)
+    finally:
+        release.set()
+    assert wait_until(lambda: len(backend.meta.calls) == 3)
+    idle(backend, session_id)
+    assert spoken(seen) == ["Открой магазин.", "Вижу магазин."]
+
+
+def test_an_answer_that_outlived_our_app_outlines_nothing_and_the_model_hears_it(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CALLS_DIR", str(tmp_path / "calls"))
+    session_id, seen, release = asked_in_our_app(backend, line("Нажми сюда.", show=SHOW))
+    try:
+        left_app(backend.client, session_id, 2000)
+    finally:
+        release.set()
+    idle(backend, session_id)
+    session = backend.store.sessions[session_id]
+    rows = lines_of(next((tmp_path / "calls").iterdir()))
+    assert spoken(seen) == ["Нажми сюда."] and "hint" not in kinds(seen) and not session.shown
+    assert session.chat[-1]["text"] == session.words["unshown"]
+    assert [(row["outcome"], "box_ms" in row) for row in rows if row["kind"] == "show"] == [("left", False)]  # No search for it either.
+    assert [row["opening"] for row in rows if row["kind"] == "moved"] == [True]
+
+
+def test_no_outline_over_our_app_if_they_left_while_the_button_was_found(backend, monkeypatch):
+    client = backend.client
+    entered, release = threading.Event(), threading.Event()
+    locate = grounding.locate
+
+    def slow(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return locate(*args, **kwargs)
+    monkeypatch.setattr(grounding, "locate", slow)
+    session_id = sharing(client, signals=True)
+    backend.meta.replies = [line("")]
+    still_screen(backend, session_id)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Нажми сюда.", show=SHOW)]
+    try:
+        words(client, session_id, "Куда нажать?")
+        assert entered.wait(2)
+        left_app(client, session_id, 2000)
+    finally:
+        release.set()
+    idle(backend, session_id)
+    assert spoken(seen) == ["Нажми сюда."] and "hint" not in kinds(seen)
+
+
+def test_a_question_right_after_leaving_does_not_outline_our_app_either(backend, monkeypatch):
+    monkeypatch.setattr(friend, "LOOK_SECONDS", 0.01)
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    left_app(client, session_id, 2000)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Нажми сюда.", show=SHOW)]
+    words(client, session_id, "Куда нажать?")
+    assert wait_until(lambda: spoken(seen))
+    idle(backend, session_id)
+    assert "hint" not in kinds(seen)
+
+
+def test_our_app_stays_unoutlined_when_a_frame_beat_the_word_of_the_window(backend):
+    client = backend.client
+    session_id, seen, release = asked_in_our_app(backend, line("Нажми сюда.", show=SHOW))
+    try:
+        post_frame(client, session_id, SCREENS[0], timestamp=3000)
+        left_app(client, session_id, 2000)
+    finally:
+        release.set()
+    idle(backend, session_id)
+    assert "hint" not in kinds(seen)
+
+
+def test_an_outline_on_a_screen_after_they_left_goes_out(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    still_screen(backend, session_id)
+    left_app(client, session_id, 2000)
+    seen = events_of(backend, session_id)
+    backend.meta.replies = [line("Нажми сюда.", show=SHOW)]
+    post_frame(client, session_id, SCREENS[1], timestamp=3000)
+    idle(backend, session_id)
+    assert "hint" in kinds(seen)
+
+
+def test_what_is_outlined_goes_as_they_leave_our_app(backend):
+    client = backend.client
+    session_id = sharing(client, signals=True)
+    backend.meta.replies = [line("Жми сюда.", show=SHOW)]
+    still_screen(backend, session_id)
+    assert backend.store.sessions[session_id].shown
+    seen = events_of(backend, session_id)
+    left_app(client, session_id, 2000)
+    assert "left" in kinds(seen) and not backend.store.sessions[session_id].shown
+
+
+def test_a_move_after_our_window_opened_stops_that_answer_as_any_other(backend):
+    client = backend.client
+    session_id, seen, release = asked_in_our_app(backend, line("Открой магазин."))
+    backend.meta.replies.append(line("Теперь ответ."))
+    try:
+        left_app(client, session_id, 2000)
+        post_frame(client, session_id, SCREENS[1], timestamp=3000)
+        changed(client, session_id, 4000, moved=True)
+        post_frame(client, session_id, SCREENS[2], timestamp=5000)
+        assert wait_until(lambda: spoken(seen) == ["Теперь ответ."])
+    finally:
+        release.set()
+    idle(backend, session_id)
+    assert spoken(seen) == ["Теперь ответ."] and pictures(backend.meta.calls[2].messages[-1]) == [meta.data_url(SCREENS[2])]
+
+
+def test_new_words_after_leaving_stop_that_answer_as_any_other(backend, monkeypatch):
+    monkeypatch.setattr(friend, "LOOK_SECONDS", 0.01)
+    client = backend.client
+    session_id, seen, release = asked_in_our_app(backend, line("Открой магазин."))
+    backend.meta.replies.append(line("Теперь ответ."))
+    try:
+        left_app(client, session_id, 2000)
+        words(client, session_id, "И ещё")
+        assert wait_until(lambda: spoken(seen) == ["Теперь ответ."])
+    finally:
+        release.set()
+    idle(backend, session_id)
+    assert spoken(seen) == ["Теперь ответ."]

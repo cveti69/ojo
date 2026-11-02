@@ -44,9 +44,10 @@ public final class ServerClient: Sendable {
         try await json("POST", ["sessions", sessionID, "text"], body: ScreenTextRequest(frameTS: frameTS, lines: lines), timeout: Self.screenTimeout)
     }
 
-    /// The screen went on from the last frame, which waits for it to settle. Moved means the person is leaving it.
-    public func screenChanged(at timestampMS: Int64, moved: Bool, sessionID: String) async throws -> OKResponse {
-        try await json("POST", ["sessions", sessionID, "changed"], body: ScreenChange(at: timestampMS, moved: moved), timeout: Self.screenTimeout)
+    /// The screen went on from the last frame, which waits for it to settle. Moved means the person is leaving it, and opening
+    /// that it moved with our window: what they asked in our app still gets its answer.
+    public func screenChanged(at timestampMS: Int64, moved: Bool, opening: Bool = false, sessionID: String) async throws -> OKResponse {
+        try await json("POST", ["sessions", sessionID, "changed"], body: ScreenChange(at: timestampMS, moved: moved, opening: opening ? true : nil), timeout: Self.screenTimeout)
     }
 
     public func end(sessionID: String) async throws -> OKResponse {

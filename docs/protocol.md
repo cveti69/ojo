@@ -62,6 +62,11 @@ takes the latest frame it has. With no broadcast or no frames, the model gets a 
 once: what is outlined goes, the answer in flight stops, and words with no answer heard wait for the next delivered frame, however
 little it differs, or for 6.5 seconds with no frame. A line that has gone out stands until the phone reports it.
 
+`/changed` with `opening: true` is a move within a second of our window beginning to open, as the person leaves the app. It stops no
+answer: the one in flight goes on and the first new frame waits for its end, and the next move stops it as any other. The phone says
+what was asked, but nothing on a frame from before the window is outlined, on the server or on the phone: that frame shows our own
+app. A move a phone does not name this way, or names too late, stops the answer as before. The field is left out when it is false.
+
 Every line and every ready text names its frame in `frame_ts`. The server does not send what it has about a screen the person has
 left, and the phone checks it again against the moment of the move before it shows, plays or pastes anything. A line that has not
 begun to sound is dropped, one that has ends with its sentence, and `/spoken` leaves the model with what the person heard. A dropped
@@ -77,7 +82,9 @@ a change after this one. A question asked before the broadcast starts goes on to
 
 A new turn cancels the answer in flight. Its turn stays in the chat and goes out with the next one. A screen that does not settle
 cancels an answer at most 2 times in a row. With no line in 8 seconds, or a broken answer, the spare model starts beside the main
-one and the main one is not cancelled. The first whole line has the say, and the other call changes neither the voice nor the chat.
+one and the main one is not cancelled. From then on the two start together until the call ends: the journal has a `spare` row each
+time, with its `ms`. An answer that breaks after its line went out counts from the next turn, and the line stands. A stopped answer
+does not count. The first whole line has the say, and the other call changes neither the voice nor the chat.
 Silence from the spare model waits for the main one. Nothing by 30 seconds ends the turn.
 
 The answer can carry `look`, and no list of phrases decides it: the model understands. `false` means the person asked the agent not to
@@ -177,5 +184,6 @@ whose words have not come by the end of its answer is logged with neither the pi
 ## App Group
 
 `UserDefaults` keys of the group: `serverURL`, `token`, `sessionId`, `userLang`, `targetLang`, `language`, `windowFrame`, `agentManner`,
-`ownCharacter`, `notLooking`. The app writes them, and the broadcast extension and the keyboard read them. `notLooking` is the last
-`not_looking` event, and the extension checks it four times a second.
+`ownCharacter`, `notLooking`, `windowOpeningAt`. The app writes them, and the broadcast extension and the keyboard read them.
+`notLooking` is the last `not_looking` event, and the extension checks it four times a second. `windowOpeningAt` is when our window
+began to open, on the clock of the frames.

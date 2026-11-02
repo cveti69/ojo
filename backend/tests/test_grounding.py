@@ -281,3 +281,49 @@ def test_a_wide_model_box_beside_the_words_is_no_icon(monkeypatch):
     asked = asked_sam(monkeypatch, {})
     target = {**CLOSE, "box": [380, 165, 700, 195]}
     assert real_locate(b"", 1000, 1000, {"action": "tap", "target": target}, HEADING)["source"] == "text" and asked == []
+
+
+def outlined(near, words, label="Serum"):
+    target = {"label": label, "object": "product card", "box": near, "mark_id": None}
+    return real_locate(b"", 500, 1000, {"action": "tap", "target": target}, [line_of((label, words))])
+
+
+def test_a_word_inside_a_large_box_outlines_the_whole_box():
+    found = outlined([20, 700, 480, 990], [0.29, 0.9, 0.39, 0.914])
+    assert found == {"box": [0.02, 0.7, 0.48, 0.99], "source": "whole", "ms": 0}
+
+
+def test_a_word_only_half_in_says_the_box_is_off_and_stands():
+    found = outlined([30, 340, 970, 410], [0.43, 0.398, 0.61, 0.414])
+    assert found["box"] == [0.43, 0.398, 0.61, 0.414] and found["source"] == "text"
+
+
+def test_a_word_in_a_small_box_stands():
+    found = outlined([12, 68, 735, 105], [0.1, 0.08, 0.37, 0.1])
+    assert found["box"] == [0.1, 0.08, 0.37, 0.1] and found["source"] == "text"
+
+
+def test_a_box_too_large_to_point_at_anything_is_not_taken():
+    found = outlined([0, 100, 1000, 400], [0.4, 0.2, 0.5, 0.22])
+    assert found["box"] == [0.4, 0.2, 0.5, 0.22] and found["source"] == "text"
+    assert outlined([0, 100, 1000, 350], [0.4, 0.2, 0.5, 0.22])["source"] == "whole"
+
+
+def test_a_caption_on_a_field_gives_way_to_the_field():
+    found = outlined([70, 527, 930, 586], [0.074, 0.506, 0.265, 0.522])
+    assert found == {"box": [0.07, 0.527, 0.93, 0.586], "source": "field", "ms": 0}
+
+
+@pytest.mark.parametrize("words", [
+    [0.43, 0.506, 0.6, 0.522],  # In the middle of the box: the words of a button that the model drew lower.
+    [0.074, 0.49, 0.265, 0.506],  # Further than a caption stands.
+    [0.074, 0.59, 0.265, 0.606],  # Under the box.
+])
+def test_other_words_outside_a_field_stand(words):
+    found = outlined([70, 527, 930, 586], words)
+    assert found["box"] == words and found["source"] == "text"
+
+
+def test_a_field_too_small_to_be_large_keeps_the_words_over_it():
+    found = outlined([70, 527, 400, 560], [0.074, 0.506, 0.265, 0.522])
+    assert found["source"] == "text"

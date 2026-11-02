@@ -121,6 +121,25 @@ public final class SharedStore: @unchecked Sendable {
         }
     }
 
+    /// When our window began to open, on the clock of the frames.
+    public var windowOpeningAt: Int64 {
+        get {
+            refresh()
+            return Int64(defaults.integer(forKey: "windowOpeningAt"))
+        }
+        set {
+            defaults.set(newValue, forKey: "windowOpeningAt")
+            defaults.synchronize()
+        }
+    }
+
+    /// On real calls the screen moved 0.08 s before to 0.48 s after our window began to open.
+    public func movedWithWindow(at timestamp: Int64) -> Bool {
+        abs(timestamp - windowOpeningAt) < Self.windowOpeningMS
+    }
+
+    private static let windowOpeningMS: Int64 = 1000
+
     /// When the broadcast saw the person leave the screen, on the clock of the frames.
     public var screenMovedAt: Int64 {
         get {
@@ -162,10 +181,10 @@ public final class SharedStore: @unchecked Sendable {
     }
 
     /// Calls in the louder sound mode. A trial, so it stays off until the person turns it on.
-    public var testSound: Bool {
-        get { defaults.bool(forKey: "testSound") }
+    public var noiseReduction: Bool {
+        get { defaults.bool(forKey: "noiseReduction") }
         set {
-            defaults.set(newValue, forKey: "testSound")
+            defaults.set(newValue, forKey: "noiseReduction")
             defaults.synchronize()
         }
     }

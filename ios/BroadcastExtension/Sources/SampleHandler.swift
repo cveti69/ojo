@@ -253,13 +253,14 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             return true
         }
         guard tell else { return }
+        let opening = moved && run.store.movedWithWindow(at: timestamp)
         if moved {
             run.store.screenMovedAt = timestamp
             GroupNotification.post(run.movedName)
-            run.journal.append("Экран сдвинулся")
+            run.journal.append(opening ? "Экран сдвинулся вместе с окном" : "Экран сдвинулся")
         }
         Task { [self] in
-            do { _ = try await run.client.screenChanged(at: timestamp, moved: moved, sessionID: run.sessionID) }
+            do { _ = try await run.client.screenChanged(at: timestamp, moved: moved, opening: opening, sessionID: run.sessionID) }
             catch {
                 lock.withLock { if runID == run.id { changeTold = false; moveTold = false } }  // The next look says it again.
                 run.journal.append("Ошибка /changed: \(error.localizedDescription)")

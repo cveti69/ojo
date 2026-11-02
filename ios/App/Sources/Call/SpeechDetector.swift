@@ -7,6 +7,8 @@ struct Phrase: Sendable {
     let loudest: Float
 
     var seconds: Double { Double(samples.count) / Double(SpeechDetector.sampleRate) }
+    /// On real calls the phrases with words stood 20 dB over the noise and up, but for one that was not speech, and most empty ones less.
+    var standsOut: Bool { loudest - noiseFloor >= 15 }
     var wav: Data { WAV.file(samples: samples, sampleRate: UInt32(SpeechDetector.sampleRate)) }
 }
 

@@ -39,6 +39,7 @@ public struct LineSpoken: Encodable, Sendable {
 public struct ScreenChange: Encodable, Sendable {
     public let at: Int64
     public let moved: Bool
+    public var opening: Bool?  // It moved with our window, as they left our app. Left out otherwise.
 }
 public struct SpokenReply: Decodable, Sendable {
     public let heard: Bool

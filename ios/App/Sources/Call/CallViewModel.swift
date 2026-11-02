@@ -21,7 +21,7 @@ final class CallViewModel: ObservableObject {
     @Published private(set) var screenTextMode: ScreenTextMode = .extension
     @Published private(set) var measuresAppleSpeech = false
     @Published private(set) var hearsOverVoice = false
-    @Published private(set) var testSound = false
+    @Published private(set) var noiseReduction = false
     @Published private(set) var voices: [Voice] = []
     @Published private(set) var voice = ""
     @Published private(set) var frame = EyesFrame.lace
@@ -112,7 +112,8 @@ final class CallViewModel: ObservableObject {
     private var eyes: EyesStage?
     private var endScreen: Task<Void, Never>?
     private var movedNotice: GroupNotification?
-    private var movedAt: Int64 = 0
+    private var movedAt: Int64 = 0  // A line about an older frame stays unsaid.
+    private var shownFrom: Int64 = 0  // An outline on an older frame stays unshown. It goes further than the lines when our window opens.
     private var hintOnWindow = false
     private var subscriptions = Set<AnyCancellable>()
 
@@ -138,7 +139,7 @@ final class CallViewModel: ObservableObject {
         voice = store?.voice ?? ""
         measuresAppleSpeech = store?.measuresAppleSpeech ?? false
         hearsOverVoice = store?.hearsOverVoice ?? false
-        testSound = store?.testSound ?? false
+        noiseReduction = store?.noiseReduction ?? false
         frame = EyesFrame(rawValue: store?.windowFrame ?? "") ?? .lace
         language = store?.language ?? ""
         character = store?.character ?? .warm
@@ -170,6 +171,7 @@ final class CallViewModel: ObservableObject {
                 self.window.startPictureInPicture()
             }
         }
+        window.onOpening = { [weak self] in self?.windowOpening() }
         window.onDiagnostic = { [weak self] in self?.journal?.append($0) }
         self.speaker.onSounding = { [weak self] in self?.soundChanged($0) }
         self.speaker.onSentence = { [weak self] in self?.sentenceSounds($0) }
@@ -211,7 +213,7 @@ final class CallViewModel: ObservableObject {
         endScreen?.cancel()
         lastCall = nil
         isMuted = false
-        audioSession.mode = testSound ? .default : .voiceChat
+        audioSession.mode = noiseReduction ? .voiceChat : .default
         soundOutput = audioSession.output(in: words)
         let settings = store.settings
         store.sessionID = nil
@@ -311,6 +313,7 @@ final class CallViewModel: ObservableObject {
         lastHeard = .distantPast
         droppedSounds = 0
         movedAt = 0
+        shownFrom = 0
         hintOnWindow = false
         if let endingID, store?.sessionID == endingID { store?.sessionID = nil }
         store?.notLooking = false
@@ -437,9 +440,9 @@ final class CallViewModel: ObservableObject {
     }
 
     /// From the next call on: a sound mode lasts a whole call.
-    func setTestSound(_ value: Bool) {
-        testSound = value
-        store?.testSound = value
+    func setNoiseReduction(_ value: Bool) {
+        noiseReduction = value
+        store?.noiseReduction = value
     }
 
     func setFrame(_ value: EyesFrame) {
@@ -647,7 +650,8 @@ final class CallViewModel: ObservableObject {
         probe = nil
     }
 
-    /// The stream normally beats this phrase to the server. If it stayed silent, the phrase itself goes as a file.
+    /// The stream normally beats this phrase to the server. If it stayed silent, the phrase itself goes as a file, unless
+    /// it hardly stands out from the noise: what the server makes of that is words nobody said.
     private func heardPhrase(_ phrase: Phrase, client: ServerClient, sessionID: String) {
         let seconds = String(format: "%.1f", locale: Locale(identifier: "ru_RU"), phrase.seconds)
         journal?.append("Реплика \(seconds) с; фон \(Int(phrase.noiseFloor)) дБ, пик \(Int(phrase.loudest)) дБ")
@@ -658,6 +662,10 @@ final class CallViewModel: ObservableObject {
         Task { [weak self] in
             if waits { try? await Task.sleep(nanoseconds: Self.streamWait) }
             guard let self, self.isCallActive, self.heardTurn == turn else { return }
+            guard phrase.standsOut else {
+                self.journal?.append("Поток речи не услышал реплику, а файлом она слишком тихая")
+                return
+            }
             self.journal?.append("Поток речи не услышал реплику, отправляю файлом")
             do {
                 let reply = try await client.say(phrase.wav, sessionID: sessionID)
@@ -740,19 +748,34 @@ final class CallViewModel: ObservableObject {
         }
     }
 
+    private func takeHintAway() {
+        hintOnWindow = false
+        if let eyes { eyes.newScreen() } else { showRestCard() }
+        lastInstruction = words.rest
+    }
+
+    /// What is shown here is a picture of our own app, which must not open in the window, even if no move comes to say so.
+    private func windowOpening() {
+        store?.windowOpeningAt = Int64(Date().timeIntervalSince1970 * 1000)
+        if hintOnWindow { takeHintAway() }
+    }
+
     private func isAboutOldScreen(_ line: Line) -> Bool {
         line.frameTS.map { $0 < movedAt } ?? false
     }
 
     /// The person is leaving this screen. What is shown goes at once, nothing about it sounds from here on, and a line that
-    /// is already sounding ends with its sentence. The server takes their question on to the next frame.
+    /// is already sounding ends with its sentence. The server takes their question on to the next frame. Moved with our
+    /// window, what they asked in our app is still said: only our own screen must not be shown in the window.
     private func screenMoved() {
-        guard isCallActive, let at = store?.screenMovedAt, at > movedAt else { return }
-        movedAt = at
+        guard isCallActive, let at = store?.screenMovedAt, at > shownFrom else { return }
+        shownFrom = at
         journal?.append("Экран сдвинулся")
         if let eyes { eyes.newScreen() } else if hintOnWindow { showRestCard() }
         if hintOnWindow { lastInstruction = words.rest }
         hintOnWindow = false
+        if store?.movedWithWindow(at: at) == true { return }
+        movedAt = at
         dropLines(where: isAboutOldScreen)
         if isSounding, let currentLine, isAboutOldScreen(currentLine) { speaker.endSentence() }
     }
@@ -884,7 +907,7 @@ final class CallViewModel: ObservableObject {
                     "; модель \($0.modelMS) мс, рамка \($0.boxMS) мс, \($0.boxSource); окно на кадре: \($0.window == true ? "да" : "нет")"
                 } ?? ""
                 journal?.append("Подсказка \(hint.stepID) через \(seconds) с после кадра\(timings)")
-                guard timestamp >= movedAt else {
+                guard timestamp >= max(shownFrom, store?.windowOpeningAt ?? 0) else {
                     journal?.append("Подсказка \(hint.stepID) о прежнем экране не показана")
                     return
                 }
@@ -930,9 +953,7 @@ final class CallViewModel: ObservableObject {
             eyes?.stopWaiting(for: .screen)
             dropLines { $0.kind == .filler }
         case .left:
-            hintOnWindow = false
-            if let eyes { eyes.newScreen() } else { showRestCard() }
-            lastInstruction = words.rest
+            takeHintAway()
         case .reading:
             eyes?.newScreen()
             eyes?.wait(for: .screen)
