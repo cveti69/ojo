@@ -35,8 +35,9 @@ real_locate = grounding.locate
 class FakeEars:
     made = []
 
-    def __init__(self, on_turn):
+    def __init__(self, on_turn, on_timing=None):
         self.on_turn = on_turn
+        self.on_timing = on_timing
         self.frames = []
         self.closed = False
         FakeEars.made.append(self)

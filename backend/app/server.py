@@ -420,7 +420,7 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
             await websocket.close()
             return
         if session.ears is None:
-            session.ears = ears(lambda said: friend.heard(session, said))
+            session.ears = ears(lambda said: friend.heard(session, said), lambda **numbers: session.note("ears", **numbers))
         with contextlib.suppress(WebSocketDisconnect, RuntimeError):
             while True:
                 message = await websocket.receive()

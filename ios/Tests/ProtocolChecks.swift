@@ -290,6 +290,7 @@ private enum ProtocolChecks {
         try checkSpeechDetector()
         try await checkPhraseListener()
         try checkStillness()
+        try checkNetworkWay()
         try checkShelf()
         try checkPauseWords()
         try checkCallWords()
@@ -1067,6 +1068,15 @@ private enum ProtocolChecks {
                   "the nose stands where the page has it: \(xs.min() ?? 0)-\(xs.max() ?? 0), \(ys.min() ?? 0)-\(ys.max() ?? 0)")
     }
 
+    private static func checkNetworkWay() throws {
+        let wifi = NetworkWay(interface: "en0", kind: "Wi‑Fi"), mobile = NetworkWay(interface: "pdp_ip0", kind: "мобильная сеть")
+        try check(mobile.leavesSocketsBehind(after: wifi) && wifi.leavesSocketsBehind(after: mobile), "another interface takes new sockets")
+        try check(wifi.leavesSocketsBehind(after: .none) && mobile.leavesSocketsBehind(after: .none), "a way back takes new sockets, on the same interface too")
+        try check(!wifi.leavesSocketsBehind(after: wifi), "an update on the same interface leaves the sockets alone")
+        try check(!NetworkWay.none.leavesSocketsBehind(after: wifi), "with no way out there is nowhere to open them")
+        print("Network way checks passed: only another interface or a way back takes new sockets.")
+    }
+
     private static func checkShelf() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("shelf-check-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1124,7 +1134,7 @@ private enum ProtocolChecks {
 
     private static func checkPauseWords() throws {
         for language in [CallWords.russian, .english, .spanish] {
-            var words = PauseWords(language.pause)
+            var words = PauseWords(phrases: language.pause, sounds: language.sounds)
             let start = Date()
             var said: [String] = []
             for step in 0..<18 {
@@ -1138,9 +1148,56 @@ private enum ProtocolChecks {
             try check(words.next(now: start.addingTimeInterval(17 * (PauseWords.gap + 1) + 5)) == nil, "pause words stay rare")
         }
         try check(CallWords.russian.pause.count == 16 && CallWords.english.pause.count == 16 && CallWords.spanish.pause.count == 6, "the waiting phrases of each language")
+        try checkShortSounds()
         for word in CallWords.russian.pause + CallWords.english.pause {
             try check(!["смотр", "вижу", "look", "watch"].contains { word.lowercased().contains($0) }, "a waiting phrase sounds with the eyes shut too: \(word)")
         }
+    }
+
+    private static func checkShortSounds() throws {
+        try check(CallWords.russian.sounds == ["Угу.", "Ага.", "Так.", "Мм."], "the short sounds in Russian")
+        try check(CallWords.english.sounds == ["Mm-hm.", "Okay.", "Right.", "Got it."], "the short sounds in English")
+        try check(CallWords.spanish.sounds == ["Ajá.", "Vale.", "Mm."], "the short sounds in Spanish")
+
+        var words = PauseWords(phrases: CallWords.russian.pause, sounds: CallWords.russian.sounds)
+        let turns = (0..<4000).map { _ in words.startsEarly() }
+        try check(!zip(turns, turns.dropFirst()).contains { $0 && $1 }, "never an early sound on two turns in a row")
+        let share = Double(turns.filter { $0 }.count) / Double(turns.count)
+        try check(share > 0.35 && share <= 0.5, "an early sound about every other turn, got \(share)")
+
+        let start = Date()
+        var said: [String] = []
+        for step in 0..<8 {
+            guard let sound = words.earlySound(now: start.addingTimeInterval(Double(step) * (PauseWords.gap + 1)), isReady: { _ in true }) else {
+                throw CheckFailure(description: "an early sound after a long pause")
+            }
+            try check(sound != said.last, "the same sound twice in a row: \(sound)")
+            said.append(sound)
+        }
+        try check(Set(said).count == CallWords.russian.sounds.count, "every sound gets its turn")
+        try check(words.earlySound(now: start.addingTimeInterval(7 * (PauseWords.gap + 1) + 5), isReady: { _ in true }) == nil, "a sound keeps the same gap as a phrase")
+        try check(words.next(now: start.addingTimeInterval(7 * (PauseWords.gap + 1) + 5)) == nil, "a phrase waits the gap after a sound")
+        try check(words.next(now: start.addingTimeInterval(8 * (PauseWords.gap + 1))) != nil, "a phrase after the gap")
+
+        var ready = PauseWords(phrases: CallWords.russian.pause, sounds: CallWords.russian.sounds)
+        try check(ready.earlySound(isReady: { _ in false }) == nil, "a sound not on the phone is skipped")
+        try check(ready.earlySound(isReady: { $0 == "Ага." }) == "Ага.", "only a sound on the phone goes")
+
+        var before = PauseWords(phrases: CallWords.russian.pause, sounds: CallWords.russian.sounds)
+        let sounds = (0..<3000).compactMap { _ in before.soundBeforeAnswer { $0 != "Так." } }
+        try check(!sounds.contains("Так."), "a sound before the answer only from what is ready")
+        try check(sounds.count > 800 && sounds.count < 1200, "a sound before about one answer in three, got \(sounds.count)")
+        try check(before.next() != nil, "a sound before an answer does not hold up the next pause")
+
+        func sound(_ samples: [Int16]) -> Data { samples.withUnsafeBytes { Data($0) } }
+        let voice = [Int16](repeating: 5000, count: 1000)
+        let trimmed = KeptSound.withoutSilence(sound([Int16](repeating: 30, count: 6000) + voice + [Int16](repeating: 0, count: 6000)))
+        try check(trimmed.count == (240 + 1000 + 479) * 2, "the silence around a word goes, a little stays, got \(trimmed.count)")
+        let silence = sound([Int16](repeating: 0, count: 500))
+        try check(KeptSound.withoutSilence(silence) == silence, "all silence stays as it is")
+        try check(KeptSound.withoutSilence(Data()).isEmpty, "no sound stays no sound")
+        let edge = sound(voice)
+        try check(KeptSound.withoutSilence(edge) == edge, "a word with no silence around it stays whole")
     }
 
     private static func checkCallWords() throws {
@@ -1156,9 +1213,9 @@ private enum ProtocolChecks {
         let russian = strings(.russian)
         for language in [CallWords.russian, .english, .spanish] {
             let all = strings(language)
-            try check(all.count - language.pause.count == russian.count - CallWords.russian.pause.count && all.allSatisfy { !$0.isEmpty }, "every word has its text")
+            try check(all.count - language.pause.count - language.sounds.count == russian.count - CallWords.russian.pause.count - CallWords.russian.sounds.count && all.allSatisfy { !$0.isEmpty }, "every word has its text")
             try check(Set(language.pause).count == language.pause.count, "different waiting phrases")
-            let spoken = [language.greeting, language.failed, language.lostHearing, language.noHintYet] + language.pause
+            let spoken = [language.greeting, language.failed, language.lostHearing, language.noHintYet] + language.pause + language.sounds
             try check(spoken.allSatisfy { $0.last.map { ".?!".contains($0) } == true }, "what is said ends as a sentence")
         }
         for words in strings(.english) + strings(.spanish) {

@@ -12,6 +12,7 @@ final class SpeechStream {
     private var socket: URLSessionWebSocketTask?
     private var keeper: Task<Void, Never>?
     private var pings: Task<Void, Never>?
+    private var delay: UInt64 = 1
 
     init(client: ServerClient, sessionID: String) {
         self.client = client
@@ -20,8 +21,8 @@ final class SpeechStream {
 
     func start() {
         guard keeper == nil else { return }
+        delay = 1
         keeper = Task { [weak self] in
-            var delay: UInt64 = 1
             while let self, !Task.isCancelled {
                 do {
                     let socket = try self.client.listenSocket(sessionID: self.sessionID)
@@ -31,15 +32,16 @@ final class SpeechStream {
                     _ = try await socket.receive()  // The server only listens, so this ends when the socket does.
                 } catch {
                     if Task.isCancelled { return }
-                    if self.isOpen { delay = 1 }
-                    self.onDiagnostic?("Поток речи закрылся: \(error.localizedDescription)")
+                    if self.socket != nil { self.onDiagnostic?("Поток речи закрылся: \(error.localizedDescription)") }
                 }
+                if Task.isCancelled { return }
                 self.isOpen = false
                 self.pings?.cancel()
                 self.socket?.cancel(with: .goingAway, reason: nil)
                 self.socket = nil
-                do { try await Task.sleep(nanoseconds: delay * 1_000_000_000) } catch { return }
-                delay = min(delay * 2, 10)
+                let wait = self.delay
+                self.delay = min(wait * 2, 10)
+                do { try await Task.sleep(nanoseconds: wait * 1_000_000_000) } catch { return }
             }
         }
     }
@@ -54,18 +56,33 @@ final class SpeechStream {
         isOpen = false
     }
 
+    /// A new socket at once: the old one lives on a way the phone has left.
+    func reopen() {
+        guard keeper != nil else { return }
+        stop()
+        start()
+    }
+
     @discardableResult
     func send(_ samples: [Int16]) -> Bool {
         guard isOpen, let socket else { return false }
         let data = samples.withUnsafeBytes { Data($0) }  // Little-endian, as the server expects.
-        let log = onDiagnostic
-        Task {
+        Task { [weak self] in
             do { try await socket.send(.data(data)) } catch {
-                log?("Поток речи: звук не ушёл: \(error.localizedDescription)")
-                socket.cancel(with: .goingAway, reason: nil)  // The pending receive now fails, and the keeper opens a new one a second later.
+                self?.lost(socket, "звук не ушёл: \(error.localizedDescription)")
             }
         }
         return true
+    }
+
+    /// On a dead path a receive can wait for half a minute, so a failed send or ping ends the socket here.
+    /// The next one comes after the keeper's wait: one that opens and fails again cannot spin.
+    private func lost(_ socket: URLSessionWebSocketTask, _ reason: String) {
+        guard self.socket === socket else { return }  // The sounds after the first fail too: one break, one line.
+        if isOpen { onDiagnostic?("Поток речи оборвался: \(reason)") }
+        isOpen = false
+        self.socket = nil
+        socket.cancel(with: .goingAway, reason: nil)
     }
 
     private func startPings(_ socket: URLSessionWebSocketTask) {
@@ -74,17 +91,22 @@ final class SpeechStream {
             var answered = true
             while !Task.isCancelled {
                 guard let self else { return }
-                if !answered {  // The socket went quiet: the pending receive now fails and the keeper opens a new one.
-                    socket.cancel(with: .goingAway, reason: nil)
+                if !answered {
+                    self.lost(socket, "нет ответа на пинг")
                     return
                 }
                 answered = false
                 socket.sendPing { [weak self] error in
                     Task { @MainActor [weak self] in
-                        guard let self, self.socket === socket, error == nil else { return }
+                        guard let self, self.socket === socket else { return }
+                        if let error {
+                            if self.isOpen { self.lost(socket, "пинг не прошёл: \(error.localizedDescription)") }  // One that never opened ends through its receive, which says why.
+                            return
+                        }
                         answered = true
                         if !self.isOpen {
                             self.isOpen = true
+                            self.delay = 1
                             self.onDiagnostic?("Поток речи открыт")
                         }
                     }

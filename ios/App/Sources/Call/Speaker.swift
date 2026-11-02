@@ -5,6 +5,7 @@ import Shared
 protocol Speaker: AnyObject {
     var onSpeaking: ((Bool) -> Void)? { get set }
     var onSounding: ((Bool) -> Void)? { get set }
+    var onSentence: ((Int) -> Void)? { get set }
     var mayStart: (() -> Bool)? { get set }
     func prepare(client: ServerClient, journal: SharedJournal?)
     func speak(_ text: String)
@@ -15,6 +16,7 @@ protocol Speaker: AnyObject {
     func endSentence()
     func waitUntilQuiet() async
     func keep(_ texts: [String])
+    func holds(_ text: String) -> Bool
     func stop()
     func finish()
 }
@@ -22,6 +24,7 @@ protocol Speaker: AnyObject {
 extension Speaker {
     var onSpeaking: ((Bool) -> Void)? { get { nil } set {} }
     var onSounding: ((Bool) -> Void)? { get { nil } set {} }
+    var onSentence: ((Int) -> Void)? { get { nil } set {} }
     var mayStart: (() -> Bool)? { get { nil } set {} }
     func prepare(client: ServerClient, journal: SharedJournal?) {}
     func speakAndWait(_ parts: [String]) async -> Int {
@@ -31,6 +34,7 @@ extension Speaker {
     func endSentence() {}
     func waitUntilQuiet() async {}
     func keep(_ texts: [String]) {}
+    func holds(_ text: String) -> Bool { false }
     func finish() { stop() }
 }
 
@@ -44,6 +48,7 @@ final class ServerSpeaker: Speaker {
     private static let sentenceGap = Data(count: 9600)  // 200 ms between two sentences, and time to stop before the next one sounds.
     var onSpeaking: ((Bool) -> Void)?
     var onSounding: ((Bool) -> Void)?
+    var onSentence: ((Int) -> Void)?  // A sentence after the first has begun to sound.
     var mayStart: (() -> Bool)?
     let engine = AVAudioEngine()
     private var isSounding = false
@@ -58,7 +63,9 @@ final class ServerSpeaker: Speaker {
     private var lineNumber = 0  // Stopping fires the marks of what was on the player too, and this tells them from real ones.
     private var partsOut = 0  // Sentences with sound on the player.
     private var partsDone = 0  // Sentences played to their end.
+    private var partsHeard = 0  // Sentences that have begun to sound.
     private var endsHere = false
+    private var voiceTimed = false
     var hearsOverVoice = false
     var voice: String?  // Read for each line, so a new choice works from the next one.
     private var filtersVoice = false
@@ -90,7 +97,7 @@ final class ServerSpeaker: Speaker {
 
     private func speak(parts: [String]) {
         stop()
-        (partsOut, partsDone, endsHere) = (0, 0, false)
+        (partsOut, partsDone, partsHeard, endsHere, voiceTimed) = (0, 0, 0, false, false)
         onSpeaking?(true)
         playback = Task { [weak self] in
             await self?.play(parts)
@@ -107,7 +114,7 @@ final class ServerSpeaker: Speaker {
         speak(parts: parts)
         let playback = playback
         await withTaskCancellationHandler { await playback?.value } onCancel: { playback?.cancel() }
-        return min(partsOut, partsDone + 1)
+        return partsHeard
     }
 
     func endSentence() {
@@ -127,10 +134,12 @@ final class ServerSpeaker: Speaker {
             for text in texts where self?.kept[Self.key(text, voice)] == nil {
                 var sound = Data()
                 do { for try await byte in try await client.speech(text, voice: voice) { sound.append(byte) } } catch { return }
-                self?.kept[Self.key(text, voice)] = sound
+                self?.kept[Self.key(text, voice)] = KeptSound.withoutSilence(sound)
             }
         }
     }
+
+    func holds(_ text: String) -> Bool { kept[Self.key(text, voice)] != nil }
 
     private static func key(_ text: String, _ voice: String?) -> String { (voice ?? "") + ":" + text }
 
@@ -191,6 +200,7 @@ final class ServerSpeaker: Speaker {
     private func speakOurselves(_ parts: [String], from first: Int) async {
         for index in first..<parts.count where !endsHere && !Task.isCancelled {
             partsOut = index + 1
+            sentenceBegan(index)
             await fallback.speakAndWait(parts[index])
             if !Task.isCancelled { partsDone = index + 1 }
         }
@@ -208,7 +218,8 @@ final class ServerSpeaker: Speaker {
             pending.append(byte)
             guard pending.count == Self.bufferBytes else { continue }
             if !begun {
-                if index == 0 { journal?.append("Голос сервера: первый звук готов через \(Int(Date().timeIntervalSince(started) * 1000)) мс") }
+                if !voiceTimed { journal?.append("Голос сервера: первый звук готов через \(Int(Date().timeIntervalSince(started) * 1000)) мс") }
+                voiceTimed = true
                 try await begin(index)
                 begun = true
             }
@@ -227,6 +238,24 @@ final class ServerSpeaker: Speaker {
         try Task.checkCancellation()
         sounds(true)
         partsOut = index + 1
+        if index == 0 { sentenceBegan(0) } else { mark(startOf: index) }
+    }
+
+    /// Goes on the player right ahead of the sentence's sound, which may wait there behind the one before it.
+    private func mark(startOf index: Int) {
+        guard let start = silentPoint else { return }
+        let line = lineNumber
+        Self.schedule(start, on: player) { [weak self] in
+            Task { @MainActor [weak self] in
+                if line == self?.lineNumber { self?.sentenceBegan(index) }
+            }
+        }
+    }
+
+    private func sentenceBegan(_ index: Int) {
+        guard index >= partsHeard else { return }  // The phone's own voice can take over a sentence that broke off.
+        partsHeard = index + 1
+        if index > 0 { onSentence?(index) }
     }
 
     private func mark(endOf index: Int, line: Int) {
@@ -288,6 +317,7 @@ final class ServerSpeaker: Speaker {
         let watchdog = Task { [weak self] in  // A route change stops the engine with no callback at all.
             try? await Task.sleep(nanoseconds: UInt64((seconds + 2) * 1_000_000_000))
             guard !Task.isCancelled else { return }
+            self?.lineNumber += 1  // Stopping fires the marks of what never sounded.
             self?.player.stop()
             played.end()
         }

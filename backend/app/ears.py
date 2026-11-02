@@ -6,7 +6,8 @@ import contextlib
 import json
 import logging
 import re
-from typing import Callable
+import time
+from typing import Callable, Optional
 
 import websockets
 
@@ -22,6 +23,7 @@ ANSWER_SECONDS = 10
 RETRY_SECONDS = 1
 LONGEST_WAIT = 10
 connect = websockets.connect
+now = time.monotonic
 
 
 def tidy(text: str) -> str:
@@ -29,9 +31,45 @@ def tidy(text: str) -> str:
     return re.sub(r"([.!?…])[.!?…]+", r"\1", text.strip())
 
 
+def _same_words(one: str, other: str) -> bool:
+    """A mark or a capital would not change what the model thinks."""
+    return re.findall(r"\w+", one.lower()) == re.findall(r"\w+", other.lower())
+
+
+class Timing:
+    """How long before the finished phrase its end and its last draft were known. Only numbers leave this class, and a
+    draft goes with its turn. Turns can overlap, and a draft names no turn: it belongs to the one opened last."""
+
+    def __init__(self):
+        self.turns: dict = {}
+        self.opened = None
+
+    def see(self, event: dict) -> Optional[dict]:
+        """Gives the numbers when the turn is finished."""
+        kind = event.get("type")
+        if kind == "speechStart":
+            self.opened = event.get("turnId")
+        elif kind == "transcript" and not event.get("final"):
+            turn = self.turns.setdefault(self.opened, {})
+            if event.get("transcript") != turn.get("draft"):
+                turn.update(draft=event.get("transcript"), drafted=now())
+        elif kind == "speechEnd":
+            self.turns.setdefault(event.get("turnId"), {})["ended"] = now()
+        elif kind == "speechComplete":
+            turn = self.turns.pop(event.get("turnId"), {})
+            done = now()
+            return {
+                "end_ms": round((done - turn["ended"]) * 1000) if "ended" in turn else None,
+                "draft_ms": round((done - turn["drafted"]) * 1000) if "drafted" in turn else None,
+                "same": _same_words(turn["draft"] or "", event.get("transcript", "")) if "drafted" in turn else None,
+            }
+        return None
+
+
 class Ears:
-    def __init__(self, on_turn: Callable[[str], None]):
+    def __init__(self, on_turn: Callable[[str], None], on_timing: Callable[..., None] = lambda **numbers: None):
         self.on_turn = on_turn
+        self.on_timing = on_timing
         self.frames: asyncio.Queue = asyncio.Queue(maxsize=BACKLOG)
         self.task = asyncio.create_task(self._keep_open())
 
@@ -70,11 +108,13 @@ class Ears:
 
     async def _exchange(self, socket) -> None:
         feed = asyncio.create_task(self._feed(socket))
+        timing = Timing()
         try:
             async for message in socket:
                 if isinstance(message, bytes):
                     continue
                 event = json.loads(message)
+                self._time(timing, event)
                 if event.get("type") == "speechComplete" and tidy(event.get("transcript", "")):
                     self.on_turn(tidy(event["transcript"]))
                 elif event.get("type") == "error":
@@ -83,6 +123,15 @@ class Ears:
             feed.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await feed
+
+    def _time(self, timing: Timing, event: dict) -> None:
+        """Only for the log, so nothing here may cost a turn."""
+        try:
+            numbers = timing.see(event)
+            if numbers and tidy(event.get("transcript", "")):
+                self.on_timing(**numbers)
+        except Exception as error:
+            log.warning("Speech timing: %s", type(error).__name__)
 
     async def _feed(self, socket) -> None:
         wait = PHONE_GAP

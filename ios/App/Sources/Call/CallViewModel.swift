@@ -47,12 +47,16 @@ final class CallViewModel: ObservableObject {
         var turn: Int?
         var id: Int?
         var frameTS: Int64?
+        var sound: String?  // Sounds straight ahead of the text, as its first sentence, so the voice of the text is asked for at once.
     }
 
     private static let streamWait: UInt64 = 2_500_000_000  // Past this the server has not heard the phrase, so it goes as a file.
     private static let warmthGap: UInt64 = 20_000_000_000
     private static let screenWait = 1.0
-    private static let firstWordAfter = 1.5
+    private static let firstWordAfter = 1.5  // A longer word waits this long: while the agent speaks it cannot hear the person.
+    private static let earlySoundAfter = 0.7
+    private static let longWait = 3000  // In ms from the end of speech.
+    private static let silenceBeforeSound = 1.5
     private static let mostWords = 2  // On one turn, however long the wait.
 
     private let audioSession = CallAudioSession()
@@ -76,6 +80,7 @@ final class CallViewModel: ObservableObject {
     private var microphone: CallMicrophone?
     private var conversation: Task<Void, Never>?
     private var speechStream: SpeechStream?
+    private var networkWatch: NetworkWatch?
     private var streaming: Task<Void, Never>?
     private var warmth: Task<Void, Never>?
     private var interruption: Task<Void, Never>?
@@ -86,11 +91,13 @@ final class CallViewModel: ObservableObject {
     private var currentLine: Line?
     private var speaking: Task<Void, Never>?
     private var isSounding = false
+    private var lastSounded = Date.distantPast
     private var heardTurn = 0
+    private var answeredTurn = 0
     private var lastHeard = Date.distantPast
     private var voiceEnded = Date.distantPast
     private var droppedSounds = 0
-    private var pauseWords = PauseWords(CallWords.device.pause)
+    private var pauseWords = PauseWords(phrases: CallWords.device.pause, sounds: CallWords.device.sounds)
     private var pause: Task<Void, Never>?
     private var wordsThisTurn = 0
     private var eyes: EyesStage?
@@ -154,6 +161,7 @@ final class CallViewModel: ObservableObject {
         }
         window.onDiagnostic = { [weak self] in self?.journal?.append($0) }
         self.speaker.onSounding = { [weak self] in self?.soundChanged($0) }
+        self.speaker.onSentence = { [weak self] in self?.sentenceSounds($0) }
         self.speaker.mayStart = { [weak self] in self?.microphone?.isSpeaking != true }
         window.onRepeatHint = { [weak self] in self?.repeatHint() }
         audioSession.onActivityChange = { [weak self] active in
@@ -223,7 +231,7 @@ final class CallViewModel: ObservableObject {
                 self.isGreeted = true
                 self.status = self.words.talk
                 self.hearPerson()
-                self.speaker.keep(self.words.pause)
+                self.speaker.keep(self.words.sounds + self.words.pause)
             } catch {
                 guard !Task.isCancelled, self.workflowID == id else { return }
                 if !self.isCallActive { self.endCall() }
@@ -264,10 +272,13 @@ final class CallViewModel: ObservableObject {
         speaker.finish()
         connection?.stop()
         connection = nil
+        networkWatch?.stop()
+        networkWatch = nil
         warmth?.cancel()
         warmth = nil
         shelf?.clear()
         heardTurn = 0
+        answeredTurn = 0
         lastHeard = .distantPast
         droppedSounds = 0
         movedAt = 0
@@ -409,7 +420,7 @@ final class CallViewModel: ObservableObject {
         voice = id
         store?.voice = id
         (speaker as? ServerSpeaker)?.voice = id
-        if isGreeted { speaker.keep(words.pause) }
+        if isGreeted { speaker.keep(words.sounds + words.pause) }
     }
 
     func loadVoices() async {
@@ -504,7 +515,7 @@ final class CallViewModel: ObservableObject {
 
     private func takeWords(from store: SharedStore) {
         words = .of(store.settings.userLang)
-        pauseWords = PauseWords(words.pause)
+        pauseWords = PauseWords(phrases: words.pause, sounds: words.sounds)
     }
 
     private func newWorkflow() -> UUID {
@@ -640,9 +651,10 @@ final class CallViewModel: ObservableObject {
             while let self, !Task.isCancelled, let line = self.takeLine() {
                 self.currentLine = line
                 let parts = Sentences.of(line.text)
-                let heard = await self.speaker.speakAndWait(parts)
+                let sound = line.sound.map { [$0] } ?? []
+                let heard = await self.speaker.speakAndWait(sound + parts) - sound.count
                 self.currentLine = nil
-                if heard < parts.count { self.tellCut(line.id, said: parts.prefix(heard).joined(separator: " ")) }
+                if heard < parts.count { self.tellCut(line.id, said: parts.prefix(max(heard, 0)).joined(separator: " ")) }
             }
             self?.speaking = nil
         }
@@ -690,10 +702,22 @@ final class CallViewModel: ObservableObject {
 
     private func soundChanged(_ sounding: Bool) {
         isSounding = sounding
+        if !sounding { lastSounded = Date() }
         microphone?.agentSpeaks(sounding)
         eyes?.speaks(sounding)
         guard sounding else { return }
         if hearsOverVoice { watchForInterruption() }
+        if let line = currentLine, line.sound != nil, let turn = line.turn {
+            journal?.append("Ход \(turn): звук перед ответом через \(sinceVoiceEnded()) мс после конца речи")
+        } else { answerSounds() }
+    }
+
+    /// With a sound ahead of it the answer begins at its second sentence.
+    private func sentenceSounds(_ index: Int) {
+        if index == 1, currentLine?.sound != nil { answerSounds() }
+    }
+
+    private func answerSounds() {
         guard let line = currentLine, let turn = line.turn, let client, let sessionID else { return }
         journal?.append("Ход \(turn): первый звук через \(sinceVoiceEnded()) мс после конца речи")
         let journal = journal
@@ -721,15 +745,16 @@ final class CallViewModel: ObservableObject {
     }
 
     /// A short ready word while the agent thinks, so the line never goes dead. It only ever fills silence.
-    private func fillPause(after seconds: Double) {
+    private func fillPause(after seconds: Double, early: Bool = false) {
         pause?.cancel()
         pause = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard let self, !Task.isCancelled, self.isCallActive, self.currentLine == nil, self.lines.isEmpty,
                   self.waitingHint == nil, self.microphone?.isSpeaking != true,
-                  self.wordsThisTurn < Self.mostWords, let words = self.pauseWords.next() else { return }
+                  self.wordsThisTurn < Self.mostWords,
+                  let words = early ? self.pauseWords.earlySound(isReady: { self.speaker.holds($0) }) : self.pauseWords.next() else { return }
             self.wordsThisTurn += 1
-            self.journal?.append("Фраза на паузе")
+            self.journal?.append(early ? "Ранний звук" : "Фраза на паузе")
             self.enqueue(Line(text: words, kind: .filler))
             self.fillPause(after: PauseWords.gap)
         }
@@ -754,6 +779,14 @@ final class CallViewModel: ObservableObject {
         self.connection = connection
         connection.start(sessionID: sessionID)
         openStream(client: client, sessionID: sessionID)
+        let watch = NetworkWatch()
+        watch.onDiagnostic = { [weak self] in self?.journal?.append($0) }
+        watch.onNewWay = { [weak self] in
+            self?.connection?.reopen()
+            self?.speechStream?.reopen()
+        }
+        networkWatch = watch
+        watch.start()
         warmth = Task {
             while !Task.isCancelled {
                 try? await client.health()
@@ -807,7 +840,8 @@ final class CallViewModel: ObservableObject {
             eyes?.wait(for: .reply)
             dropLines { $0.kind != .hint }
             wordsThisTurn = 0
-            fillPause(after: Self.firstWordAfter)
+            let early = pauseWords.startsEarly() && words.sounds.contains { speaker.holds($0) }
+            fillPause(after: early ? Self.earlySoundAfter : Self.firstWordAfter, early: early)
         case .say(let say):
             hear(say)
         case .look(let event):
@@ -863,7 +897,16 @@ final class CallViewModel: ObservableObject {
         lastInstruction = say.textRU
         lastSpokenHint = say.textRU
         if say.textRU.hasSuffix("?") { eyes?.ask(say.textRU) }
-        enqueue(Line(text: say.textRU, turn: say.turn, id: say.line, frameTS: say.frameTS))
+        enqueue(Line(text: say.textRU, turn: say.turn, id: say.line, frameTS: say.frameTS, sound: soundBeforeAnswer(say)))
+        answeredTurn = say.turn
+    }
+
+    /// After a long wait in silence a short sound goes first, so the person knows the answer is coming.
+    private func soundBeforeAnswer(_ say: SayEvent) -> String? {
+        let start = say.textRU.lowercased()
+        guard say.turn > answeredTurn, sinceVoiceEnded() >= Self.longWait, !isSounding, currentLine == nil, lines.isEmpty,
+              waitingHint == nil, microphone?.isSpeaking != true, Date().timeIntervalSince(lastSounded) >= Self.silenceBeforeSound else { return nil }
+        return pauseWords.soundBeforeAnswer { speaker.holds($0) && !start.hasPrefix($0.dropLast().lowercased()) }
     }
 
     /// The screen as it is now for the line just heard. If it does not come, the server goes on with the last frame it has.

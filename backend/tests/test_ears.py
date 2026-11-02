@@ -86,6 +86,64 @@ def test_turns_arrive_tidy_and_empty_ones_stay_out(monkeypatch):
     }
 
 
+def test_the_log_learns_how_early_a_phrase_was_known_and_never_its_words(monkeypatch):
+    socket = FakeSocket()
+    fake_connection(monkeypatch, socket)
+    moments = iter([10.0, 10.5, 10.75, 11.0, 11.25, 11.5, 11.75, 12.0, 13.0, 14.0])
+    monkeypatch.setattr(ears, "now", lambda: next(moments))
+    turns = []
+    numbers = []
+
+    async def scenario():
+        hearing = ears.Ears(turns.append, lambda **row: numbers.append(row))
+        socket.say({"sessionId": "live"},
+                   {"type": "speechStart", "turnId": 1},
+                   {"type": "transcript", "transcript": "Что", "final": False},  # 10.0
+                   {"type": "transcript", "transcript": "Что это", "final": False},  # 10.5
+                   {"type": "transcript", "transcript": "Что это", "final": False},
+                   {"type": "speechEnd", "turnId": 1},  # 10.75
+                   {"type": "speechStart", "turnId": 2},
+                   {"type": "transcript", "transcript": "Спасибо", "final": False},  # 11.0
+                   {"type": "speechComplete", "turnId": 1, "transcript": "Что, это?"},  # 11.25
+                   {"type": "speechEnd", "turnId": 2},  # 11.5
+                   {"type": "speechComplete", "turnId": 2, "transcript": "Спасибо вам."},  # 11.75
+                   {"type": "speechComplete", "turnId": 3, "transcript": "Без черновика."},  # 12.0
+                   {"type": "speechStart", "turnId": 4},
+                   {"type": "speechEnd", "turnId": 4},  # 13.0
+                   {"type": "speechComplete", "turnId": 4, "transcript": "  "})  # 14.0
+        await until(lambda: len(turns) == 3)
+        await asyncio.sleep(0.01)
+        hearing.close()
+    run(scenario)
+    assert turns == ["Что, это?", "Спасибо вам.", "Без черновика."]
+    assert numbers == [
+        {"end_ms": 500, "draft_ms": 750, "same": True},
+        {"end_ms": 250, "draft_ms": 750, "same": False},
+        {"end_ms": None, "draft_ms": None, "same": None},
+    ]
+
+
+def test_timing_never_costs_a_turn(monkeypatch):
+    socket = FakeSocket()
+    fake_connection(monkeypatch, socket)
+    turns = []
+
+    def broken(**numbers):
+        raise OSError("the log is gone")
+
+    async def scenario():
+        hearing = ears.Ears(turns.append, broken)
+        socket.say({"sessionId": "live"},
+                   {"type": "speechStart", "turnId": 1},
+                   {"type": "transcript", "transcript": 7, "final": False},
+                   {"type": "speechComplete", "turnId": 1, "transcript": "Что это?"},
+                   {"type": "speechComplete", "turnId": 2, "transcript": "Спасибо."})
+        await until(lambda: len(turns) == 2)
+        hearing.close()
+    run(scenario)
+    assert turns == ["Что это?", "Спасибо."]
+
+
 def test_sound_goes_in_order_and_silence_keeps_the_session_alive(monkeypatch):
     socket = FakeSocket()
     fake_connection(monkeypatch, socket)
