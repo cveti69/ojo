@@ -313,7 +313,7 @@ private enum ProtocolChecks {
         try checkNetworkWay()
         try checkShelf()
         try checkPauseWords()
-        try checkVoiceChoice()
+        try checkPromisedPaste()
         try checkCallWords()
         try checkScreenTextGeometry()
         try checkSentences()
@@ -1181,24 +1181,6 @@ private enum ProtocolChecks {
         try check(cut.seconds < 2, "only the person's words get through, got \(cut.seconds)")
     }
 
-    private static func checkVoiceChoice() throws {
-        let plain = VoiceChoice(id: "ru-plain", language: "ru-RU", quality: 1)
-        let better = VoiceChoice(id: "ru-better", language: "ru-RU", quality: 2)
-        let best = VoiceChoice(id: "ru-best", language: "ru-RU", quality: 3)
-        let odd = VoiceChoice(id: "ru-odd", language: "ru-RU", quality: 4, isSpecial: true)
-        let foreign = VoiceChoice(id: "en-best", language: "en-US", quality: 3)
-        try check(VoiceChoice.best(of: [plain, better, best, odd, foreign], for: "ru", usual: "ru-plain") == best, "the best voice of the language")
-        try check(VoiceChoice.best(of: [plain, better, odd, foreign], for: "ru-ID", usual: nil) == better, "a phone's region is still its language")
-        try check(VoiceChoice.best(of: [odd, foreign], for: "ru", usual: nil) == nil, "no voice for the language means none")
-        let spain = VoiceChoice(id: "es-spain", language: "es-ES", quality: 1)
-        let mexico = VoiceChoice(id: "es-mexico", language: "es-MX", quality: 1)
-        let richer = VoiceChoice(id: "es-richer", language: "es-ES", quality: 2)
-        try check(VoiceChoice.best(of: [spain, mexico], for: "es_MX", usual: "es-spain") == mexico, "among equals the same accent")
-        try check(VoiceChoice.best(of: [mexico, richer], for: "es-MX", usual: "es-mexico") == richer, "quality goes before the accent")
-        let other = VoiceChoice(id: "ru-other", language: "ru-RU", quality: 1)
-        try check(VoiceChoice.best(of: [plain, other], for: "ru", usual: "ru-plain") == plain, "among equals the voice iOS would take")
-    }
-
     private static func checkPauseWords() throws {
         for language in [CallWords.russian, .english, .spanish] {
             var words = PauseWords(phrases: language.pause, sounds: language.sounds)
@@ -1288,6 +1270,24 @@ private enum ProtocolChecks {
         try check(KeptSound.withoutSilence(edge) == edge, "a word with no silence around it stays whole")
     }
 
+    /// An answer about a screen they have left stays unsaid, and only the ready text of a voice already under way survives that.
+    private static func checkPromisedPaste() throws {
+        func say(_ text: String, paste: String?) throws -> SayEvent {
+            let body = #"{"type":"say","turn":10,"line":null,"frame_ts":1793632187073,"text_ru":"\#(text)","paste_text":\#(paste.map { "\"\($0)\"" } ?? "null"),"timings":{"model_ms":1968}}"#
+            guard case .say(let event) = try JSONDecoder().decode(ServerEvent.self, from: Data(body.utf8)) else {
+                throw CheckFailure(description: "say decoding")
+            }
+            return event
+        }
+        let rest = try say("", paste: "今週は忙しくて")
+        let line = try say("Хорошо, приготовил.", paste: "今週は忙しくて")
+        let plain = try say("", paste: nil)
+        try check(rest.promisedPaste(lastSaid: 10) == "今週は忙しくて", "the rest of a line that has gone out keeps its text")
+        try check(line.promisedPaste(lastSaid: 10) == nil, "a line that stays unsaid takes its text with it")
+        try check(rest.promisedPaste(lastSaid: 9) == nil, "and so does the rest of one that stayed unsaid a moment before")
+        try check(plain.promisedPaste(lastSaid: 10) == nil, "with no text there is nothing to keep")
+    }
+
     private static func checkCallWords() throws {
         for tag in ["ru", "ru-RU", "RU", "ru_RU", "ru-ID"] { try check(CallWords.of(tag) == .russian, "a Russian phone: \(tag)") }
         for tag in ["es", "es-MX", "es_ES", "es-419"] { try check(CallWords.of(tag) == .spanish, "a Spanish phone: \(tag)") }
@@ -1315,6 +1315,10 @@ private enum ProtocolChecks {
         try check(zip(strings(.english), strings(.spanish)).filter { $0 == $1 }.isEmpty, "every Spanish word is written out")
         try check([CallWords.russian, .english, .spanish].map(\.greeting) == ["Чем помочь?", "How can I help?", "¿En qué te ayudo?"],
                   "a call opens with the question alone: a hello of the phone's would be the second one")
+        let promises = ["голос телефона", "голосом телефона", "phone's voice", "phone voice", "voz del teléfono"]
+        for words in russian + strings(.english) + strings(.spanish) {
+            try check(!promises.contains(where: words.lowercased().contains), "the agent's voice is the one chosen, in every mode: \(words)")
+        }
     }
 
     private static func checkSentences() throws {
@@ -1380,9 +1384,6 @@ private enum ProtocolChecks {
         store.windowOpeningAt = 5_000
         try check(store.movedWithWindow(at: 5_480) && store.movedWithWindow(at: 4_920), "a move goes with our window, a little before or after")
         try check(!store.movedWithWindow(at: 6_000) && !store.movedWithWindow(at: 4_000), "and not a second away")
-        try check(!store.noiseReduction, "the plain sound by default")
-        defaults.set(true, forKey: "testSound")  // The tick of the last build, which meant the opposite.
-        try check(!store.noiseReduction, "an old tick does not carry over")
         try check(!store.fastMode && !store.settings.fast, "the fast mode is off until chosen")
         store.fastMode = true
         let nextLaunch = try SharedStore(configuration: configuration, defaults: defaults)

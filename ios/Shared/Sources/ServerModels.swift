@@ -133,6 +133,9 @@ public struct SayEvent: Decodable, Sendable {
     public let pasteText: String?
     public let timings: SayTimings
     enum CodingKeys: String, CodingKey { case turn, line, frameTS = "frame_ts", textRU = "text_ru", pasteText = "paste_text", timings }
+
+    /// The ready text of an answer whose line has gone to the voice ahead of it. They have heard it promised, so it stays when they move on.
+    public func promisedPaste(lastSaid: Int) -> String? { turn == lastSaid && textRU.isEmpty ? pasteText : nil }
 }
 
 public struct ReadEvent: Decodable, Sendable {

@@ -1,4 +1,4 @@
-"""A call the person chose to be fast: other models and the phone's voice. Its screen comes as in any call."""
+"""A call the person chose to be fast: other models. Its screen comes as in any call."""
 from __future__ import annotations
 
 import pytest

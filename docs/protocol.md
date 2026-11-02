@@ -45,8 +45,7 @@ a check mark or a price digit. It starts no turn, and the frame stays the latest
 `effort` picks the model's reasoning depth for the whole call: `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Without it the
 server's value applies, `low` for now. `character` picks the agent's manner: `warm`, `strict`, `brief`, `patient`, or `own` with its text in
 `own_character`, up to 500 characters. The manner changes the tone only: the prohibitions and the answer format stay on the server.
-`fast: true` is the Turbo tick: the quick model and the phone's own voice,
-with the screen as in any call, fresh after the person's words. `next_step: true` is a trial tick: one more line in the role, for this
+`fast: true` is the Turbo tick: the quick model, with the voice and the screen as in any call. `next_step: true` is a trial tick: one more line in the role, for this
 call. Without it the role and the rules are the same to the byte. The log of a call says whether each of the two was on.
 
 ## The call loop

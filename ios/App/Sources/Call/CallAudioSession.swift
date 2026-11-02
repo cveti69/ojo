@@ -9,7 +9,6 @@ final class CallAudioSession {
     var onActivityChange: ((Bool) -> Void)?
     var onDiagnostic: ((String) -> Void)?
     var onRouteChange: (() -> Void)?
-    var mode = AVAudioSession.Mode.default  // Taken at every start of the sound, so a new choice works from the next call.
     private var keepAlivePlayer: AVAudioPlayer?
     private var routeChange: AnyCancellable?
 
@@ -48,7 +47,7 @@ final class CallAudioSession {
     func activate() throws {
         let session = AVAudioSession.sharedInstance()
         // AirPods come in by the Bluetooth option. The speaker is only the way when nothing else is connected.
-        try session.setCategory(.playAndRecord, mode: mode, options: [.defaultToSpeaker, .allowAirPlay, .allowBluetoothHFP])
+        try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowAirPlay, .allowBluetoothHFP])
         try session.setActive(true)
         onDiagnostic?("Звук: \(Self.route)")
         onRouteChange?()

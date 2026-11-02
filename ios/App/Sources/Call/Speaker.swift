@@ -47,8 +47,6 @@ final class ServerSpeaker: Speaker {
     private static let longestWait: TimeInterval = 6  // A loud room must not keep the agent silent.
     private static let breath: TimeInterval = 0.5  // The microphone is deaf through a line and just after it, so it gets time to hear.
     private static let sentenceGap = Data(count: 9600)  // 200 ms between two sentences, and time to stop before the next one sounds.
-    private static let ownVoiceFirstSound: TimeInterval = 6  // No line of the phone's own voice waits for ever on a word from iOS.
-    private static let ownVoicePerLetter: TimeInterval = 0.2
     var onSpeaking: ((Bool) -> Void)?
     var onSounding: ((Bool) -> Void)?
     var onSentence: ((Int) -> Void)?  // A sentence after the first has begun to sound.
@@ -70,8 +68,6 @@ final class ServerSpeaker: Speaker {
     private var partsHeard = 0  // Sentences that have begun to sound.
     private var endsHere = false
     private var voiceTimed = false
-    private var ownVoice = false  // The whole call in the phone's voice, so two voices never meet and the server makes no sound.
-    private var ownVoiceAsked = Date.distantPast
     var hearsOverVoice = false
     var voice: String?  // Read for each line, so a new choice works from the next one.
     private var filtersVoice = false
@@ -83,7 +79,6 @@ final class ServerSpeaker: Speaker {
         configurationChange = NotificationCenter.default.publisher(for: .AVAudioEngineConfigurationChange, object: engine)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.resume() }
-        fallback.onSounding = { [weak self] in if $0 { self?.ownVoiceSounds() } }
     }
 
     /// iOS stops the engine when sound takes a new way, for example to headphones. What is on the player goes on from there,
@@ -100,7 +95,6 @@ final class ServerSpeaker: Speaker {
     func prepare(client: ServerClient, journal: SharedJournal?) {
         self.client = client
         self.journal = journal
-        ownVoice = client.settings.fast
         fallback.prepare(client: client, journal: journal)
         if hearsOverVoice != filtersVoice, !engine.isRunning {
             do {
@@ -150,7 +144,7 @@ final class ServerSpeaker: Speaker {
 
     /// Short phrases are fetched ahead, so they sound the moment they are needed.
     func keep(_ texts: [String]) {
-        guard let client, !ownVoice else { return }
+        guard let client else { return }
         let voice = voice
         Task { [weak self] in
             for text in texts where self?.kept[Self.key(text, voice)] == nil {
@@ -161,7 +155,7 @@ final class ServerSpeaker: Speaker {
         }
     }
 
-    func holds(_ text: String) -> Bool { ownVoice || kept[Self.key(text, voice)] != nil }
+    func holds(_ text: String) -> Bool { kept[Self.key(text, voice)] != nil }
 
     private static func key(_ text: String, _ voice: String?) -> String { (voice ?? "") + ":" + text }
 
@@ -185,14 +179,6 @@ final class ServerSpeaker: Speaker {
     /// plays, so the next one is on the player before this one is over.
     private func play(_ parts: [String]) async {
         guard !parts.joined().isEmpty else { return }
-        if ownVoice {
-            await waitForThePerson()
-            guard !Task.isCancelled else { return }
-            ownVoiceAsked = Date()
-            await speakOurselves(parts, from: 0)
-            if !Task.isCancelled { sounds(false) }
-            return
-        }
         guard let client else {
             await speakOurselves(parts, from: 0)
             return
@@ -230,31 +216,9 @@ final class ServerSpeaker: Speaker {
     private func speakOurselves(_ parts: [String], from first: Int) async {
         for index in first..<parts.count where !endsHere && !Task.isCancelled {
             partsOut = index + 1
-            if !ownVoice { sentenceBegan(index) }
-            let watchdog = ownVoice ? watch(parts[index]) : nil
+            sentenceBegan(index)
             await fallback.speakAndWait(parts[index])
-            watchdog?.cancel()
             if !Task.isCancelled { partsDone = index + 1 }
-        }
-    }
-
-    /// The first sound of the phone's voice comes a moment after it is asked for, and a sentence counts as heard only from there.
-    private func ownVoiceSounds() {
-        guard ownVoice else { return }
-        if !voiceTimed { journal?.append("Голос телефона: первый звук готов через \(Int(Date().timeIntervalSince(ownVoiceAsked) * 1000)) мс") }
-        voiceTimed = true
-        sounds(true)
-        sentenceBegan(partsOut - 1)
-    }
-
-    /// iOS can leave a line without the word that it ended, and every line after it would wait.
-    private func watch(_ sentence: String) -> Task<Void, Never> {
-        let seconds = Self.ownVoiceFirstSound + Double(sentence.count) * Self.ownVoicePerLetter
-        return Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            guard let self, !Task.isCancelled else { return }
-            self.journal?.append("Голос телефона: строка не закончилась за \(Int(seconds)) с")
-            self.fallback.stop()
         }
     }
 
@@ -410,13 +374,11 @@ private final class OneWait: @unchecked Sendable {
 
 @MainActor
 final class SystemSpeaker: NSObject, Speaker, AVSpeechSynthesizerDelegate {
-    var onSounding: ((Bool) -> Void)?  // Only the first sound of a line: the one who asked knows when it is over.
     private let synthesizer = AVSpeechSynthesizer()
     private var currentUtterance: AVSpeechUtterance?
     private var completion: CheckedContinuation<Void, Never>?
     private var waitingID: UUID?
     private var language = Locale.preferredLanguages.first
-    private var voice: AVSpeechSynthesisVoice?
 
     override init() {
         super.init()
@@ -424,21 +386,7 @@ final class SystemSpeaker: NSObject, Speaker, AVSpeechSynthesizerDelegate {
         synthesizer.usesApplicationAudioSession = true
     }
 
-    func prepare(client: ServerClient, journal: SharedJournal?) {
-        language = client.settings.userLang
-        voice = client.settings.fast ? Self.bestVoice(for: client.settings.userLang) : nil
-        if let voice { journal?.append("Голос телефона: \(voice.name), \(voice.language), качество \(voice.quality.rawValue)") }
-    }
-
-    private static func bestVoice(for language: String) -> AVSpeechSynthesisVoice? {
-        let usual = AVSpeechSynthesisVoice(language: language)
-        let voices = AVSpeechSynthesisVoice.speechVoices()
-        let best = VoiceChoice.best(of: voices.map {
-            VoiceChoice(id: $0.identifier, language: $0.language, quality: $0.quality.rawValue,
-                        isSpecial: !$0.voiceTraits.isDisjoint(with: [.isNoveltyVoice, .isPersonalVoice]))
-        }, for: language, usual: usual?.identifier)
-        return voices.first { $0.identifier == best?.id } ?? usual
-    }
+    func prepare(client: ServerClient, journal: SharedJournal?) { language = client.settings.userLang }
 
     func speak(_ text: String) {
         stop()
@@ -479,14 +427,9 @@ final class SystemSpeaker: NSObject, Speaker, AVSpeechSynthesizerDelegate {
             return
         }
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = voice ?? AVSpeechSynthesisVoice(language: language)
+        utterance.voice = AVSpeechSynthesisVoice(language: language)
         currentUtterance = utterance
         synthesizer.speak(utterance)
-    }
-
-    private func started(_ identifier: ObjectIdentifier) {
-        guard let currentUtterance, ObjectIdentifier(currentUtterance) == identifier else { return }
-        onSounding?(true)
     }
 
     private func finished(_ identifier: ObjectIdentifier) {
@@ -495,11 +438,6 @@ final class SystemSpeaker: NSObject, Speaker, AVSpeechSynthesizerDelegate {
         waitingID = nil
         completion?.resume()
         completion = nil
-    }
-
-    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
-        let identifier = ObjectIdentifier(utterance)
-        Task { @MainActor [weak self] in self?.started(identifier) }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {

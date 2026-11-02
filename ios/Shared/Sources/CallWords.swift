@@ -66,7 +66,6 @@ public struct CallWords: Sendable, Equatable {
     public let frameLace: String
     public let frameGlow: String
     public let frameTicks: String
-    public let noiseReduction: String
     public let fastMode: String
     public let nextStepTest: String
     public let language: String
@@ -143,7 +142,6 @@ public struct CallWords: Sendable, Equatable {
         frameLace: "Кружево",
         frameGlow: "Мягкий свет",
         frameTicks: "Чёрточки",
-        noiseReduction: "Шумоподавление",
         fastMode: "Турбо",
         nextStepTest: "Тест: следующий шаг",
         language: "Язык",
@@ -217,7 +215,6 @@ public struct CallWords: Sendable, Equatable {
         frameLace: "Lace",
         frameGlow: "Soft light",
         frameTicks: "Ticks",
-        noiseReduction: "Noise reduction",
         fastMode: "Turbo",
         nextStepTest: "Test: next step",
         language: "Language",
@@ -289,7 +286,6 @@ public struct CallWords: Sendable, Equatable {
         frameLace: "Encaje",
         frameGlow: "Luz suave",
         frameTicks: "Rayitas",
-        noiseReduction: "Reducción de ruido",
         fastMode: "Turbo",
         nextStepTest: "Prueba: siguiente paso",
         language: "Idioma",

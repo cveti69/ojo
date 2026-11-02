@@ -184,16 +184,7 @@ public final class SharedStore: @unchecked Sendable {
         }
     }
 
-    /// Calls in the louder sound mode. A trial, so it stays off until the person turns it on.
-    public var noiseReduction: Bool {
-        get { defaults.bool(forKey: "noiseReduction") }
-        set {
-            defaults.set(newValue, forKey: "noiseReduction")
-            defaults.synchronize()
-        }
-    }
-
-    /// Calls with the quick model and the phone's own voice. A trial, so it stays off until the person turns it on.
+    /// Calls with the quick model. A trial, so it stays off until the person turns it on.
     public var fastMode: Bool {
         get { defaults.bool(forKey: "fastMode") }
         set {

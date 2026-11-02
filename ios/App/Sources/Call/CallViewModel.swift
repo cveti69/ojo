@@ -21,7 +21,6 @@ final class CallViewModel: ObservableObject {
     @Published private(set) var screenTextMode: ScreenTextMode = .extension
     @Published private(set) var measuresAppleSpeech = false
     @Published private(set) var hearsOverVoice = false
-    @Published private(set) var noiseReduction = false
     @Published private(set) var fastMode = false
     @Published private(set) var nextStepTest = false
     @Published private(set) var voices: [Voice] = []
@@ -141,7 +140,6 @@ final class CallViewModel: ObservableObject {
         voice = store?.voice ?? ""
         measuresAppleSpeech = store?.measuresAppleSpeech ?? false
         hearsOverVoice = store?.hearsOverVoice ?? false
-        noiseReduction = store?.noiseReduction ?? false
         fastMode = store?.fastMode ?? false
         nextStepTest = store?.nextStepTest ?? false
         frame = EyesFrame(rawValue: store?.windowFrame ?? "") ?? .lace
@@ -217,7 +215,6 @@ final class CallViewModel: ObservableObject {
         endScreen?.cancel()
         lastCall = nil
         isMuted = false
-        audioSession.mode = noiseReduction ? .voiceChat : .default
         soundOutput = audioSession.output(in: words)
         let settings = store.settings
         store.sessionID = nil
@@ -443,13 +440,7 @@ final class CallViewModel: ObservableObject {
         store?.hearsOverVoice = value
     }
 
-    /// From the next call on: a sound mode lasts a whole call.
-    func setNoiseReduction(_ value: Bool) {
-        noiseReduction = value
-        store?.noiseReduction = value
-    }
-
-    /// From the next call on: one call keeps one voice.
+    /// From the next call on: one call keeps one model.
     func setFastMode(_ value: Bool) {
         fastMode = value
         store?.fastMode = value
@@ -1009,6 +1000,7 @@ final class CallViewModel: ObservableObject {
             journal?.append("Ход \(say.turn): ответ о прежнем экране не сказан")
             eyes?.stopWaiting(for: .screen)
             tellCut(say.line, said: "")
+            if let text = say.promisedPaste(lastSaid: answeredTurn) { placeOnClipboard(text, reason: "Буфер из ответа") }
             return
         }
         keepQuiet()

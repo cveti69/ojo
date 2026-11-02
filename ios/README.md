@@ -23,10 +23,10 @@ open App.xcodeproj
 1. The main screen works like a phone: one button to call and one to end. The app's own words on a call are in
    `Shared/Sources/CallWords.swift`, in Russian, English and Spanish by the language chosen in settings or else the phone's, English
    for any other. Between calls the left corner opens the settings, on one page: the language, the voice, the tone, the frame, the
-   "Noise reduction" tick and the button that copies the log. The right corner opens the questions. On a call the red button has the system's own list of where
+   trial ticks and the button that copies the log. The right corner opens the questions. On a call the red button has the system's own list of where
    sound goes on its left and the switch for the microphone on its right, which stops sound on the phone and leaves the call running.
    How a call ended stays for 10 seconds, then the main screen comes back by itself.
-2. A call creates a session, turns on `.playAndRecord` in `.default`, or in `.voiceChat` with the "Noise reduction" tick, says hello and opens the microphone. Right after the greeting the app asks
+2. A call creates a session, turns on `.playAndRecord` in `.default`, says its first words and opens the microphone. Right after the greeting the app asks
    iOS for the system broadcast sheet. If it does not open, the "Show your screen" button stays, with the real system button under it.
 3. `CallMicrophone` listens until the end of the call, also from another app: iOS gives a background app the microphone only if it
    was turned on in the foreground. `SpeechDetector` tells speech from the noise of the room and ends a phrase after a 0.8 second

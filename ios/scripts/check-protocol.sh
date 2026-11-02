@@ -20,7 +20,6 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -warnings-as-errors \
   "$protocol_ios_dir/App/Sources/Call/SpeechDetector.swift" \
   "$protocol_ios_dir/App/Sources/Call/PhraseListener.swift" \
   "$protocol_ios_dir/App/Sources/Call/PauseWords.swift" \
-  "$protocol_ios_dir/App/Sources/Call/VoiceChoice.swift" \
   "$protocol_ios_dir/App/Sources/Call/NetworkWatch.swift" \
   "$protocol_ios_dir/App/Sources/HintWindow/EyesDirector.swift" \
   "$protocol_ios_dir/App/Sources/HintWindow/EyesPainter.swift" \
