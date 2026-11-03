@@ -9,7 +9,7 @@ from email.parser import BytesParser
 import pytest
 
 from app import config, meta, pool, voice
-from app.server import _TokenFilter
+from app.server import _AddressFilter, _TokenFilter
 from conftest import wav
 
 
@@ -279,3 +279,23 @@ def test_debug_token_is_redacted_in_access_log(parameter):
     assert _TokenFilter().filter(record)
     assert "secret-value" not in record.getMessage()
     assert "other=1" in record.getMessage()
+
+
+@pytest.mark.parametrize("logger, message, args", [
+    ("uvicorn.access", '%s - "%s %s HTTP/%s" %d', ("203.0.113.9:51234", "POST", "/sessions/s_test/frames", "1.1", 202)),
+    ("uvicorn.error", '%s - "WebSocket %s" [accepted]', ("203.0.113.9:51234", "/sessions/s_test/events")),
+    ("uvicorn.error", '%s - "WebSocket %s" 403', ("203.0.113.9:51234", "/sessions/s_test/listen")),
+])
+def test_no_line_keeps_the_phone_address(logger, message, args):
+    """The lines a call leaves say what was asked for, never who asked: the address is gone before the line is written."""
+    record = logging.LogRecord(logger, logging.INFO, "", 0, message, args, None)
+    for item in logging.getLogger(logger).filters:
+        item.filter(record)
+    line = record.getMessage()
+    assert "203.0.113.9" not in line and line.startswith('- - "') and "/sessions/s_test/" in line
+    assert any(isinstance(item, _AddressFilter) for item in logging.getLogger(logger).filters)
+
+
+def test_other_lines_keep_their_words():
+    record = logging.LogRecord("uvicorn.error", logging.INFO, "", 0, "Started server process [%d]", (4321,), None)
+    assert _AddressFilter().filter(record) and record.getMessage() == "Started server process [4321]"

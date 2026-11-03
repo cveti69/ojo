@@ -44,10 +44,20 @@ class _TokenFilter(logging.Filter):
         return True
 
 
+class _AddressFilter(logging.Filter):
+    """A line of a request or of a call's socket says what was asked, never the phone's address: it is not ours to keep."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str) and record.msg.startswith('%s - "') and isinstance(record.args, tuple) and record.args:
+            record.args = ("-",) + record.args[1:]
+        return True
+
+
 for _logger_name in ("uvicorn.access", "uvicorn.error"):
     _logger = logging.getLogger(_logger_name)
-    if not any(isinstance(item, _TokenFilter) for item in _logger.filters):
-        _logger.addFilter(_TokenFilter())
+    for _kind in (_TokenFilter, _AddressFilter):
+        if not any(isinstance(item, _kind) for item in _logger.filters):
+            _logger.addFilter(_kind())
 
 
 class Payload(BaseModel):
