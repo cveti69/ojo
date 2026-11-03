@@ -47,7 +47,7 @@ public final class SharedStore: @unchecked Sendable {
         defaults.register(defaults: [
             "serverURL": configuration.defaultServerURL.absoluteString,
             "targetLang": "id", "textInput": TextEntry.clipboard.rawValue,
-            "screenReading": ScreenTextMode.extension.rawValue
+            "screenReading": ScreenTextMode.extension.rawValue, "nextStepTest": true
         ])
     }
 
@@ -193,7 +193,7 @@ public final class SharedStore: @unchecked Sendable {
         }
     }
 
-    /// Calls with one more line in the agent's role. A trial, so it stays off until the person turns it on.
+    /// Fewer steps: one more line in the agent's role, so a text and its field come in one step. On until the person turns it off.
     public var nextStepTest: Bool {
         get { defaults.bool(forKey: "nextStepTest") }
         set {
@@ -203,10 +203,12 @@ public final class SharedStore: @unchecked Sendable {
     }
 
     /// The one place the language of a call comes from: its words, the agent's rule and the phone's own voice. Empty follows the phone.
+    /// Only English can be chosen besides; a language picked in an older build follows the phone again.
     public var language: String {
         get {
             refresh()
-            return defaults.string(forKey: "language") ?? ""
+            let chosen = defaults.string(forKey: "language") ?? ""
+            return chosen == "en" ? chosen : ""
         }
         set {
             defaults.set(newValue, forKey: "language")

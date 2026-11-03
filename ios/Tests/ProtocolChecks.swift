@@ -70,8 +70,6 @@ private final class StubState: @unchecked Sendable {
         if path.hasSuffix("/say") {
             return (200, #"{"heard":true,"speech_ms":1200}"#)
         }
-        if path.hasSuffix("/suggestions") { return (200, #"{"step_id":"s3","texts":["hello"],"hint_ru":"запрос"}"#) }
-        if path.hasSuffix("/translate") { return (200, #"{"text":"Результат"}"#) }
         if path.hasSuffix("/hint") {
             return (200, #"{"type":"hint","step_id":"s3","instruction_ru":"Вставьте текст","image_jpeg_base64":"AA==","frame_ts":123456789,"timings":{"model_ms":2710,"box_ms":3,"box_source":"text","window":true}}"#)
         }
@@ -149,9 +147,6 @@ private enum ProtocolChecks {
         ])]
         let textAccepted = try await client.sendScreenText(lines, sessionID: created.sessionID, frameTS: 123456789)
         try check(textAccepted.ok, "screen text response")
-        let suggestions = try await client.suggestions(sessionID: created.sessionID)
-        try check(suggestions.stepID == "s3" && suggestions.texts == ["hello"], "suggestions decoding")
-        _ = try await client.translate("Привет", sessionID: created.sessionID)
         _ = try await client.broadcast(.started, sessionID: created.sessionID)
         _ = try await client.broadcast(.finished, sessionID: created.sessionID)
         _ = try await client.end(sessionID: created.sessionID)
@@ -165,7 +160,7 @@ private enum ProtocolChecks {
         for status in [401, 404, 503] {
             ProtocolStub.state.next(status: status)
             do {
-                _ = try await client.suggestions(sessionID: created.sessionID)
+                _ = try await client.end(sessionID: created.sessionID)
                 throw CheckFailure(description: "HTTP \(status) accepted")
             } catch let error as ClientError {
                 try check(error == .http(status), "HTTP error mapping")
@@ -240,10 +235,6 @@ private enum ProtocolChecks {
         let openingRequest = requests.last { $0.url!.path.hasSuffix("/changed") }!
         let openingBody = try JSONSerialization.jsonObject(with: body(of: openingRequest)) as! [String: Any]
         try check(openingBody["opening"] as? Bool == true, "a move with our window says so")
-        let translate = requests.first { $0.url!.path.hasSuffix("/translate") }!
-        let translateBody = try JSONSerialization.jsonObject(with: body(of: translate)) as! [String: String]
-        try check(translateBody["from"] == "ru" && translateBody["to"] == "auto" && translateBody["session_id"] == created.sessionID,
-                  "translation languages and session")
         let upload = requests.first { $0.url!.path.hasSuffix("/frames") }!
         try check(upload.httpMethod == "POST" && upload.value(forHTTPHeaderField: "Content-Type") == "image/jpeg", "frame format")
         try check(upload.value(forHTTPHeaderField: "X-Frame-Width") == "1170"
@@ -1303,7 +1294,7 @@ private enum ProtocolChecks {
         for language in [CallWords.russian, .english, .spanish] {
             let all = strings(language)
             try check(all.count - language.pause.count - language.sounds.count == russian.count - CallWords.russian.pause.count - CallWords.russian.sounds.count && all.allSatisfy { !$0.isEmpty }, "every word has its text")
-            try check(language.questions.count == 6, "six questions")
+            try check(language.questions.count == 7, "seven questions")
             try check(Set(language.pause).count == language.pause.count, "different waiting phrases")
             let spoken = [language.greeting, language.failed, language.lostHearing, language.noHintYet] + language.pause + language.sounds
             try check(spoken.allSatisfy { $0.last.map { ".?!".contains($0) } == true }, "what is said ends as a sentence")
@@ -1374,9 +1365,11 @@ private enum ProtocolChecks {
         try check(store.settings.thinking == .auto && store.settings.character == .warm, "default level and manner")
         defaults.set("zz", forKey: "userLang")  // An older build saved one.
         try check(store.settings.userLang == Locale.preferredLanguages.first ?? "en", "with none chosen the language is the phone's at every call")
-        for chosen in ["ru", "en", "es"] {
-            store.language = chosen
-            try check(store.settings.userLang == chosen && CallWords.of(store.settings.userLang) == .of(chosen), "the chosen language wins: \(chosen)")
+        store.language = "en"
+        try check(store.settings.userLang == "en" && CallWords.of(store.settings.userLang) == .english, "English, when chosen, wins")
+        for older in ["ru", "es"] {
+            store.language = older
+            try check(store.language.isEmpty && store.settings.userLang == Locale.preferredLanguages.first ?? "en", "a language picked in an older build follows the phone: \(older)")
         }
         store.language = ""
         try check(store.settings.userLang == Locale.preferredLanguages.first ?? "en", "and back to the phone's")
@@ -1391,12 +1384,13 @@ private enum ProtocolChecks {
         store.fastMode = false
         try check(!store.settings.fast, "and it can be turned off")
         try check(["ru", "en", "es"].map { CallWords.of($0).fastMode } == ["Турбо", "Turbo", "Turbo"], "the fast mode has its three names")
-        try check(!store.nextStepTest && !store.settings.nextStep, "the trial is off until chosen")
-        store.nextStepTest = true
-        try check(nextLaunch.settings.nextStep, "the trial stays between launches")
+        try check(store.nextStepTest && store.settings.nextStep, "fewer steps is on until turned off")
         store.nextStepTest = false
-        try check(!store.settings.nextStep, "and it can be turned off")
-        try check(["ru", "en", "es"].map { CallWords.of($0).nextStepTest } == ["Тест: следующий шаг", "Test: next step", "Prueba: siguiente paso"], "the trial has its three names")
+        try check(!nextLaunch.settings.nextStep, "and off it stays between launches")
+        store.nextStepTest = true
+        try check(store.settings.nextStep, "and it can be turned on again")
+        try check(["ru", "en", "es"].map { CallWords.of($0).nextStepTest } == ["Меньше шагов", "Fewer steps", "Menos pasos"], "fewer steps has its three names")
+        try check(["ru", "en", "es"].map { CallWords.of($0).frame } == ["Вид окна", "Window style", "Estilo de ventana"], "the window style has its three names")
         store.character = .patient
         store.ownCharacter = "  спокойно  "
         try check(store.character == .patient && store.ownCharacter == "спокойно" && store.settings.character == .patient, "the tone stays, with no spaces around it")

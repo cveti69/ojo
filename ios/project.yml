@@ -58,8 +58,6 @@ targets:
         embed: true
       - target: BroadcastExtension
         embed: true
-      - target: KeyboardExtension
-        embed: true
 
   BroadcastExtension:
     templates: [Extension]
@@ -69,19 +67,6 @@ targets:
       base:
         INFOPLIST_FILE: BroadcastExtension/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: "$(BUNDLE_IDENTIFIER_PREFIX).broadcast"
-    attributes:
-      SystemCapabilities:
-        com.apple.ApplicationGroups.iOS:
-          enabled: 1
-
-  KeyboardExtension:
-    templates: [Extension]
-    sources:
-      - KeyboardExtension/Sources
-    settings:
-      base:
-        INFOPLIST_FILE: KeyboardExtension/Info.plist
-        PRODUCT_BUNDLE_IDENTIFIER: "$(BUNDLE_IDENTIFIER_PREFIX).keyboard"
     attributes:
       SystemCapabilities:
         com.apple.ApplicationGroups.iOS:

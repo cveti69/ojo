@@ -15,8 +15,6 @@ struct SettingsScreen: View {
                     group(words.language) {
                         Pill(title: words.phoneLanguage, isOn: model.language == "") { model.setLanguage("") }
                         Pill(title: "English", isOn: model.language == "en") { model.setLanguage("en") }
-                        Pill(title: "Русский", isOn: model.language == "ru") { model.setLanguage("ru") }
-                        Pill(title: "Español", isOn: model.language == "es") { model.setLanguage("es") }
                     }
                     if !model.voices.isEmpty {
                         group(words.voice) {
@@ -49,22 +47,31 @@ struct SettingsScreen: View {
             }
             .scrollIndicators(.hidden)
             .scrollDismissesKeyboard(.interactively)
-            Button {
-                UIPasteboard.general.string = model.journal?.contents() ?? ""
-                copied = true
-            } label: {
-                Text(copied ? words.journalCopied : words.copyJournal)
-                    .font(.system(.subheadline, design: .rounded, weight: .medium))
-                    .foregroundStyle(Palette.muted)
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: 44)
+            HStack(spacing: 0) {
+                Link(destination: URL(string: "https://callojo.app/privacy/")!) { footer(words.yourData) }
+                Text("·").foregroundStyle(Palette.muted).accessibilityHidden(true)
+                Button {
+                    UIPasteboard.general.string = model.journal?.contents() ?? ""
+                    copied = true
+                } label: {
+                    footer(copied ? words.journalCopied : words.copyJournal)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.top, 17)
         .padding(.horizontal, 20)
         .padding(.bottom, 14)
+        .backOnEdgeSwipe(back)
         .task { await model.loadVoices() }
+    }
+
+    private func footer(_ text: String) -> some View {
+        Text(text)
+            .font(.system(.subheadline, design: .rounded, weight: .medium))
+            .foregroundStyle(Palette.muted)
+            .padding(.horizontal, 16)
+            .frame(minHeight: 44)
     }
 
     private var ownTone: some View {
@@ -95,32 +102,11 @@ struct SettingsScreen: View {
     }
 }
 
-private struct KeyboardOnboardingScreen: View {
-    let displayName: String
-    @Environment(\.openURL) private var openURL
-    @StateObject private var field = KeyboardTestField()
-
-    var body: some View {
-        Form {
-            Section("Подключение") {
-                Text("Настройки → Основные → Клавиатура → Клавиатуры → Новые клавиатуры → \(displayName) → «Разрешить полный доступ».")
-                Text("Вернитесь сюда, коснитесь тестового поля и выберите \(displayName) кнопкой глобуса. Во время звонка появятся готовые тексты от агента.")
-                Button("Открыть настройки") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
-                }
-            }
-            Section("Проверка клавиатуры") {
-                TextField("Коснитесь и переключитесь глобусом", text: $field.text, axis: .vertical)
-                    .lineLimit(2...5)
-                Text("Для проверки перевода наберите фразу обычной клавиатурой и переключитесь обратно. Нужны активная сессия и полный доступ.")
-                    .font(.footnote)
-            }
-        }
-        .navigationTitle("Клавиатура")
+extension View {
+    /// A swipe from the left edge goes back, as it does in the system's own screens.
+    func backOnEdgeSwipe(_ back: @escaping () -> Void) -> some View {
+        simultaneousGesture(DragGesture(minimumDistance: 20, coordinateSpace: .global).onEnded { drag in
+            if drag.startLocation.x < 28, drag.translation.width > 80, abs(drag.translation.height) < drag.translation.width / 2 { back() }
+        })
     }
-}
-
-@MainActor
-private final class KeyboardTestField: ObservableObject {
-    @Published var text = ""
 }

@@ -39,6 +39,7 @@ struct QuestionsScreen: View {
         }
         .padding(.top, 17)
         .padding(.horizontal, 20)
+        .backOnEdgeSwipe(back)
     }
 
     private func meaning(_ pose: EyePose, _ title: String) -> some View {

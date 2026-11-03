@@ -54,16 +54,6 @@ public final class ServerClient: Sendable {
         try await getJSON(request("POST", ["sessions", sessionID, "end"]))
     }
 
-    public func suggestions(sessionID: String) async throws -> SuggestionsResponse {
-        try await getJSON(request("GET", ["sessions", sessionID, "suggestions"]))
-    }
-
-    public func translate(_ text: String, sessionID: String) async throws -> TextResponse {
-        try await json("POST", ["translate"], body: TranslateRequest(
-            text: text, from: settings.userLang, to: settings.targetLang, sessionID: sessionID
-        ))
-    }
-
     public func hint(sessionID: String, after: String?) async throws -> ServerEvent? {
         var request = try request("GET", ["sessions", sessionID, "hint"])
         if let after, var components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false) {

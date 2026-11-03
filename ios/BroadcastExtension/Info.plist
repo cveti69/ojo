@@ -24,13 +24,6 @@
     <string>$(APP_GROUP_IDENTIFIER)</string>
     <key>DefaultServerURL</key>
     <string>$(DEFAULT_SERVER_URL)</string>
-    <key>NSLocalNetworkUsageDescription</key>
-    <string>OjO needs the network to send your screen to the server you chose.</string>
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsArbitraryLoads</key>
-        <true/>
-    </dict>
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionPointIdentifier</key>

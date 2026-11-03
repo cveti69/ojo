@@ -728,7 +728,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         var errorDescription: String? {
             switch self {
             case .noSession: return "Нет активного звонка. Откройте приложение и нажмите «Позвонить», затем включите трансляцию."
-            case .ended: return "Звонок завершён"
+            case .ended: return "Call ended"
             case .noMailbox: return "Файл кадра в общей группе недоступен."
             }
         }

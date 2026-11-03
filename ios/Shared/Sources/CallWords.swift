@@ -68,6 +68,7 @@ public struct CallWords: Sendable, Equatable {
     public let frameTicks: String
     public let fastMode: String
     public let nextStepTest: String
+    public let yourData: String
     public let language: String
     public let phoneLanguage: String
     public let tone: String
@@ -138,12 +139,13 @@ public struct CallWords: Sendable, Equatable {
         settingsTitle: "Настройки",
         copyJournal: "Скопировать журнал",
         journalCopied: "Журнал скопирован",
-        frame: "Рамка",
+        frame: "Вид окна",
         frameLace: "Кружево",
         frameGlow: "Мягкий свет",
         frameTicks: "Чёрточки",
         fastMode: "Турбо",
-        nextStepTest: "Тест: следующий шаг",
+        nextStepTest: "Меньше шагов",
+        yourData: "Ваши данные",
         language: "Язык",
         phoneLanguage: "Авто",
         tone: "Тон",
@@ -158,11 +160,12 @@ public struct CallWords: Sendable, Equatable {
         back: "Назад",
         questionsTitle: "Вопросы",
         questions: [
-            CallQuestion("Что OjO видит и слышит?", "Твой экран, только пока ты его показываешь, и твой голос во время звонка. Они идут на наш сервер и в ИИ Meta. То, что говорит OjO, идёт в ElevenLabs для голоса. Пока идут тесты, мы храним слова и экраны из звонков, чтобы исправлять ошибки. Экраны оплаты, которые распознаём, не храним."),
-            CallQuestion("Как сделать, чтобы он не смотрел?", "Скажи «Не смотри». Глаза закроются, и экран перестанет до него доходить. Скажи «Смотри», когда будет можно."),
-            CallQuestion("А пароли и карты?", "OjO видит то же, что и ты, поэтому скажи «Не смотри», прежде чем их вводить. Сам он их никогда не просит."),
+            CallQuestion("Что OjO видит и слышит?", "Твой экран, только пока ты его показываешь, и твой голос во время звонка. Они идут на наш сервер и в ИИ Meta. То, что говорит OjO, идёт в ElevenLabs для голоса. После звонка мы ничего не храним."),
+            CallQuestion("Как сделать, чтобы он не смотрел?", "Скажи «Не смотри», например перед тем как вводить пароль или номер карты. Глаза закроются, и iPhone перестанет отправлять твой экран. Скажи «Смотри», когда будет можно. Пароли и карты OjO никогда не просит."),
             CallQuestion("Он может нажать или оплатить за меня?", "Нет. Нажимаешь всегда ты, и оплату подтверждаешь только ты. OjO показывает и говорит, где нажать."),
             CallQuestion("Как взять текст, который он написал?", "OjO скопирует его за тебя. Нажми на поле и выбери «Вставить»."),
+            CallQuestion("Что такое Турбо?", "Быстрый режим. OjO отвечает моделью Muse Spark: она быстрее, но на сложных экранах думает меньше. Включается в настройках."),
+            CallQuestion("Какие языки он знает?", "OjO говорит по-английски или на языке телефона, если в «Языке» выбрано «Авто». Свои короткие фразы он говорит по-английски, по-русски или по-испански. Лучше всего он читает экраны на китайском, японском, корейском, тайском, вьетнамском, арабском, русском и на языках с латинскими буквами: это языки, которые читает iPhone."),
             CallQuestion("Я не вижу маленькое окно", "Открой Настройки iPhone › Основные › Картинка в картинке и включи Автозапуск «Картинки в картинке». Нажми на окно, чтобы вернуться в OjO.")
         ]
     )
@@ -211,12 +214,13 @@ public struct CallWords: Sendable, Equatable {
         settingsTitle: "Settings",
         copyJournal: "Copy the log",
         journalCopied: "Log copied",
-        frame: "Frame",
+        frame: "Window style",
         frameLace: "Lace",
         frameGlow: "Soft light",
         frameTicks: "Ticks",
         fastMode: "Turbo",
-        nextStepTest: "Test: next step",
+        nextStepTest: "Fewer steps",
+        yourData: "Your data",
         language: "Language",
         phoneLanguage: "Auto",
         tone: "Tone",
@@ -231,11 +235,12 @@ public struct CallWords: Sendable, Equatable {
         back: "Back",
         questionsTitle: "Questions",
         questions: [
-            CallQuestion("What does OjO see and hear?", "Your screen, only while you share it, and your voice during a call. They go to our server and Meta's AI. What OjO says goes to ElevenLabs for the voice. While we test, we keep the words and screens from calls to fix problems. Payment screens we recognize aren't kept."),
-            CallQuestion("How do I make it look away?", "Say “Don't look.” Its eyes close and your screen stops reaching it. Say “Look” when you're ready."),
-            CallQuestion("What about passwords and cards?", "OjO sees what you see, so say “Don't look” before you type them. It never asks for them."),
+            CallQuestion("What does OjO see and hear?", "Your screen, only while you share it, and your voice during a call. They go to our server and Meta's AI. What OjO says goes to ElevenLabs for the voice. We keep nothing after the call."),
+            CallQuestion("How do I make it look away?", "Say “Don't look,” for example before you type a password or a card number. Its eyes close and your iPhone stops sending your screen. Say “Look” when you're ready. OjO never asks for passwords or cards."),
             CallQuestion("Can it tap or pay for me?", "No. You always do the tapping, and only you confirm a payment. It points and tells you where."),
             CallQuestion("How do I use the text it writes?", "OjO copies it for you. Tap the field and choose Paste."),
+            CallQuestion("What is Turbo?", "A faster mode. OjO answers with Muse Spark, a quicker Meta model that thinks less on hard screens. Turn it on in Settings."),
+            CallQuestion("Which languages does it know?", "OjO talks in English, or in your phone's language when Language is Auto. Its own short phrases are in English, Russian or Spanish. It reads screens best in Chinese, Japanese, Korean, Thai, Vietnamese, Arabic, Russian and languages written in Latin letters: the ones your iPhone can read."),
             CallQuestion("I don't see the small window", "Open iPhone Settings › General › Picture in Picture and turn on Start PiP Automatically. Tap the window to come back to OjO.")
         ]
     )
@@ -282,12 +287,13 @@ public struct CallWords: Sendable, Equatable {
         settingsTitle: "Ajustes",
         copyJournal: "Copiar el registro",
         journalCopied: "Registro copiado",
-        frame: "Marco",
+        frame: "Estilo de ventana",
         frameLace: "Encaje",
         frameGlow: "Luz suave",
         frameTicks: "Rayitas",
         fastMode: "Turbo",
-        nextStepTest: "Prueba: siguiente paso",
+        nextStepTest: "Menos pasos",
+        yourData: "Tus datos",
         language: "Idioma",
         phoneLanguage: "Automático",
         tone: "Tono",
@@ -302,11 +308,12 @@ public struct CallWords: Sendable, Equatable {
         back: "Atrás",
         questionsTitle: "Preguntas",
         questions: [
-            CallQuestion("¿Qué ve y oye OjO?", "Tu pantalla, solo mientras la compartes, y tu voz durante la llamada. Van a nuestro servidor y a la IA de Meta. Lo que dice OjO va a ElevenLabs para la voz. Mientras hacemos pruebas, guardamos las palabras y las pantallas de las llamadas para arreglar problemas. Las pantallas de pago que reconocemos no se guardan."),
-            CallQuestion("¿Cómo hago que no mire?", "Di «No mires». Cierra los ojos y tu pantalla deja de llegarle. Di «Mira» cuando quieras."),
-            CallQuestion("¿Y las contraseñas y las tarjetas?", "OjO ve lo mismo que tú, así que di «No mires» antes de escribirlas. Nunca te las pide."),
+            CallQuestion("¿Qué ve y oye OjO?", "Tu pantalla, solo mientras la compartes, y tu voz durante la llamada. Van a nuestro servidor y a la IA de Meta. Lo que dice OjO va a ElevenLabs para la voz. No guardamos nada después de la llamada."),
+            CallQuestion("¿Cómo hago que no mire?", "Di «No mires», por ejemplo antes de escribir una contraseña o un número de tarjeta. Cierra los ojos y tu iPhone deja de enviar tu pantalla. Di «Mira» cuando quieras. OjO nunca te pide contraseñas ni tarjetas."),
             CallQuestion("¿Puede tocar o pagar por mí?", "No. Siempre tocas tú, y solo tú confirmas un pago. OjO señala y te dice dónde."),
             CallQuestion("¿Cómo uso el texto que escribe?", "OjO te lo copia. Toca el campo y elige Pegar."),
+            CallQuestion("¿Qué es Turbo?", "Un modo más rápido. OjO responde con Muse Spark, un modelo de Meta más ágil que piensa menos en pantallas difíciles. Actívalo en Ajustes."),
+            CallQuestion("¿Qué idiomas conoce?", "OjO habla en inglés, o en el idioma de tu teléfono si en Idioma eliges Automático. Sus frases cortas propias están en inglés, ruso o español. Lee mejor las pantallas en chino, japonés, coreano, tailandés, vietnamita, árabe, ruso y en idiomas con letras latinas: los que tu iPhone sabe leer."),
             CallQuestion("No veo la ventana pequeña", "Abre Ajustes del iPhone › General › Imagen dentro de imagen y activa Iniciar modo PiP automáticamente. Toca la ventana para volver a OjO.")
         ]
     )

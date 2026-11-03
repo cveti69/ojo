@@ -51,7 +51,6 @@ public struct SpokenReply: Decodable, Sendable {
     public let speechMS: Int
     enum CodingKeys: String, CodingKey { case heard, speechMS = "speech_ms" }
 }
-public struct TextResponse: Decodable, Sendable { public let text: String }
 public struct SpeechRequest: Encodable, Sendable {
     public let text: String
     public let voice: String?
@@ -70,21 +69,6 @@ public struct FrameResponse: Decodable, Sendable {
     public let accepted: Bool
     public let reason: String?
     public let lang: String?  // What the model says the screen is written in.
-}
-
-public struct SuggestionsResponse: Decodable, Sendable {
-    public let stepID: String?
-    public let texts: [String]
-    public let hintRU: String
-    enum CodingKeys: String, CodingKey { case stepID = "step_id", texts, hintRU = "hint_ru" }
-}
-
-public struct TranslateRequest: Encodable, Sendable {
-    public let text: String
-    public let from: String
-    public let to: String
-    public let sessionID: String
-    enum CodingKeys: String, CodingKey { case text, from, to, sessionID = "session_id" }
 }
 
 public enum BroadcastState: String, Encodable, Sendable { case started, finished }
