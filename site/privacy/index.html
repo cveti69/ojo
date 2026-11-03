@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<title>OjO · Your data</title>
+<meta name="description" content="What OjO sees and hears on a call, where it goes, and what is left after the call.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22'/%3E%3Cellipse cx='31' cy='46' rx='16' ry='25' fill='%23fff'/%3E%3Cellipse cx='69' cy='46' rx='16' ry='25' fill='%23fff'/%3E%3Ccircle cx='33' cy='53' r='8'/%3E%3Ccircle cx='67' cy='53' r='8'/%3E%3C/svg%3E">
+<style>
+:root{--muted:#A1A1AA;--label:#D1D1D6}
+*{box-sizing:border-box}
+html{background:#000;-webkit-text-size-adjust:100%}
+@supports (font:-apple-system-body) and (-webkit-touch-callout:none){html{font:-apple-system-body}}
+body{margin:0;background:#000;color:#fff;font-family:ui-rounded,-apple-system,BlinkMacSystemFont,system-ui,sans-serif;font-size:1rem;line-height:1.5}
+:focus-visible{outline:3px solid #fff;outline-offset:2px}
+main{max-width:640px;margin:0 auto;padding:max(20px,env(safe-area-inset-top)) 20px max(40px,env(safe-area-inset-bottom))}
+.home{display:inline-flex;align-items:center;gap:8px;min-height:44px;color:#fff;font-weight:700;font-size:1.15rem;text-decoration:none}
+.home svg{width:1.6em;height:1.53em}
+h1{margin:24px 0 6px;font-size:calc(1.5rem + 2.4vw);line-height:1.15}
+h2{margin:30px 0 6px;font-size:1.15rem;line-height:1.3}
+p,li{color:var(--label)}
+p{margin:0 0 10px}
+.lead{color:var(--muted)}
+p a{color:#fff;text-underline-offset:2px}
+ul{margin:0;padding-left:1.15em}
+li{margin:0 0 8px}
+.updated{margin-top:36px;color:var(--muted);font-size:.85rem}
+@media (min-width:640px){h1{font-size:2.6rem}}
+</style>
+</head>
+<body>
+<main>
+  <a class="home" href="/"><svg viewBox="140 150 744 710" aria-hidden="true"><ellipse cx="303.2" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="315.2" cy="490" r="75.6" fill="#000000"/><ellipse cx="720.8" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="708.8" cy="490" r="75.6" fill="#000000"/><path d="M477 620A35 35 0 0 1 547 620L547 744A97 97 0 0 1 366 792.5A35 35 0 0 1 426.62 757.5A27 27 0 0 0 477 744Z" fill="#9628F5"/></svg>OjO</a>
+
+  <h1>Your data</h1>
+  <p class="lead">What OjO sees and hears on a call, where it goes, and what is left after.</p>
+
+  <h2>On a call</h2>
+  <ul>
+    <li>Your screen, only while you share it, and your voice go to our server and to Meta's AI, which reads the screen and hears what you say.</li>
+    <li>What OjO says goes to ElevenLabs, which turns it into OjO's voice.</li>
+    <li>Text OjO writes for you goes to your iPhone's clipboard, so you can paste it.</li>
+  </ul>
+
+  <h2>After the call</h2>
+  <p>We keep nothing after the call: no recordings, no words, no screens. When the call ends, our server erases what was said and shown. If the app closes without ending the call, the server erases it after an hour.</p>
+
+  <h2>What our server still writes down</h2>
+  <p>To run the service, the server keeps short technical lines: when it starts and stops, the names of errors, such as a lost connection, and a random number for each call when it connects. These lines hold no words, no screens and not your phone's address. They stay until the server needs the space, which can take months, and the system's copy of them is kept for about five weeks.</p>
+  <p>The web server in front of ours keeps no list of requests. Only when a request fails does it note that request, with your phone's internet address.</p>
+
+  <h2>Calls before 3 November 2026</h2>
+  <p>While we tested, we kept the words and screens of calls to fix problems, except payment screens we recognized, and the server noted your phone's internet address with each request. These records are still on our server.</p>
+
+  <h2>“Don't look”</h2>
+  <p>Say “Don't look” and OjO's eyes close: your iPhone stops sending your screen until you say “Look”. The screen at the moment you say it still goes with your words, so say it before you open a password or a card.</p>
+
+  <h2>Passwords and payments</h2>
+  <p>OjO never asks for passwords or card numbers, and it never taps or pays for you: you always do. It sees what you see, so say “Don't look” first.</p>
+
+  <h2>Meta and ElevenLabs</h2>
+  <p>They handle what we send them under their own terms.</p>
+
+  <h2>Beta requests</h2>
+  <p>The form on our page doesn't take requests yet, so it keeps nothing.</p>
+
+  <h2>Questions</h2>
+  <p>Write to <a href="mailto:hi@callojo.app">hi@callojo.app</a>.</p>
+
+  <p class="updated">Updated 3 November 2026.</p>
+</main>
+</body>
+</html>

@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'; base-uri 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<title>OjO</title>
+<meta name="description" content="On a call, OjO sees your iPhone screen, shows you where to tap and writes in the local language.">
+<meta property="og:title" content="OjO">
+<meta property="og:description" content="On a call, OjO sees your iPhone screen, shows you where to tap and writes in the local language.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22'/%3E%3Cellipse cx='31' cy='46' rx='16' ry='25' fill='%23fff'/%3E%3Cellipse cx='69' cy='46' rx='16' ry='25' fill='%23fff'/%3E%3Ccircle cx='33' cy='53' r='8'/%3E%3Ccircle cx='67' cy='53' r='8'/%3E%3C/svg%3E">
+<style>
+:root{--accent:#9628F5;--accent-hover:#A645F7;--red:#FF453A;--muted:#A1A1AA;--label:#D1D1D6;--line:#3A3A3C;--control:#2C2C2E;--first:5s;--slide:8s;--third:9s;--fourth:7s;--cycle:29s}
+/* The first slide shows for --first, the second for --slide, the third for --third, the fourth for --fourth, and the round is --cycle. The
+   percentages of the keyframes are worked out for 5, 8, 9, 7 and 29 s; the dots of the cafe typing beat once a second, a whole number of times
+   in the third slide and in the round. */
+*{box-sizing:border-box}
+html{background:#000;-webkit-text-size-adjust:100%}
+@supports (font:-apple-system-body) and (-webkit-touch-callout:none){html{font:-apple-system-body}}
+body{margin:0;background:#000;color:#fff;font-family:ui-rounded,-apple-system,BlinkMacSystemFont,system-ui,sans-serif;font-size:1rem;line-height:1.4}
+:focus-visible{outline:3px solid #fff;outline-offset:2px}
+
+main{height:100vh;height:100svh;min-height:32rem;max-width:1120px;margin:0 auto;padding:max(14px,env(safe-area-inset-top)) 20px max(10px,env(safe-area-inset-bottom));display:grid;grid-template:"lines" auto "device" minmax(12rem,1fr) "meta" auto "form" auto "data" auto/minmax(0,1fr);row-gap:8px}
+.words{display:contents}
+
+.lines{grid-area:lines;display:grid;margin:0;font-size:calc(.85rem + 3.6vw);line-height:1.18;font-weight:700;text-align:center}
+.lines>span{grid-area:1/1;text-wrap:balance}
+.face{width:1.19em;height:1.14em;vertical-align:-.36em;margin-right:.04em}
+.eye{transform-box:fill-box;transform-origin:center;animation:blink 7s infinite}
+@keyframes blink{0%,44%,45.5%,88%,89.5%,91%,92.5%,100%{transform:scaleY(1)}44.75%,88.75%,91.75%{transform:scaleY(.06)}}
+
+.s{opacity:0;animation:show var(--cycle) infinite}
+.s.one{animation-name:show1}
+.s.two{animation-delay:var(--first)}
+.s.three{animation-name:show3;animation-delay:calc(var(--first) + var(--slide))}
+.s.four{animation-name:show4;animation-delay:calc(var(--first) + var(--slide) + var(--third))}
+@keyframes show1{0%{opacity:0}1.655%{opacity:1}16.966%{opacity:1}18.621%{opacity:0}100%{opacity:0}}
+@keyframes show{0%{opacity:0}1.655%{opacity:1}27.31%{opacity:1}28.966%{opacity:0}100%{opacity:0}}
+@keyframes show3{0%{opacity:0}1.655%{opacity:1}30.759%{opacity:1}32.414%{opacity:0}100%{opacity:0}}
+@keyframes show4{0%{opacity:0}1.655%{opacity:1}23.862%{opacity:1}25.517%{opacity:0}100%{opacity:0}}
+.pick{position:absolute;opacity:0;pointer-events:none}
+.pick:checked~* .s{animation:none;opacity:0}
+#p1:checked~* .one,#p2:checked~* .two,#p3:checked~* .three,#p4:checked~* .four{opacity:1}
+/* A tap on the phone picks the slide after the one in sight, as a dot picks its own. On the round, the way to each next slide stands
+   for exactly as long as the slide before it. */
+.next{position:absolute;inset:0;display:flex;justify-content:center;visibility:hidden;pointer-events:none;-webkit-tap-highlight-color:transparent;animation:next var(--cycle) step-end infinite}
+.next rect{fill-opacity:0;pointer-events:auto;cursor:pointer}
+.next[for=p2]{animation-name:next1}
+.next[for=p3]{animation-delay:var(--first)}
+.next[for=p4]{animation-name:next3;animation-delay:calc(var(--first) + var(--slide))}
+.next[for=p1]{animation-name:next4;animation-delay:calc(var(--first) + var(--slide) + var(--third))}
+@keyframes next1{0%{visibility:visible}17.241%,100%{visibility:hidden}}
+@keyframes next{0%{visibility:visible}27.586%,100%{visibility:hidden}}
+@keyframes next3{0%{visibility:visible}31.034%,100%{visibility:hidden}}
+@keyframes next4{0%{visibility:visible}24.138%,100%{visibility:hidden}}
+.pick:checked~* .next{animation:none}
+#p1:checked~* .next[for=p2],#p2:checked~* .next[for=p3],#p3:checked~* .next[for=p4],#p4:checked~* .next[for=p1]{visibility:visible}
+
+.device{grid-area:device;min-height:0;display:flex;flex-direction:column;align-items:center;padding-top:12px}
+.stage{position:relative;flex:1;min-height:0;width:100%;container-type:size;overflow:hidden;display:flex;justify-content:center;-webkit-mask-image:linear-gradient(#000 90%,transparent);mask-image:linear-gradient(#000 90%,transparent)}
+.phone{display:block;flex:none;width:min(74vw,72cqh,340px);height:auto}
+.app text{font-family:"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic",YuGothic,Meiryo,"Noto Sans JP","Noto Sans CJK JP",sans-serif}
+.app text.ui{font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif}
+
+.meta{grid-area:meta;display:flex;justify-content:center;min-height:28px}
+/* A dot is 12 px and its label 44 px each way, for a finger; the labels reach into the gaps over and under the row, so nothing moves. */
+.dots{display:flex;margin:-8px 0}
+.dots label{padding:16px;cursor:pointer}
+.dots i{display:block;width:12px;height:12px;border-radius:50%;background:var(--line);animation:dot var(--cycle) infinite}
+.dots label:nth-child(1) i{animation-name:dot1}
+.dots label:nth-child(2) i{animation-delay:var(--first)}
+.dots label:nth-child(3) i{animation-name:dot3;animation-delay:calc(var(--first) + var(--slide))}
+.dots label:nth-child(4) i{animation-name:dot4;animation-delay:calc(var(--first) + var(--slide) + var(--third))}
+@keyframes dot1{0%{background:#fff}16.966%{background:#fff}17.655%{background:var(--line)}100%{background:var(--line)}}
+@keyframes dot{0%{background:#fff}27.31%{background:#fff}28%{background:var(--line)}100%{background:var(--line)}}
+@keyframes dot3{0%{background:#fff}30.759%{background:#fff}31.448%{background:var(--line)}100%{background:var(--line)}}
+@keyframes dot4{0%{background:#fff}23.862%{background:#fff}24.552%{background:var(--line)}100%{background:var(--line)}}
+.pick:checked~* .dots i{animation:none}
+#p1:checked~* label[for=p1] i,#p2:checked~* label[for=p2] i,#p3:checked~* label[for=p3] i,#p4:checked~* label[for=p4] i{background:#fff}
+#p1:focus-visible~* .dots [for=p1],#p2:focus-visible~* .dots [for=p2],#p3:focus-visible~* .dots [for=p3],#p4:focus-visible~* .dots [for=p4]{outline:3px solid #fff;border-radius:10px}
+
+form{grid-area:form;display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px}
+/* As much black over the form as over the phone. */
+.answer,.note{grid-column:1/-1;margin:0;font-size:.85rem;text-align:center}
+.note{color:var(--label)}
+.answer{display:none;font-weight:600}
+.problem{color:var(--red)}
+[data-state=sent] .sent,[data-state=invalid] .invalid,[data-state=wrong] .wrong,[data-state=later] .later{display:block}
+[data-state=sent] form>:not(.sent){display:none}
+.hide{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+input:not(.pick){width:100%;height:2.85rem;min-width:0;padding:0 .85rem;border:1px solid var(--line);border-radius:.85rem;background:var(--control);color:#fff;font:inherit;font-size:max(16px,1rem)}
+input::placeholder{color:var(--muted);opacity:1}
+button{grid-column:1/-1;min-height:2.85rem;padding:.4em 1em;border:0;border-radius:1.45rem;background:var(--accent);color:#fff;font:inherit;font-weight:600;cursor:pointer}
+button:active{background:var(--accent-hover)}
+@media (hover:hover){button:hover{background:var(--accent-hover)}}
+
+.data{grid-area:data;display:flex;justify-content:center;align-items:baseline;gap:6px;color:var(--muted);font-size:.78rem}
+.data a{padding:4px;color:inherit;text-decoration:none}
+
+.two .hint{animation:hint2a var(--cycle) var(--first) infinite}
+@keyframes hint2{0%,8%{opacity:0}12%,78%{opacity:1}82%,100%{opacity:0}}
+@keyframes hint2a{0%,2.207%{opacity:0}3.31%,21.517%{opacity:1}22.621%,100%{opacity:0}}
+.two .pressed{opacity:0;animation:pressed2a var(--cycle) var(--first) infinite}
+@keyframes pressed2{0%,57%{opacity:0}59%,66%{opacity:1}70%,100%{opacity:0}}
+@keyframes pressed2a{0%,15.724%{opacity:0}16.276%,18.207%{opacity:1}19.31%,100%{opacity:0}}
+.two .finger{animation:finger2a var(--cycle) var(--first) infinite}
+@keyframes finger2{0%,50%{transform:translate(40px,70px);opacity:0}56%{transform:translate(0,0);opacity:1}59%{transform:translate(1px,2px);opacity:1}64%{transform:translate(0,0);opacity:1}70%,100%{transform:translate(40px,70px);opacity:0}}
+@keyframes finger2a{0%,13.793%{transform:translate(40px,70px);opacity:0}15.448%{transform:translate(0,0);opacity:1}16.276%{transform:translate(1px,2px);opacity:1}17.655%{transform:translate(0,0);opacity:1}19.31%,100%{transform:translate(40px,70px);opacity:0}}
+.three .hint{animation:hint3a var(--cycle) calc(var(--first) + var(--slide)) infinite}
+@keyframes hint3{0%,2.667%{opacity:0}6.222%,48.889%{opacity:1}52.444%,100%{opacity:0}}
+@keyframes hint3a{0%,0.828%{opacity:0}1.931%,15.172%{opacity:1}16.276%,100%{opacity:0}}
+.three .finger{animation:finger3a var(--cycle) calc(var(--first) + var(--slide)) infinite}
+@keyframes finger3{0%,8%{transform:translate(40px,70px);opacity:0}13.333%{transform:translate(0,0);opacity:1}15.111%{transform:translate(1px,2px);opacity:1}18.667%{transform:translate(0,0);opacity:1}26.667%{transform:translate(-50px,-48px);opacity:1}29.333%{transform:translate(-49px,-46px);opacity:1}32.889%,38.222%{transform:translate(-50px,-48px);opacity:1}46.222%{transform:translate(176px,-2px) rotate(22deg);opacity:1}48%{transform:translate(177px,0px) rotate(22deg);opacity:1}50.667%{transform:translate(176px,-2px) rotate(22deg);opacity:1}56%,100%{transform:translate(176px,38px) rotate(22deg);opacity:0}}
+@keyframes finger3a{0%,2.483%{transform:translate(40px,70px);opacity:0}4.138%{transform:translate(0,0);opacity:1}4.69%{transform:translate(1px,2px);opacity:1}5.793%{transform:translate(0,0);opacity:1}8.276%{transform:translate(-50px,-48px);opacity:1}9.103%{transform:translate(-49px,-46px);opacity:1}10.207%,11.862%{transform:translate(-50px,-48px);opacity:1}14.345%{transform:translate(176px,-2px) rotate(22deg);opacity:1}14.897%{transform:translate(177px,0px) rotate(22deg);opacity:1}15.724%{transform:translate(176px,-2px) rotate(22deg);opacity:1}17.379%,100%{transform:translate(176px,38px) rotate(22deg);opacity:0}}
+.three .callout{opacity:0;animation:callouta var(--cycle) calc(var(--first) + var(--slide)) infinite}
+@keyframes callout{0%,19.556%{opacity:0}21.333%,30.222%{opacity:1}32%,100%{opacity:0}}
+@keyframes callouta{0%,6.069%{opacity:0}6.621%,9.379%{opacity:1}9.931%,100%{opacity:0}}
+.three .placeholder{animation:placeholdera var(--cycle) calc(var(--first) + var(--slide)) infinite}
+@keyframes placeholder{0%,30.222%{opacity:1}31.111%,48.889%{opacity:0}50.667%,100%{opacity:1}}
+@keyframes placeholdera{0%,9.379%{opacity:1}9.655%,15.172%{opacity:0}15.724%,100%{opacity:1}}
+.three .pasted{animation:pasteda var(--cycle) calc(var(--first) + var(--slide)) infinite}
+@keyframes pasted{0%,30.222%{opacity:0}32%,48.889%{opacity:1}49.778%,100%{opacity:0}}
+@keyframes pasteda{0%,9.379%{opacity:0}9.931%,15.172%{opacity:1}15.448%,100%{opacity:0}}
+.three .mine{opacity:0;animation:minea var(--cycle) calc(var(--first) + var(--slide)) infinite}
+@keyframes mine{0%,48.889%{transform:translate(0,10px);opacity:0}51.556%,100%{transform:translate(0,0);opacity:1}}
+@keyframes minea{0%,15.172%{transform:translate(0,10px);opacity:0}16%,100%{transform:translate(0,0);opacity:1}}
+.three .typing{opacity:0;animation:typinga var(--cycle) calc(var(--first) + var(--slide)) infinite}
+@keyframes typing{0%,56%{opacity:0}57.778%,75.556%{opacity:1}76.444%,100%{opacity:0}}
+@keyframes typinga{0%,17.379%{opacity:0}17.931%,23.448%{opacity:1}23.724%,100%{opacity:0}}
+.typing circle{animation:beat 1s infinite}
+.typing circle:nth-of-type(2){animation-delay:.18s}
+.typing circle:nth-of-type(3){animation-delay:.36s}
+@keyframes beat{0%,60%,100%{opacity:.35}30%{opacity:1}}
+.three .reply{opacity:0;animation:replya var(--cycle) calc(var(--first) + var(--slide)) infinite}
+@keyframes reply{0%,75.556%{transform:translate(0,6px);opacity:0}77.778%,100%{transform:translate(0,0);opacity:1}}
+@keyframes replya{0%,23.448%{transform:translate(0,6px);opacity:0}24.138%,100%{transform:translate(0,0);opacity:1}}
+/* On "Don't look" the eyes of the window shut and turn into lids, which never blink, as in the app; on "Look" they open again. */
+.four .hush{opacity:0;animation:husha var(--cycle) calc(var(--first) + var(--slide) + var(--third)) infinite}
+@keyframes hush{0%,11.429%{transform:translate(0,6px);opacity:0}14.286%,37.143%{transform:translate(0,0);opacity:1}40%,100%{transform:translate(0,0);opacity:0}}
+@keyframes husha{0%,2.759%{transform:translate(0,6px);opacity:0}3.448%,8.966%{transform:translate(0,0);opacity:1}9.655%,100%{transform:translate(0,0);opacity:0}}
+.sight{transform-box:fill-box;transform-origin:center;animation:sighta var(--cycle) calc(var(--first) + var(--slide) + var(--third)) infinite}
+@keyframes sight{0%,20%{transform:scaleY(1);opacity:1}23.571%{transform:scaleY(.09);opacity:1}23.714%,65.714%{transform:scaleY(.09);opacity:0}65.857%{transform:scaleY(.09);opacity:1}69.429%,100%{transform:scaleY(1);opacity:1}}
+@keyframes sighta{0%,4.828%{transform:scaleY(1);opacity:1}5.69%{transform:scaleY(.09);opacity:1}5.724%,15.862%{transform:scaleY(.09);opacity:0}15.897%{transform:scaleY(.09);opacity:1}16.759%,100%{transform:scaleY(1);opacity:1}}
+.lids{opacity:0;animation:lidsa var(--cycle) calc(var(--first) + var(--slide) + var(--third)) infinite}
+@keyframes lids{0%,23.571%{opacity:0}23.714%,65.714%{opacity:1}65.857%,100%{opacity:0}}
+@keyframes lidsa{0%,5.69%{opacity:0}5.724%,15.862%{opacity:1}15.897%,100%{opacity:0}}
+.seen{animation:seena var(--cycle) calc(var(--first) + var(--slide) + var(--third)) infinite}
+@keyframes seen{0%,20%{opacity:1}21.714%,67.143%{opacity:0}68.857%,100%{opacity:1}}
+@keyframes seena{0%,4.828%{opacity:1}5.241%,16.207%{opacity:0}16.621%,100%{opacity:1}}
+.unseen{opacity:0;animation:unseena var(--cycle) calc(var(--first) + var(--slide) + var(--third)) infinite}
+@keyframes unseen{0%,21.714%{opacity:0}23.571%,65.429%{opacity:1}67.143%,100%{opacity:0}}
+@keyframes unseena{0%,5.241%{opacity:0}5.69%,15.793%{opacity:1}16.207%,100%{opacity:0}}
+.four .wake{opacity:0;animation:wakea var(--cycle) calc(var(--first) + var(--slide) + var(--third)) infinite}
+@keyframes wake{0%,54.286%{transform:translate(0,6px);opacity:0}57.143%,75.714%{transform:translate(0,0);opacity:1}78.571%,100%{transform:translate(0,0);opacity:0}}
+@keyframes wakea{0%,13.103%{transform:translate(0,6px);opacity:0}13.793%,18.276%{transform:translate(0,0);opacity:1}18.966%,100%{transform:translate(0,0);opacity:0}}
+/* Picked by a dot or a tap, a slide plays from its start: the moves of the others wait on the round, unseen, until they are picked. */
+#p2:checked~* .two .hint{animation:hint2 var(--slide) infinite}
+#p2:checked~* .two .pressed{animation:pressed2 var(--slide) infinite}
+#p2:checked~* .two .finger{animation:finger2 var(--slide) infinite}
+#p3:checked~* .three .hint{animation:hint3 var(--third) infinite}
+#p3:checked~* .three .finger{animation:finger3 var(--third) infinite}
+#p3:checked~* .three .callout{animation:callout var(--third) infinite}
+#p3:checked~* .three .placeholder{animation:placeholder var(--third) infinite}
+#p3:checked~* .three .pasted{animation:pasted var(--third) infinite}
+#p3:checked~* .three .mine{animation:mine var(--third) infinite}
+#p3:checked~* .three .typing{animation:typing var(--third) infinite}
+#p3:checked~* .three .reply{animation:reply var(--third) infinite}
+#p4:checked~* .four .hush{animation:hush var(--fourth) infinite}
+#p4:checked~* .four .wake{animation:wake var(--fourth) infinite}
+.pick:checked~* .sight,.pick:checked~* .lids,.pick:checked~* .seen,.pick:checked~* .unseen{animation:none}
+#p4:checked~* .sight{animation:sight var(--fourth) infinite}
+#p4:checked~* .lids{animation:lids var(--fourth) infinite}
+#p4:checked~* .seen{animation:seen var(--fourth) infinite}
+#p4:checked~* .unseen{animation:unseen var(--fourth) infinite}
+.pupils{animation:look calc(var(--slide)*1.5) infinite}
+@keyframes look{0%,14%{transform:translate(0,0)}20%,38%{transform:translate(-44px,26px)}44%,60%{transform:translate(44px,20px)}66%,84%{transform:translate(-8px,60px)}90%,100%{transform:translate(0,0)}}
+
+@media (min-width:640px){
+  main{min-height:0;column-gap:clamp(32px,5vw,56px);row-gap:14px;padding:24px clamp(24px,4vw,32px) 12px;grid-template:". device" minmax(0,1fr) "lines device" auto "form device" auto "data device" auto ". device" minmax(0,1fr) ". meta" auto/minmax(0,1fr) minmax(0,1fr)}
+  .lines{font-size:clamp(1.9rem,4.4vw,3.2rem);line-height:1.14}
+  .device{padding-top:0}
+  .stage{-webkit-mask-image:none;mask-image:none}
+  .phone{width:min(100cqw,48.75cqh)}
+  form{width:100%;max-width:440px;justify-self:center;margin-top:10px}
+}
+@media (min-width:640px) and (max-height:559px){
+  main{row-gap:6px;padding:10px 24px 4px}
+  .lines{font-size:1.6rem}
+  form{margin-top:4px}
+  .note{display:none}
+  .phone{width:min(100cqw,78cqh)}
+  .stage{-webkit-mask-image:linear-gradient(#000 92%,transparent);mask-image:linear-gradient(#000 92%,transparent)}
+  .dots{margin:-4px 0}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important}
+  .s.one{opacity:1}
+  .three .placeholder{opacity:0}
+  .finger{opacity:0}
+  .dots label:nth-child(1) i{background:#fff}
+  .pick:checked~* .dots i{background:var(--line)}
+  .pick:checked~* .s.one{opacity:0}
+  #p1:checked~* .s.one{opacity:1}
+  #p4:checked~* .sight,#p4:checked~* .seen{opacity:0}
+  #p4:checked~* .lids,#p4:checked~* .unseen,#p4:checked~* .four .hush{opacity:1}
+  .next[for=p2]{visibility:visible}
+  .pick:checked~* .next[for=p2]{visibility:hidden}
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="clock" viewBox="0 0 362 44" width="362" height="44">
+      <rect x="20" y="13" width="58" height="24" rx="12" fill="#FF3B30"/>
+      <text class="ui" x="49" y="30" text-anchor="middle" font-size="14" font-weight="600" fill="#FFFFFF">9:41</text>
+    </symbol>
+    <symbol id="list" viewBox="0 0 362 776" width="362" height="776">
+      <rect width="362" height="776" fill="#F6F5F1"/>
+      <use href="#clock"/>
+      <text x="20" y="98" font-size="26" font-weight="700" fill="#1C1C1E">近くのカフェ</text>
+      <text x="20" y="124" font-size="13" fill="#8A8A8E">徒歩10分以内・4件</text>
+      <rect x="20" y="146" width="66" height="30" rx="15" fill="#1C1C1E"/>
+      <rect x="94" y="146" width="66" height="30" rx="15" fill="#E7E6E1"/>
+      <g font-size="13" font-weight="600" text-anchor="middle"><text x="53" y="166" fill="#FFFFFF">すべて</text><text x="127" y="166" fill="#1C1C1E">カフェ</text></g>
+      <g fill="#FFFFFF"><rect x="16" y="242" width="160" height="212" rx="18"/><rect x="186" y="242" width="160" height="212" rx="18"/><rect x="16" y="466" width="160" height="212" rx="18"/><rect x="186" y="466" width="160" height="212" rx="18"/></g>
+      <g font-size="15" font-weight="600" fill="#1C1C1E"><text x="30" y="272">あおぞらカフェ</text><text x="200" y="272">ひだまり珈琲</text><text x="30" y="496">さくら茶房</text><text x="200" y="496">もりの喫茶</text></g>
+      <g font-size="12" fill="#8A8A8E"><text x="30" y="292">カフェ・徒歩3分</text><text x="200" y="292">喫茶・徒歩5分</text><text x="30" y="516">甘味・徒歩7分</text><text x="200" y="516">喫茶・徒歩9分</text></g>
+      <rect x="28" y="304" width="136" height="94" rx="12" fill="#0A84FF"/>
+      <g fill="#FFFFFF"><circle cx="82" cy="356" r="14"/><circle cx="100" cy="347" r="18"/><circle cx="118" cy="358" r="12"/><rect x="82" y="356" width="36" height="14"/></g>
+      <rect x="198" y="304" width="136" height="94" rx="12" fill="#FF9F0A"/>
+      <circle cx="266" cy="351" r="24" fill="#FFE15A"/>
+      <rect x="28" y="528" width="136" height="94" rx="12" fill="#FF375F"/>
+      <g fill="#FFD3DD"><circle cx="96" cy="561" r="11"/><circle cx="109.3" cy="570.7" r="11"/><circle cx="104.2" cy="586.3" r="11"/><circle cx="87.8" cy="586.3" r="11"/><circle cx="82.7" cy="570.7" r="11"/></g>
+      <circle cx="96" cy="576" r="7" fill="#FFFFFF"/>
+      <rect x="198" y="528" width="136" height="94" rx="12" fill="#34C759"/>
+      <circle cx="266" cy="566" r="23" fill="#1D8A3E"/>
+      <rect x="262" y="584" width="8" height="20" rx="2" fill="#7A4A1E"/>
+      <g fill="#1C1C1E"><rect x="28" y="408" width="136" height="34" rx="17"/><rect x="198" y="408" width="136" height="34" rx="17"/><rect x="28" y="632" width="136" height="34" rx="17"/><rect x="198" y="632" width="136" height="34" rx="17"/></g>
+      <g fill="#FFFFFF" font-size="15" font-weight="600" text-anchor="middle"><text x="96" y="430">予約</text><text x="266" y="430">予約</text><text x="96" y="654">予約</text><text x="266" y="654">予約</text></g>
+      <rect y="706" width="362" height="70" fill="#FFFFFF"/>
+      <g fill="#C7C7CC"><circle cx="181" cy="732" r="11"/><circle cx="300" cy="732" r="11"/></g>
+      <circle cx="62" cy="732" r="11" fill="#1C1C1E"/>
+    </symbol>
+    <symbol id="chat" viewBox="0 0 362 776" width="362" height="776">
+      <rect width="362" height="776" fill="#F6F5F1"/>
+      <use href="#clock"/>
+      <path d="M28 66l-9 10 9 10" fill="none" stroke="#1C1C1E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="40" y="83" font-size="18" font-weight="600" fill="#1C1C1E">あおぞらカフェ</text>
+      <rect x="16" y="112" width="186" height="74" rx="18" fill="#FFFFFF"/>
+      <text font-size="15" fill="#1C1C1E"><tspan x="32" y="142">こんにちは！</tspan><tspan x="32" y="168">何名様、何時ですか？</tspan></text>
+      <rect y="412" width="362" height="364" fill="#D5D7DD"/>
+      <rect x="14" y="424" width="290" height="44" rx="22" fill="#FFFFFF"/>
+      <circle cx="326" cy="446" r="20" fill="#C7C7CC"/>
+      <path d="M326 456v-19m-8 8 8-8 8 8" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <g fill="#FFFFFF">
+        <rect x="8" y="488" width="29" height="42" rx="6"/><rect x="43" y="488" width="29" height="42" rx="6"/><rect x="78" y="488" width="29" height="42" rx="6"/><rect x="113" y="488" width="29" height="42" rx="6"/><rect x="148" y="488" width="29" height="42" rx="6"/><rect x="183" y="488" width="29" height="42" rx="6"/><rect x="218" y="488" width="29" height="42" rx="6"/><rect x="253" y="488" width="29" height="42" rx="6"/><rect x="288" y="488" width="29" height="42" rx="6"/><rect x="323" y="488" width="29" height="42" rx="6"/>
+        <rect x="26" y="542" width="29" height="42" rx="6"/><rect x="61" y="542" width="29" height="42" rx="6"/><rect x="96" y="542" width="29" height="42" rx="6"/><rect x="131" y="542" width="29" height="42" rx="6"/><rect x="166" y="542" width="29" height="42" rx="6"/><rect x="201" y="542" width="29" height="42" rx="6"/><rect x="236" y="542" width="29" height="42" rx="6"/><rect x="271" y="542" width="29" height="42" rx="6"/><rect x="306" y="542" width="29" height="42" rx="6"/>
+        <rect x="61" y="596" width="29" height="42" rx="6"/><rect x="96" y="596" width="29" height="42" rx="6"/><rect x="131" y="596" width="29" height="42" rx="6"/><rect x="166" y="596" width="29" height="42" rx="6"/><rect x="201" y="596" width="29" height="42" rx="6"/><rect x="236" y="596" width="29" height="42" rx="6"/><rect x="271" y="596" width="29" height="42" rx="6"/>
+        <rect x="96" y="650" width="170" height="42" rx="6"/>
+      </g>
+    </symbol>
+    <symbol id="pay" viewBox="0 0 362 776" width="362" height="776">
+      <rect width="362" height="776" fill="#F6F5F1"/>
+      <use href="#clock"/>
+      <path d="M28 66l-9 10 9 10" fill="none" stroke="#1C1C1E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="40" y="83" font-size="18" font-weight="600" fill="#1C1C1E">お支払い</text>
+      <text x="20" y="126" font-size="15" font-weight="600" fill="#1C1C1E">あおぞらカフェ</text>
+      <text x="20" y="147" font-size="13" fill="#8A8A8E">今夜7時・2名</text>
+      <text x="20" y="183" font-size="32" font-weight="700" fill="#1C1C1E">¥3,000</text>
+      <rect x="16" y="246" width="330" height="196" rx="18" fill="#FFFFFF"/>
+      <g font-size="13" fill="#8A8A8E"><text x="32" y="276">カード番号</text><text x="32" y="362">有効期限</text><text x="189" y="362">セキュリティコード</text></g>
+      <g fill="#F2F2F0"><rect x="28" y="288" width="306" height="46" rx="12"/><rect x="28" y="374" width="145" height="46" rx="12"/><rect x="185" y="374" width="149" height="46" rx="12"/></g>
+      <rect x="40" y="302" width="28" height="19" rx="4" fill="none" stroke="#8A8A8E" stroke-width="1.6"/>
+      <rect x="40" y="307" width="28" height="4" fill="#8A8A8E"/>
+      <g font-size="17" fill="#1C1C1E"><text x="80" y="317">•••• •••• •••• 4242</text><text x="42" y="403">12/28</text><text x="199" y="403">•••</text></g>
+      <rect x="16" y="462" width="330" height="52" rx="26" fill="#1C1C1E"/>
+      <text x="181" y="494" text-anchor="middle" font-size="17" font-weight="700" fill="#FFFFFF">¥3,000を支払う</text>
+    </symbol>
+  </defs>
+</svg>
+<main data-state="later">
+  <input class="pick" type="radio" name="slide" id="p1" aria-label="Sees your screen">
+  <input class="pick" type="radio" name="slide" id="p2" aria-label="Shows where to tap">
+  <input class="pick" type="radio" name="slide" id="p3" aria-label="Writes in the local language">
+  <input class="pick" type="radio" name="slide" id="p4" aria-label="Closes its eyes when you say “Don't look”">
+
+  <div class="words">
+    <h1 class="lines">
+      <span class="s one"><svg class="face" viewBox="140 150 744 710" role="img" aria-label="OjO"><g class="eye"><ellipse cx="303.2" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="315.2" cy="490" r="75.6" fill="#000000"/></g><g class="eye"><ellipse cx="720.8" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="708.8" cy="490" r="75.6" fill="#000000"/></g><path d="M477 620A35 35 0 0 1 547 620L547 744A97 97 0 0 1 366 792.5A35 35 0 0 1 426.62 757.5A27 27 0 0 0 477 744Z" fill="#9628F5"/></svg> sees your iPhone screen on a call</span>
+      <span class="s two"><svg class="face" viewBox="140 150 744 710" role="img" aria-label="OjO"><g class="eye"><ellipse cx="303.2" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="315.2" cy="490" r="75.6" fill="#000000"/></g><g class="eye"><ellipse cx="720.8" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="708.8" cy="490" r="75.6" fill="#000000"/></g><path d="M477 620A35 35 0 0 1 547 620L547 744A97 97 0 0 1 366 792.5A35 35 0 0 1 426.62 757.5A27 27 0 0 0 477 744Z" fill="#9628F5"/></svg> shows you where to tap, in a small window</span>
+      <span class="s three"><svg class="face" viewBox="140 150 744 710" role="img" aria-label="OjO"><g class="eye"><ellipse cx="303.2" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="315.2" cy="490" r="75.6" fill="#000000"/></g><g class="eye"><ellipse cx="720.8" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="708.8" cy="490" r="75.6" fill="#000000"/></g><path d="M477 620A35 35 0 0 1 547 620L547 744A97 97 0 0 1 366 792.5A35 35 0 0 1 426.62 757.5A27 27 0 0 0 477 744Z" fill="#9628F5"/></svg> writes in the local language, ready to paste</span>
+      <span class="s four"><svg class="face" viewBox="140 150 744 710" role="img" aria-label="OjO"><g class="eye"><ellipse cx="303.2" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="315.2" cy="490" r="75.6" fill="#000000"/></g><g class="eye"><ellipse cx="720.8" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="708.8" cy="490" r="75.6" fill="#000000"/></g><path d="M477 620A35 35 0 0 1 547 620L547 744A97 97 0 0 1 366 792.5A35 35 0 0 1 426.62 757.5A27 27 0 0 0 477 744Z" fill="#9628F5"/></svg> closes its eyes when you say “Don't look”</span>
+    </h1>
+    <form method="post" action="/beta">
+      <p class="answer sent" role="status">Thanks. We'll write to you by email.</p>
+      <p class="answer problem invalid" role="alert">Please check your email address.</p>
+      <p class="answer problem wrong" role="alert">Wrong password.</p>
+      <p class="answer problem later" role="alert">We can't take requests right now.</p>
+      <p class="note">Beta for iOS, by password.</p>
+      <label class="hide" for="email">Email</label>
+      <input id="email" name="email" type="email" required maxlength="254" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="Email">
+      <label class="hide" for="password">Password</label>
+      <input id="password" name="password" type="password" required maxlength="200" autocomplete="off" placeholder="Password">
+      <div class="hide" aria-hidden="true">
+        <label for="extra">Leave this empty</label>
+        <input id="extra" name="extra" type="text" tabindex="-1" autocomplete="off">
+      </div>
+      <button type="submit">Request beta</button>
+    </form>
+    <div class="data">
+      <a href="/privacy/">Your data</a>
+      <span aria-hidden="true">·</span>
+      <a href="https://github.com">GitHub</a>
+    </div>
+  </div>
+
+  <div class="device">
+    <div class="stage">
+      <svg class="phone app" viewBox="0 0 390 800" role="img" aria-label="A phone with OjO's small window">
+        <defs>
+          <clipPath id="glass"><rect x="14" y="12" width="362" height="776" rx="44"/></clipPath>
+          <clipPath id="pane"><rect x="4" y="4" width="128" height="174" rx="14"/></clipPath>
+          <filter id="lift" x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#000000" flood-opacity=".45"/></filter>
+          <linearGradient id="skin" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#F0C29E"/><stop offset=".55" stop-color="#E5AC83"/><stop offset="1" stop-color="#C98C62"/></linearGradient>
+          <g id="hand" transform="rotate(-25)">
+            <path d="M-19 16C-19-2-10-12 0-12S19-2 19 16L24 300H-24Z" fill="url(#skin)" stroke="#B5744A" stroke-width="1.2"/>
+            <path d="M-11 6C-11-2-6-6 0-6S11-2 11 6V21Q11 27 5 27H-5Q-11 27-11 21Z" fill="#F8DECA" stroke="#D9A882" stroke-width="1"/>
+            <path d="M-7 1Q-5-2-1-3" fill="none" stroke="#FFFFFF" stroke-opacity=".8" stroke-width="1.6" stroke-linecap="round"/>
+            <path d="M-14 74Q0 79 14 74M-12 81Q0 85 12 81" fill="none" stroke="#B5744A" stroke-opacity=".7" stroke-width="1.6" stroke-linecap="round"/>
+          </g>
+        </defs>
+        <rect x="4" y="2" width="382" height="796" rx="56" fill="#000000" stroke="#3A3A3C" stroke-width="3"/>
+        <g clip-path="url(#glass)">
+          <g transform="translate(14 12)" lang="ja">
+            <g class="s one"><use href="#list"/></g>
+            <g class="s two">
+              <use href="#list"/>
+              <rect class="pressed" x="28" y="408" width="136" height="34" rx="17" fill="#000000" fill-opacity=".35"/>
+            </g>
+            <g class="s three">
+              <use href="#chat"/>
+              <text class="placeholder" x="34" y="451" font-size="15" fill="#8A8A8E">メッセージ</text>
+              <g class="pasted">
+                <circle cx="326" cy="446" r="20" fill="#0A84FF"/>
+                <path d="M326 456v-19m-8 8 8-8 8 8" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                <text x="34" y="451" font-size="15" fill="#1C1C1E">今夜7時に2名でお願いします。</text>
+              </g>
+              <g class="mine">
+                <rect x="100" y="252" width="246" height="48" rx="18" fill="#0A84FF"/>
+                <text x="223" y="282" text-anchor="middle" font-size="15" fill="#FFFFFF">今夜7時に2名でお願いします。</text>
+              </g>
+              <g class="typing">
+                <rect x="16" y="314" width="72" height="48" rx="18" fill="#FFFFFF"/>
+                <circle cx="36" cy="338" r="4.5" fill="#8A8A8E"/><circle cx="52" cy="338" r="4.5" fill="#8A8A8E"/><circle cx="68" cy="338" r="4.5" fill="#8A8A8E"/>
+              </g>
+              <g class="reply">
+                <rect x="16" y="314" width="212" height="48" rx="18" fill="#FFFFFF"/>
+                <text x="122" y="344" text-anchor="middle" font-size="15" fill="#1C1C1E">はい、お待ちしております</text>
+              </g>
+              <g class="callout">
+                <path d="M32 416l8 9 8-9z" fill="#2C2C2E"/>
+                <rect x="22" y="378" width="90" height="40" rx="12" fill="#2C2C2E"/>
+                <text class="ui" x="62" y="404" text-anchor="middle" font-size="16" font-weight="500" fill="#FFFFFF">Paste</text>
+              </g>
+            </g>
+            <g class="s four">
+              <use href="#pay"/>
+              <g class="hush" lang="en">
+                <g transform="translate(61.15 571) scale(1.7)">
+                  <rect width="141" height="34" rx="17" fill="#1C1C1E"/>
+                  <g transform="translate(12 8)" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round"><rect x="3.5" y=".9" width="7" height="10.2" rx="3.5" fill="#FFFFFF" stroke="none"/><path d="M1 8.2a6 6 0 0 0 12 0M7 14.2v3"/></g>
+                  <text class="ui" x="80" y="23" text-anchor="middle" font-size="16" font-weight="600" fill="#FFFFFF">“Don't look”</text>
+                </g>
+              </g>
+              <g class="wake" lang="en">
+                <g transform="translate(96 571) scale(1.7)">
+                  <rect width="100" height="34" rx="17" fill="#1C1C1E"/>
+                  <g transform="translate(12 8)" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round"><rect x="3.5" y=".9" width="7" height="10.2" rx="3.5" fill="#FFFFFF" stroke="none"/><path d="M1 8.2a6 6 0 0 0 12 0M7 14.2v3"/></g>
+                  <text class="ui" x="59.5" y="23" text-anchor="middle" font-size="16" font-weight="600" fill="#FFFFFF">“Look”</text>
+                </g>
+              </g>
+            </g>
+            <g class="window" transform="translate(214 52)">
+              <rect width="136" height="182" rx="18" fill="#000000" filter="url(#lift)"/>
+              <g transform="translate(68 66) scale(.095) translate(-512 -400)">
+                <g class="sight">
+                  <g class="eye"><ellipse cx="303.2" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle class="pupils" cx="315.2" cy="490" r="75.6" fill="#000000"/></g>
+                  <g class="eye"><ellipse cx="720.8" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle class="pupils" cx="708.8" cy="490" r="75.6" fill="#000000"/></g>
+                </g>
+                <g class="lids" fill="#FFFFFF"><ellipse cx="303.2" cy="400" rx="151.2" ry="21.09"/><ellipse cx="720.8" cy="400" rx="151.2" ry="21.09"/></g>
+                <path d="M477 620A35 35 0 0 1 547 620L547 744A97 97 0 0 1 366 792.5A35 35 0 0 1 426.62 757.5A27 27 0 0 0 477 744Z" fill="#9628F5"/>
+              </g>
+              <text class="ui seen" x="68" y="134" text-anchor="middle" font-size="13" font-weight="600" fill="#FFFFFF">Looking</text>
+              <text class="ui unseen" x="68" y="134" text-anchor="middle" font-size="13" font-weight="600" fill="#FFFFFF">Not looking</text>
+              <g clip-path="url(#pane)">
+                <g class="s two"><g class="hint">
+                  <rect width="136" height="182" fill="#000000"/>
+                  <svg x="6" y="6" width="124" height="170" viewBox="0 257.7 244.8 334.6">
+                    <use href="#list"/>
+                    <rect x="25" y="405" width="142" height="40" rx="9" fill="none" stroke="#000000" stroke-width="6"/>
+                    <rect x="25" y="405" width="142" height="40" rx="9" fill="none" stroke="#FFDF00" stroke-width="3.7"/>
+                  </svg>
+                </g></g>
+                <g class="s three"><g class="hint">
+                  <rect width="136" height="182" fill="#000000"/>
+                  <svg x="6" y="6" width="124" height="170" viewBox="0 198.75 362 494.5">
+                    <use href="#chat"/>
+                    <rect x="9.6" y="419.6" width="298.8" height="52.8" rx="12" fill="none" stroke="#000000" stroke-width="9"/>
+                    <rect x="9.6" y="419.6" width="298.8" height="52.8" rx="12" fill="none" stroke="#FFDF00" stroke-width="5.5"/>
+                  </svg>
+                </g></g>
+              </g>
+              <rect x="2.5" y="2.5" width="131" height="177" rx="16" fill="none" stroke="#9628F5" stroke-width="5"/>
+            </g>
+          </g>
+        </g>
+        <g class="s two"><g transform="translate(150 444)"><g class="finger"><use href="#hand" filter="url(#lift)"/></g></g></g>
+        <g class="s three"><g transform="translate(164 460)"><g class="finger"><use href="#hand" filter="url(#lift)"/></g></g></g>
+      </svg>
+      <label class="next" for="p2" aria-hidden="true"><svg class="phone" viewBox="0 0 390 800"><rect x="4" y="2" width="382" height="796" rx="56"/></svg></label>
+      <label class="next" for="p3" aria-hidden="true"><svg class="phone" viewBox="0 0 390 800"><rect x="4" y="2" width="382" height="796" rx="56"/></svg></label>
+      <label class="next" for="p4" aria-hidden="true"><svg class="phone" viewBox="0 0 390 800"><rect x="4" y="2" width="382" height="796" rx="56"/></svg></label>
+      <label class="next" for="p1" aria-hidden="true"><svg class="phone" viewBox="0 0 390 800"><rect x="4" y="2" width="382" height="796" rx="56"/></svg></label>
+    </div>
+  </div>
+
+  <div class="meta">
+    <div class="dots">
+      <label for="p1"><i></i><span class="hide">Sees your screen</span></label>
+      <label for="p2"><i></i><span class="hide">Shows where to tap</span></label>
+      <label for="p3"><i></i><span class="hide">Writes in the local language</span></label>
+      <label for="p4"><i></i><span class="hide">Closes its eyes when you say “Don't look”</span></label>
+    </div>
+  </div>
+</main>
+</body>
+</html>
