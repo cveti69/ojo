@@ -1,16 +1,17 @@
 # iPhone client
 
-The app, the broadcast extension and the keyboard. iOS 17 or later, Swift 5, system frameworks only. The project is generated from
-`project.yml` with XcodeGen: targets `App`, `BroadcastExtension`, `KeyboardExtension` and the framework `Shared`. The generated
-`App.xcodeproj` stays out of git. The network contract is [docs/protocol.md](../docs/protocol.md).
+The app and the broadcast extension. iOS 17 or later, Swift 5, system frameworks only. The project is generated from
+`project.yml` with XcodeGen: targets `App`, `BroadcastExtension` and the framework `Shared`. The generated `App.xcodeproj` stays
+out of git. The network contract is [docs/protocol.md](../docs/protocol.md).
 
 ## Setup
 
-Project and signing settings are in `Config/Project.xcconfig`: `APP_DISPLAY_NAME`, `BUNDLE_IDENTIFIER_PREFIX`,
-`APP_GROUP_IDENTIFIER`, `DEFAULT_SERVER_URL`. Write a URL there as `https:/$()/…`, because `//` starts a comment.
+`Config/Project.xcconfig` holds the project's settings, with placeholders for `BUNDLE_IDENTIFIER_PREFIX`, `APP_GROUP_IDENTIFIER`,
+`DEVELOPMENT_TEAM` and `DEFAULT_SERVER_URL`. Your own values go in `Config/Local.xcconfig`, which stays out of git: copy
+`Config/Local.xcconfig.example` and fill it in. Write a URL as `https:/$()/…`, because `//` starts a comment.
 
-`Config/Local.xcconfig` is optional and stays out of git. Its `DEFAULT_SERVER_TOKEN` goes to `DefaultServerToken` in the app's
-Info.plist, and on launch the app moves it to the App Group if no token is there yet. Without the file the app has no token.
+`DEFAULT_SERVER_TOKEN` from `Local.xcconfig` goes to `DefaultServerToken` in the app's Info.plist, and on launch the app saves it in
+the App Group in place of any other token. Without it the app has no token.
 
 ```sh
 cd ios
@@ -21,9 +22,10 @@ open App.xcodeproj
 ## The call
 
 1. The main screen works like a phone: one button to call and one to end. The app's own words on a call are in
-   `Shared/Sources/CallWords.swift`, in Russian, English and Spanish by the language chosen in settings or else the phone's, English
-   for any other. Between calls the left corner opens the settings, on one page: the language, the voice, the tone, the frame, the
-   trial ticks and the button that copies the log. The right corner opens the questions. On a call the red button has the system's own list of where
+   `Shared/Sources/CallWords.swift`, in Russian, English and Spanish by the phone's language, and in English for any other or
+   when English is chosen in settings. Between calls the left corner opens the settings, on one page: Language (Auto or English),
+   Voice, Tone, Window style, the Turbo and Fewer steps ticks, Your data and the button that copies the log. The right corner
+   opens the questions. On a call the red button has the system's own list of where
    sound goes on its left and the switch for the microphone on its right, which stops sound on the phone and leaves the call running.
    How a call ended stays for 10 seconds, then the main screen comes back by itself.
 2. A call creates a session, turns on `.playAndRecord` in `.default`, says its first words and opens the microphone. Right after the greeting the app asks
@@ -34,15 +36,14 @@ open App.xcodeproj
    the server does not confirm it with `heard`, the phrase goes to `/say` as a file.
 4. `ServerSpeaker` plays each line as it arrives from `POST /speech`, on `AVAudioEngine`. With no sound in time, `SystemSpeaker` reads
    the line in the system voice. The agent does not hear the person while it speaks and for 0.3 seconds after. The voice setting
-   behind "⋯" lists the voices from `/voices` and works from the next line.
+   lists the voices from `/voices` and works from the next line.
 5. With no answer 1.5 seconds after a phrase, the phone says a short waiting phrase from `PauseWords`, in the language of the call.
 6. A `hint` event carries a 720×960 picture for the floating window: a zoomed part of the screen with the target outlined.
    `PictureInPictureHintWindow` shows it in a video call window, which has no system buttons. The sample buffer window stays in the
    code with no switch on screen, and `usesVideoCall` brings it back.
 7. `paste_text` goes to `UIPasteboard` as soon as it arrives. iOS lets a background app reach the clipboard only while the window is
-   open, so if the write fails, it is repeated when the person comes back. The keyboard road stays in the code with no setting on
-   screen: with it the keyboard takes the text from `/suggestions` instead.
-8. "Завершить" stops the voice, the microphone, the events and the window, turns off the audio session and sends `/end` under
+   open, so if the write fails, it is repeated when the person comes back.
+8. "End" stops the voice, the microphone, the events and the window, turns off the audio session and sends `/end` under
    `beginBackgroundTask`. The extension notices the end through the App Group within 0.5 seconds and finishes the broadcast.
 
 `HintEventConnection` keeps the WebSocket to `/events` with a ping every 10 seconds, and reconnects with a delay of 1 to 10 seconds.
@@ -68,18 +69,12 @@ no decisions. `screenReading` in the App Group picks where it runs, and nothing 
 
 - `extension`, the default: `.accurate` Vision on the same small JPEG, in the extension, in a queue of its own. It is skipped when less
   than 16 MB of memory is available.
-- `app`: the extension hands the frame over through `ScreenTextMailbox` in the App Group, and the app reads it and sends `/text`.
 - `extensionFast`: the same as `extension` at the `.fast` level.
 - `off`: no reading.
+- `app` is left from an older build: the extension still hands the frame over through `ScreenTextMailbox`, but the app no longer
+  reads it.
 
 If a read fails, `ScreenTextWorker` repeats it once on the CPU. The shared frame is deleted at the start and the end of a call.
-
-## Keyboard
-
-The page that explains how to turn it on stays in the code, and settings no longer lead to it. The keyboard shows a hint, up to three chips with ready text,
-"Перевести" (translate), the globe and delete. It has no full layout and no microphone. It polls `/suggestions` once a second, only
-while it is on screen. Without full access it uses neither the network nor the App Group and asks for that access. Some apps do not
-allow third-party keyboards, and there the clipboard does the job.
 
 ## Eyes
 
@@ -91,8 +86,8 @@ While the person's microphone is off, a white mark stays in the corner of the wi
 
 ## Checks
 
-"Скопировать журнал" at the bottom of settings copies the log. The log is `events.log` in the App Group, limited to about 256 KB. It holds facts and
-timings, not what was said. The older checks screen stays in the code with no way to it.
+"Copy the log" at the bottom of settings copies the log. The log is `events.log` in the App Group, limited to about 256 KB. It holds
+facts and timings, not what was said.
 
 From the repository root:
 
@@ -109,4 +104,4 @@ settings, frame comparison, phrase detection and the movements of the eyes, with
 `--vision` also runs text reading on a drawn picture.
 
 In the Simulator a file, `tmp/heard.wav` in the app's data folder, stands in for the microphone. The floating window opens only on an
-iPad Simulator: iPhone Simulators report no support for it. The broadcast and the keyboard flow need a real iPhone.
+iPad Simulator: iPhone Simulators report no support for it. The broadcast needs a real iPhone.

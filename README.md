@@ -1,144 +1,143 @@
 # OjO
 
-A phone call with an AI friend who can see your screen.
+OjO is a phone call with an AI friend who can see your iPhone screen. It helps you through apps you cannot read: it tells you
+where to tap, shows the place in a small window and writes text for you in the local language.
 
-You are in a country whose apps you cannot read. You call the agent and talk to it the way you would talk to a friend who knows the
-place. You share your screen, go to the app, and the call shrinks into a floating window. The agent looks at what you look at, says
-what it finds, and asks the one thing that changes the answer. Ask where to tap, and the window shows your own screen zoomed in on
-that button, with the button circled. When a field needs text, a ready phrase in the local language is waiting for you.
+<p align="center">
+  <img src="docs/ojo.png" width="280" alt="OjO on an iPhone: two eyes, a violet nose and the Call button">
+</p>
 
-The agent never taps for you. It never asks for a PIN, a password or a card number, and only you confirm a payment.
+## A call
 
-Built for the Meta Global AI Developer Hackathon, Indie Developer track, Build for Your World.
+1. Tap Call. OjO asks how it can help.
+2. Share your screen in the system sheet that opens.
+3. Go to the app you need. The call comes with you as a small window with OjO's eyes.
+4. Say what you want, in your own words. OjO looks at your screen and answers by voice. If the answer depends on something, it
+   asks.
+5. When there is a place to tap, the window shows that part of your screen up close, with the place outlined.
+6. When a field needs text, OjO writes it in the language of the app and puts it on the clipboard. You paste it.
+7. You do all the tapping. OjO never taps, types or pays for you.
+8. Before a password or a card, say "Don't look". Say "Look" to go on.
+9. End the call, and the server forgets it.
 
-## How it works
+## Models
 
-```mermaid
-flowchart LR
-  subgraph iPhone
-    APP["App: call, voice, floating window"]
-    BR["Broadcast extension: frames when the screen changes"]
-    KB["Keyboard: ready text, translation"]
-  end
-  subgraph Server
-    EARS["One recognition stream per call"]
-    LOOP["Turn loop: one model, one answer"]
-    POINT["Pointing: screen text, SAM, hint picture"]
-  end
-  META["Meta Model API"]
-  APP -- "voice" --> EARS
-  EARS -- "turn" --> LOOP
-  BR -- "frames, screen text" --> LOOP
-  LOOP -- "line to speak, ready text" --> APP
-  LOOP --> POINT
-  POINT -- "picture with the outline" --> APP
-  KB <-- "ready text, translation" --> LOOP
-  EARS <--> META
-  LOOP <--> META
-  POINT <--> META
-```
+Apart from a greeting and a few short waiting phrases, every word OjO says comes from Meta models. The server calls them
+through the Meta Model API.
 
-The phone captures the screen, plays the voice, shows the window and inserts text. All understanding and all decisions happen on the
-server, on Meta models.
+- **Muse Voice Transcribe 1.0** listens. One streaming session runs for the whole call and finds where each phrase ends.
+- **Muse Wonder 1.0** thinks. On every turn it reads the conversation and the latest screens, and answers with one JSON
+  object: what to say, what to outline and what text to paste.
+- **SAM 3.1** finds the exact pixels of the place when the words on the screen are not enough, for example an icon without
+  a label.
+- **Muse Spark 1.3** runs Turbo calls, which answer faster. On a normal call it starts beside Wonder when Wonder has no line
+  after 8 seconds.
+- **ElevenLabs** gives OjO its voice: it reads the lines aloud. Without an ElevenLabs key the phone reads them in its own
+  system voice.
 
-There is one loop. A turn is something the person said or a new settled screen, and one model answers the whole turn with one JSON
-object:
+Vision models name the right button but often miss its pixels. So the model copies the words of the place it means, and
+the server looks for them: first in the text the phone reads off the screen, then with SAM by a short name, then among the
+icons SAM finds near the model's rough box, and only then in the model's own box. On our bench of 40 tasks on 8 real app
+screens, each run 3 times, Muse Wonder alone hit the right place 78 times out of 120. With text recognition and SAM 3.1 it
+hit 109 times. We tuned that order on the same tasks, so read 109 as a tuned result, not a score on new screens.
 
-| Field | Meaning |
-|---|---|
-| `say` | The line to speak. It can be empty: the agent may just keep watching. |
-| `show` | What to outline: the text of that spot, a short English name, and a rough box. |
-| `paste` | Ready text for a field. |
-| `private` | The screen shows a payment, a card, a password or a code. |
-| `lang` | The language of the app on the screen. |
-| `notes` | Notes to itself, which come back on the next turn. |
+Muse Code was not on the call. It reviewed our code while we built it, and several fixes in the history come from its notes.
 
-There is no script around the model: no modes, no goal, no task list, no scenarios. Its instructions hold a short role, the
-prohibitions and this format, so the agent decides by itself when to speak, what to compare and what to ask.
+## Your data
 
-Each Meta model has one job:
+- Your screen, only while you share it, and your voice go to your OjO server and from there to Meta's models. The server
+  uses the standard models, not the Contributor ones that may learn from the data.
+- The text of OjO's lines goes to ElevenLabs for the voice. ElevenLabs never gets the screen.
+- Text OjO writes for you goes to your iPhone's clipboard.
+- Nothing is kept after the call. A call lives in the server's memory. When it ends, the server erases what was said and
+  shown. If the app closes without ending the call, the server erases it after an hour.
+- The server's log lines are technical: no words, no screens and no phone address.
+- Say "Don't look", and OjO's eyes close: the phone stops sending your screen until you say "Look". The screen at the
+  moment you say it still goes with your words, so say it before you open a password or a card.
+- OjO never asks for a password, a PIN or a card number.
+- Every request of a call needs the token that the server and the app share.
+- One setting keeps more: `CALLS_DIR`. With it the server writes a private log of every call for debugging, without
+  payment and password screens. Leave it empty, and nothing is kept.
+- Meta and ElevenLabs handle what they get under their own terms.
 
-- **Muse Wonder 1.0** thinks for the whole call. On every turn it reads the conversation and the last 4 different screens.
-- **Muse Voice Transcribe 1.0** listens through one streaming session for the whole call and finds where each phrase ends.
-- **SAM 3.1** finds the exact pixels when the words on the screen do not settle it.
-- **Muse Spark 1.3** starts beside Wonder when Wonder has no line in 8 seconds, and translates text in the keyboard.
-- **Muse Code** reviewed our code as an independent second reader. Its findings are behind many of the fixes in the history.
+The page [callojo.app/privacy](https://callojo.app/privacy/) says the same for the service we run. Its source is in
+[site/privacy](site/privacy/index.html), next to the rest of [the site](site).
 
-ElevenLabs reads the agent's lines aloud. Every line comes from Meta models. The only fixed text is the greeting and a few short
-waiting phrases, which fill the pause if there is no answer after 1.5 seconds.
+## Run your own server
 
-## Details that took measuring
+You need:
 
-**The voice starts before the answer ends.** The answer is streamed with `say` first, so the line goes to the voice as soon as it is
-whole. In 11 turns on the real server the line came 517 ms before the end of the answer at the median, 376 ms at the least. Whether a
-screen is private is known only from the whole answer, so nothing about a screen is written down until then.
+- a Meta Model API key;
+- an ElevenLabs API key, if you want OjO's voice;
+- a long random token that you make up, for the server and the app;
+- Python 3.9 to 3.14;
+- HTTPS in front of the server, from a proxy such as Caddy or from a tunnel. The app talks only to an HTTPS address.
 
-**A new screen, or just a video?** A frame is a new turn when at least 38% of a thumbnail changed since the last turn. On a real call a
-looping video reached 37%, the keyboard 33%, and a real new screen 40% or more. Replaying a real call of 14 frames over a looping
-video, the agent spoke 0 times without being asked.
-
-**A wrong circle is worse than no circle.** General vision models name the right element but miss its pixels. So the model copies the
-words of the place it means, and the outline finds them with on-device text recognition first, then SAM by the short name the model
-gave, then an icon SAM finds next to the model's rough box, and the model's own box last. We measured this on the current call: 40 tasks
-on 8 real app screens, each run 3 times. A hit means the centre of the box lands inside the correct element.
-
-| Method | All | Scenario steps | Icons |
-|---|---:|---:|---:|
-| Muse Wonder 1.0 alone | 78 of 120 | 19 of 24 | 27 of 51 |
-| With text recognition and SAM 3.1 | **109 of 120** | **21 of 24** | **43 of 51** |
-
-Both rows come from the same answers. We chose the search order and the instruction to copy the words on these same 40 tasks, so read
-the second row as the tuned result, not as a score on new screens.
-
-The bench is in [backend/eval](backend/eval). Its screenshots are not in this repository, because they show personal data.
-
-**Our own window is on the screen too.** The server finds it by its coloured border and paints it grey before the model sees the frame,
-so the words under it do not count and its changing picture is not a new screen.
-
-## Repository
-
-| Path | What is inside |
-|---|---|
-| [ios](ios) | The app, the broadcast extension and the keyboard. Generated with XcodeGen. |
-| [backend/app](backend/app) | The FastAPI server, the call loop and the Meta client. |
-| [backend/eval](backend/eval) | The accuracy bench and its report page. |
-| [docs/protocol.md](docs/protocol.md) | The contract between the phone and the server. |
-
-## Running it
-
-Server, Python 3.9 or later:
-
-```bash
+```sh
 cd backend
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-export SHARED_TOKEN=choose-a-token
-export META_API_KEY=your-key
-export META_TEXT_MODEL=muse-spark-1.3
-export ELEVENLABS_API_KEY=your-key
-.venv/bin/uvicorn app.server:app --port 8000
+export META_API_KEY='your Meta key'
+export ELEVENLABS_API_KEY='your ElevenLabs key'
+export SHARED_TOKEN='your long random token'
+.venv/bin/uvicorn app.server:app --host 127.0.0.1 --port 8000 --workers 1 --no-access-log
 ```
 
-More in [backend/README.md](backend/README.md).
+Keep one worker: calls live in memory. Point the HTTPS proxy at port 8000. `GET /health` needs no token and answers
+`{"ok":true}`.
 
-App: set your team, identifiers and server address in `ios/Config/Project.xcconfig`, then:
+The server takes its keys only from the environment and never reads a `.env` file. The models and the other settings have
+defaults, listed in [backend/README.md](backend/README.md).
 
-```bash
-cd ios
-xcodegen generate
-open App.xcodeproj
+Tests make no real requests to Meta or ElevenLabs:
+
+```sh
+.venv/bin/python -m pip install pytest httpx
+.venv/bin/python -m pytest tests -q
 ```
 
-Screen broadcast, the floating window and the keyboard need a real iPhone. The interface and the agent's role are in Russian for now.
-More in [ios/README.md](ios/README.md).
+## Build the app
 
-## Privacy
+You need a Mac with Xcode (we use 27.1), [XcodeGen](https://github.com/yonaskolb/XcodeGen), an Apple developer account and
+an iPhone with iOS 17 or later.
 
-Nothing from a call is written to disk unless the server is started with `CALLS_DIR`, a private folder for debugging calls. Payment
-and password screens stay out of it even then: the model says so, and a broad list of words in Russian, English and Indonesian catches
-what the model misses. Sessions live in memory, and requests need a shared token. Frames go only to Meta's standard models, not to the
-Contributor models that allow training on data. ElevenLabs gets the text of the agent's lines, never the screen.
+1. Copy `ios/Config/Local.xcconfig.example` to `ios/Config/Local.xcconfig` and fill it in: your bundle identifier, an App
+   Group, your team ID, the address of your server and the same token as `SHARED_TOKEN`. `Local.xcconfig` stays out of git.
+2. Generate the project and open it:
+
+   ```sh
+   cd ios
+   xcodegen generate
+   open App.xcodeproj
+   ```
+
+3. Choose your iPhone and run the `App` scheme. Xcode signs the app and its broadcast extension with your team. Both use the
+   App Group. If Xcode cannot create it, add it in your developer account for both identifiers.
+
+The network checks need no server and no iPhone: `sh ios/scripts/check-protocol.sh`. `ios/scripts/archive.sh` makes a
+build for TestFlight. More in [ios/README.md](ios/README.md).
+
+## Limits
+
+- OjO works only on the iPhone. There is no Android app.
+- The small window is the system's Picture in Picture. It plays a video of OjO's eyes and the outline. If it does not open,
+  turn on Settings › General › Picture in Picture › Start PiP Automatically.
+- While a call is on, the app plays a quiet sound in the background. It keeps the call alive when you switch to another
+  app, the way a calling app keeps its line open.
+- The screen goes out through the system's screen broadcast. You start it yourself, and iOS shows that the screen is shared.
+- OjO can point at the wrong place. Look before you tap.
+- An answer takes a few seconds. Turbo answers faster with a lighter model.
+- OjO talks in your phone's language, or in English if you choose it in the settings. Its own buttons and phrases are in
+  English, Russian and Spanish. It reads screens in any language.
+- We tested it on one iPhone with iOS 27, in Tokopedia, Discord, LOKET X and Baidu Maps, through the speaker and through
+  AirPods. The iPhone Simulator shows neither the small window nor the broadcast.
+- You need your own server and keys, and Meta and ElevenLabs charge for what a call uses.
+- The bench in [backend/eval](backend/eval) needs screenshots of real apps. They are not here, because they show personal
+  data.
 
 ## License
 
-[MIT](LICENSE). The bundled Inter font is under the [SIL Open Font License](backend/assets/Inter-LICENSE.txt).
+[MIT](LICENSE), copyright 2026 cveti69. The Inter font in `backend/assets` is under the
+[SIL Open Font License](backend/assets/Inter-LICENSE.txt).
+
+OjO was made for the Meta Global AI Developer Hackathon, Indie Developer track.
