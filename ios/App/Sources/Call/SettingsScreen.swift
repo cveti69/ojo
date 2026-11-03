@@ -103,10 +103,17 @@ struct SettingsScreen: View {
 }
 
 extension View {
-    /// A swipe from the left edge goes back, as it does in the system's own screens.
+    /// A swipe from the left edge goes back, as it does in the system's own screens. A thin strip along the edge takes it,
+    /// so the scroll under it never swallows the swipe; it is narrower than the margin, so it covers nothing to tap.
     func backOnEdgeSwipe(_ back: @escaping () -> Void) -> some View {
-        simultaneousGesture(DragGesture(minimumDistance: 20, coordinateSpace: .global).onEnded { drag in
-            if drag.startLocation.x < 28, drag.translation.width > 80, abs(drag.translation.height) < drag.translation.width / 2 { back() }
-        })
+        overlay(alignment: .leading) {
+            Color.clear
+                .frame(width: 16)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 10, coordinateSpace: .global).onEnded { drag in
+                    if drag.translation.width > 60, abs(drag.translation.height) < drag.translation.width { back() }
+                })
+                .accessibilityHidden(true)
+        }
     }
 }
