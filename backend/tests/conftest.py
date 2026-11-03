@@ -197,6 +197,7 @@ def backend(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "META_SPARE_MODEL", "test-spare")
     monkeypatch.setattr(config, "META_TRANSCRIBE_MODEL", "test-asr")
     monkeypatch.setattr(config, "CALLS_DIR", "")
+    monkeypatch.setattr(config, "DEBUG_PAGE", True)  # The bench has it; test_protocol checks that the server has not.
     monkeypatch.setattr(config, "SESSION_TTL_SECONDS", 3600)
     monkeypatch.setattr(config, "SESSION_CLEANUP_SECONDS", 30)
     fake = FakeMeta()

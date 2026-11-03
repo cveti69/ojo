@@ -187,10 +187,21 @@ class Session:
             self.publish({"type": "done", "text_ru": text_ru or self.words["ended"]})
         for queue in tuple(self.subscribers):
             self._put(queue, None)
-        if self.answer and not self.answer.done():
-            self.answer.cancel()
+        for task in (self.answer, self.kept):
+            if task and not task.done():
+                task.cancel()
         if self.ears:
             self.ears.close()
+        self.forget()
+
+    def forget(self) -> None:
+        """What was said and seen goes with the call. Only the mark that it ended stays, till the session is let go."""
+        self.chat.clear()
+        self.heard_lines.clear()
+        self.lines.clear()
+        self.frame_text.clear()
+        self.open_words, self.open_screen, self.seen_gray, self.last_frame = "", None, None, None
+        self.last_answer, self.last_hint, self.last_say, self.grounding = None, None, None, None
 
 
 class SessionStore:

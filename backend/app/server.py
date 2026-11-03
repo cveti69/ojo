@@ -435,6 +435,8 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
     @application.get("/debug/{session_id}", response_class=HTMLResponse)
     async def debug_page(session_id: str, token: Optional[str] = None,
                          x_token: Optional[str] = Header(default=None, alias="X-Token")):
+        if not config.DEBUG_PAGE:
+            raise HTTPException(404, "Not Found")
         if not valid_token(x_token) and not valid_token(token):
             raise HTTPException(401, "Неверный токен.")
         return HTMLResponse(debug.render(session_or_404(session_id)))

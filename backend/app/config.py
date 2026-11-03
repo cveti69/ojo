@@ -38,3 +38,4 @@ MAX_AUDIO_BYTES = int(os.environ.get("MAX_AUDIO_BYTES", "16777216"))
 CALLS_DIR = os.environ.get("CALLS_DIR", "")  # A folder outside the repository for a log of every call. Empty keeps nothing.
 BETA_FILE = os.environ.get("BETA_FILE") or (os.path.join(os.path.dirname(CALLS_DIR.rstrip("/")), "beta.jsonl") if CALLS_DIR else "")  # Beside that folder.
 LANDING = os.environ.get("LANDING", "") == "on"  # The public page and its form. Off they do not exist, with a token or without one.
+DEBUG_PAGE = os.environ.get("DEBUG_PAGE", "") == "on"  # The page of a live call, for a test bench. The token is in every build, so off it does not exist.

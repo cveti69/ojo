@@ -475,3 +475,12 @@ def test_debug_escapes_model_text(backend):
     idle(backend, session_id)
     page = backend.client.get("/debug/" + session_id, headers=AUTH)
     assert "<script>" not in page.text and "&lt;script&gt;" in page.text
+
+
+def test_the_debug_page_is_not_there_unless_the_bench_asks_for_it(backend, monkeypatch):
+    """The token is in every build, so on the server the page of a live call does not exist, with a token or without."""
+    session_id = new_session(backend.client)
+    monkeypatch.setattr(config, "DEBUG_PAGE", False)
+    assert backend.client.get("/debug/" + session_id, headers=AUTH).status_code == 404
+    assert backend.client.get("/debug/" + session_id + "?token=" + TOKEN).status_code == 404
+    assert config.os.environ.get("DEBUG_PAGE") is None and "DEBUG_PAGE = os.environ.get(\"DEBUG_PAGE\", \"\") == \"on\"" in open(config.__file__, encoding="utf-8").read()

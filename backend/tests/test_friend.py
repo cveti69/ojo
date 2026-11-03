@@ -2651,3 +2651,36 @@ def test_new_words_after_leaving_stop_that_answer_as_any_other(backend, monkeypa
         release.set()
     idle(backend, session_id)
     assert spoken(seen) == ["Теперь ответ."]
+
+
+def test_the_end_of_a_call_forgets_what_was_said_and_seen(backend):
+    """Nothing of the call stays in the server's memory once it ends: their words, the answers, the screens and the text read off
+    them all go. Only the mark that it ended is left, so a late frame still hears 409 and the broadcast can still say it stopped."""
+    client = backend.client
+    backend.meta.replies = [line()]
+    session_id = sharing(client)
+    words(client, session_id)
+    assert look(client, session_id, [SCREENS[0]]).status_code == 200
+    idle(backend, session_id)
+    session = backend.store.sessions[session_id]
+    assert session.chat and session.last_frame and session.last_answer and session.seen_gray
+    assert client.post("/sessions/" + session_id + "/end", headers=AUTH).status_code == 200
+    assert session.chat == [] and session.heard_lines == [] and session.lines == {} and session.frame_text == {} and session.texts == []
+    assert (session.last_frame, session.open_screen, session.seen_gray, session.last_answer, session.last_say, session.last_hint) == (None,) * 6
+    assert session.heard == "" and session.open_words == "" and session.grounding is None
+    assert post_frame(client, session_id).status_code == 409
+    assert client.post("/sessions/" + session_id + "/broadcast", headers=AUTH, json={"state": "finished"}).json() == {"ok": True}
+
+
+def test_the_end_of_a_call_stops_an_answer_kept_across_the_window():
+    """An answer kept going as the window opened would otherwise write its words into the call after it was forgotten."""
+    import asyncio
+
+    async def ended():
+        session = sessions.Session(id="s_kept", user_lang="en", target_lang="", text_entry="clipboard")
+        session.kept = asyncio.ensure_future(asyncio.get_running_loop().create_future())
+        session.finish()
+        await asyncio.sleep(0)
+        return session.kept.cancelled()
+
+    assert asyncio.run(ended())
