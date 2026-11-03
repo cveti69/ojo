@@ -37,6 +37,8 @@ through the Meta Model API.
 - **ElevenLabs** gives OjO its voice: it reads the lines aloud. Without an ElevenLabs key the phone reads them in its own
   system voice.
 
+The full rules OjO gives the models are in [docs/prompts.md](docs/prompts.md).
+
 Vision models name the right button but often miss its pixels. So the model copies the words of the place it means, and
 the server looks for them: first in the text the phone reads off the screen, then with SAM by a short name, then among the
 icons SAM finds near the model's rough box, and only then in the model's own box. On our bench of 40 tasks on 8 real app
