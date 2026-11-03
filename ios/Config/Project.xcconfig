@@ -1,4 +1,4 @@
-// Change project identity, signing and service defaults only here.
+// Placeholders. Your own identifiers, team, server and token go in Local.xcconfig, see Local.xcconfig.example.
 APP_DISPLAY_NAME = OjO
 BUNDLE_IDENTIFIER_PREFIX = com.example.ojo
 APP_GROUP_IDENTIFIER = group.com.example.ojo

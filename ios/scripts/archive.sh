@@ -19,7 +19,15 @@ LOCK_SESSION=${LOCK_SESSION:-hackathon-ios}
 UNSIGNED=0
 [ "${1:-}" = "--unsigned" ] && UNSIGNED=1
 
-setting() { sed -n "s/^$1 = //p" "$IOS_DIR/Config/Project.xcconfig"; }
+# Local.xcconfig overrides Project.xcconfig, as it does for Xcode.
+setting() {
+  local value=""
+  if [ -f "$IOS_DIR/Config/Local.xcconfig" ]; then
+    value=$(sed -n "s/^$1 = //p" "$IOS_DIR/Config/Local.xcconfig" | tail -n 1)
+  fi
+  if [ -z "$value" ]; then value=$(sed -n "s/^$1 = //p" "$IOS_DIR/Config/Project.xcconfig" | tail -n 1); fi
+  printf '%s\n' "$value"
+}
 
 LOCKED=0
 release_lock() { if [ "$LOCKED" = 1 ]; then rm -f "$LOCK"; fi; }
@@ -65,7 +73,7 @@ fi
 
 TEAM=$(setting DEVELOPMENT_TEAM)
 if [ -z "$TEAM" ]; then
-  echo "DEVELOPMENT_TEAM is empty in ios/Config/Project.xcconfig" >&2
+  echo "DEVELOPMENT_TEAM is empty: set your team in ios/Config/Local.xcconfig" >&2
   exit 1
 fi
 

@@ -1,0 +1,9 @@
+// Copy this file to Local.xcconfig in the same folder and put your own values in it.
+// Local.xcconfig stays out of git, and its values replace the placeholders in Project.xcconfig.
+BUNDLE_IDENTIFIER_PREFIX = com.yourname.ojo
+APP_GROUP_IDENTIFIER = group.com.yourname.ojo
+DEVELOPMENT_TEAM = ABCDE12345
+// Write the address as https:/$()/host, because // starts a comment in this file.
+DEFAULT_SERVER_URL = https:/$()/your-server.example.com
+// The same value as SHARED_TOKEN on your server.
+DEFAULT_SERVER_TOKEN = your-shared-token
