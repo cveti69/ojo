@@ -13,13 +13,6 @@ final class PhraseListener: @unchecked Sendable {
     private var converter: AVAudioConverter?
     private var deafUntil = Date.distantPast
     private var isMuted = false
-    private var echoPeak: Float?
-    private var measure: (@Sendable (AVAudioPCMBuffer, Bool) -> Void)?
-
-    /// Gets the same sound as the phrase detector, for the record only.
-    func measure(with handler: (@Sendable (AVAudioPCMBuffer, Bool) -> Void)?) {
-        lock.withLock { measure = handler }
-    }
 
     init() {
         // A phrase waits while the last one is answered. Only the newest does: it is what the person means now.
@@ -54,16 +47,6 @@ final class PhraseListener: @unchecked Sendable {
             }
             let fresh = detector.takeFresh()
             if !fresh.isEmpty { soundOutput.yield(fresh) }
-            echoPeak = echoPeak.map { max($0, detector.lastLevel) }
-            measure?(buffer, detector.isHearing)
-        }
-    }
-
-    /// Starts counting what reaches the microphone over the agent's voice. Stopping returns the loudest of it.
-    func watchEcho(_ isWatching: Bool) -> Float? {
-        lock.withLock {
-            defer { echoPeak = isWatching ? -160 : nil }
-            return echoPeak
         }
     }
 

@@ -122,7 +122,6 @@ private enum ProtocolChecks {
         let client = ServerClient(settings: settings, configuration: configuration)
         let created = try await client.createSession()
         try check(created.sessionID == "session-test", "session_id decoding")
-        _ = try await client.words("Что это?", sessionID: created.sessionID)
         var spoken = 0
         for try await _ in try await client.speech("Привет", voice: "voice-1") { spoken += 1 }
         try check(spoken == 4, "speech bytes")
@@ -210,9 +209,6 @@ private enum ProtocolChecks {
         let english = ServerSettings(serverURL: settings.serverURL, token: settings.token, userLang: "en-US", targetLang: "auto", textEntry: .clipboard)
         let englishBody = try JSONSerialization.jsonObject(with: JSONEncoder().encode(CreateSessionRequest(settings: english))) as! [String: Any]
         try check(englishBody["user_lang"] as? String == "en-US", "the phone's whole language tag reaches the server")
-        let typedLine = requests.first { $0.url!.path.hasSuffix("/words") }!
-        let typedBody = try JSONSerialization.jsonObject(with: body(of: typedLine)) as! [String: String]
-        try check(typedBody == ["text": "Что это?"], "typed line body")
         let speech = requests.first { $0.url!.path.hasSuffix("/speech") }!
         let speechBody = try JSONSerialization.jsonObject(with: body(of: speech)) as! [String: String]
         try check(speechBody == ["text": "Привет", "voice": "voice-1"], "the chosen voice goes with the line")
@@ -1294,11 +1290,16 @@ private enum ProtocolChecks {
         for language in [CallWords.russian, .english, .spanish] {
             let all = strings(language)
             try check(all.count - language.pause.count - language.sounds.count == russian.count - CallWords.russian.pause.count - CallWords.russian.sounds.count && all.allSatisfy { !$0.isEmpty }, "every word has its text")
-            try check(language.questions.count == 7, "seven questions")
+            try check(language.questions.count == 6, "six questions")
             try check(Set(language.pause).count == language.pause.count, "different waiting phrases")
             let spoken = [language.greeting, language.failed, language.lostHearing, language.noHintYet] + language.pause + language.sounds
             try check(spoken.allSatisfy { $0.last.map { ".?!".contains($0) } == true }, "what is said ends as a sentence")
         }
+        try check(CallWords.english.describe(ClientError.http(401)) == "The server didn't accept this build. Update OjO."
+                  && CallWords.spanish.describe(ClientError.http(503)) == "Error del servidor (HTTP 503)."
+                  && CallWords.russian.describe(ClientError.http(404)) == "Звонок не найден. Завершите его и позвоните снова.", "a failure speaks the app's language")
+        try check(CallWords.english.describe(URLError(.notConnectedToInternet)) == URLError(.notConnectedToInternet).localizedDescription,
+                  "the system's own failures keep the system's words")
         for words in strings(.english) + strings(.spanish) {
             try check(words.unicodeScalars.allSatisfy { !(0x0400...0x04FF).contains($0.value) }, "no Russian left in \(words)")
         }

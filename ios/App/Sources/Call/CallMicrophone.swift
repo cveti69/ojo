@@ -21,16 +21,10 @@ final class CallMicrophone {
 
     private let listener = PhraseListener()
     private var engine: AVAudioEngine?
-    private var sharedEngine: AVAudioEngine?
     private var configurationChange: AnyCancellable?
     private var restarts = 0
     private var lastRestart = Date.distantPast
     private var nextTry: Task<Void, Never>?
-
-    /// Hearing over the agent's voice takes the voice's own engine: only then can iOS take the voice out of what it hears.
-    init(sharedEngine: AVAudioEngine? = nil) {
-        self.sharedEngine = sharedEngine
-    }
 
     /// iOS lets the microphone start only while the app is on screen.
     @discardableResult
@@ -50,7 +44,7 @@ final class CallMicrophone {
         nextTry = nil
         configurationChange = nil
         engine?.inputNode.removeTap(onBus: 0)
-        if sharedEngine == nil { engine?.stop() }
+        engine?.stop()
         engine = nil
         isOn = false
         listener.forget()
@@ -61,16 +55,8 @@ final class CallMicrophone {
         listener.mute(isOn)
     }
 
-    func measure(with probe: AppleSpeechProbe) {
-        listener.measure { [probe] buffer, isSpeech in probe.hear(buffer, isSpeech: isSpeech) }
-    }
-
     func agentSpeaks(_ isSpeaking: Bool) {
-        if sharedEngine != nil {  // With iOS filtering the voice out, the question is what the filter lets through.
-            if let echo = listener.watchEcho(isSpeaking) { onDiagnostic?("Перебивание: эхо голоса, пик \(Int(echo)) дБ") }
-        } else {
-            listener.deafen(until: isSpeaking ? .distantFuture : Date().addingTimeInterval(Self.ringing))
-        }
+        listener.deafen(until: isSpeaking ? .distantFuture : Date().addingTimeInterval(Self.ringing))
     }
 
     private func startEngine() {
@@ -78,7 +64,7 @@ final class CallMicrophone {
             onDiagnostic?("Микрофон: нет разрешения")
             return
         }
-        let engine = sharedEngine ?? AVAudioEngine()
+        let engine = AVAudioEngine()
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {

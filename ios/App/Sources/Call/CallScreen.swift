@@ -269,7 +269,7 @@ final class ScreenSharePicker: RPSystemBroadcastPickerView {
         preferredExtension = Bundle.main.bundleIdentifier.map { "\($0).broadcast" }
         showsMicrophoneButton = false
         alpha = 0.02  // Not seen over our button. Below 0.01 it would stop taking taps.
-        accessibilityLabel = "Показать экран"
+        accessibilityLabel = CallWords.device.showScreen
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -286,19 +286,3 @@ final class ScreenSharePicker: RPSystemBroadcastPickerView {
     }
 }
 
-private struct BroadcastPicker: UIViewRepresentable {
-    let isEnabled: Bool
-
-    func makeUIView(context: Context) -> RPSystemBroadcastPickerView {
-        let picker = RPSystemBroadcastPickerView(frame: CGRect(x: 0, y: 0, width: 44, height: 44))
-        picker.preferredExtension = Bundle.main.bundleIdentifier.map { "\($0).broadcast" }
-        picker.showsMicrophoneButton = false
-        picker.accessibilityLabel = "Начать трансляцию экрана"
-        return picker
-    }
-
-    func updateUIView(_ uiView: RPSystemBroadcastPickerView, context: Context) {
-        uiView.isUserInteractionEnabled = isEnabled
-        uiView.alpha = isEnabled ? 1 : 0.4
-    }
-}

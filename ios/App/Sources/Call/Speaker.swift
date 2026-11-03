@@ -68,9 +68,7 @@ final class ServerSpeaker: Speaker {
     private var partsHeard = 0  // Sentences that have begun to sound.
     private var endsHere = false
     private var voiceTimed = false
-    var hearsOverVoice = false
     var voice: String?  // Read for each line, so a new choice works from the next one.
-    private var filtersVoice = false
 
     init(fallback: any Speaker) {
         self.fallback = fallback
@@ -96,12 +94,6 @@ final class ServerSpeaker: Speaker {
         self.client = client
         self.journal = journal
         fallback.prepare(client: client, journal: journal)
-        if hearsOverVoice != filtersVoice, !engine.isRunning {
-            do {
-                try engine.inputNode.setVoiceProcessingEnabled(hearsOverVoice)
-                filtersVoice = hearsOverVoice
-            } catch { journal?.append("Перебивание: фильтр голоса не переключился: \(error.localizedDescription)") }
-        }
         // iOS can refuse this start from the background, so it happens while the app is on screen.
         do { try engine.start() }
         catch { journal?.append("Голос сервера: движок не запустился: \(error.localizedDescription)") }

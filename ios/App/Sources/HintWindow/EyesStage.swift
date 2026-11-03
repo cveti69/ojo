@@ -193,16 +193,6 @@ final class EyesStage {
         tick()
     }
 
-    func perform(_ joke: EyesJoke) {
-        director.perform(joke, at: clock)
-        tick()
-    }
-
-    func stir() {
-        director.beginStir(at: clock)
-        tick()
-    }
-
     func change(frame: EyesFrame) {
         self.frame = frame
         journal?.append("Глаза: рамка \(frame.rawValue)")
@@ -380,8 +370,9 @@ final class EyesStage {
         String(format: "%.1f", locale: Locale(identifier: "ru_RU"), value)
     }
 
-    private enum StageError: LocalizedError {
+    private enum StageError: LocalizedError, ExplainedError {
         case picture
+        func explained(in words: CallWords) -> String { words.hintFailed }
         var errorDescription: String? { "Не удалось прочитать картинку подсказки." }
     }
 }

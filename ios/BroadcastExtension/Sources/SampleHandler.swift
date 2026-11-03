@@ -99,7 +99,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             let journal = SharedJournal(configuration: configuration, source: "Трансляция")
             lock.withLock { self.journal = journal }
             let store = try SharedStore(configuration: configuration)
-            guard let sessionID = store.sessionID else { throw BroadcastError.noSession }
+            guard let sessionID = store.sessionID else { throw BroadcastError.noSession(CallWords.of(store.settings.userLang).broadcastNoCall) }
             let settings = store.settings
             guard !settings.token.isEmpty else { throw ClientError.missingToken }
             let run = Run(id: id, sessionID: sessionID, store: store, journal: journal,
@@ -716,19 +716,19 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         sendHeldSample()
         if run.store.sessionID != run.sessionID {
             run.journal.append("Сессия закрыта приложением, останавливаем трансляцию")
-            stopForError(BroadcastError.ended, runID: run.id)  // Apple has no stop without this system alert.
+            stopForError(BroadcastError.ended(CallWords.of(run.store.settings.userLang).ended), runID: run.id)  // Apple has no stop without this system alert.
         } else if statistics.0 {
             let availableMB = os_proc_available_memory() / 1_048_576
             run.journal.append("Кадров доставлено: \(statistics.1), пропущено: \(statistics.2); запрос кадра в полёте: \(statistics.3 ? "да" : "нет"); доступно памяти: \(availableMB) МБ\(statistics.4)")
         }
     }
 
+    /// iOS shows these in its own alert, so they speak the app's language.
     private enum BroadcastError: LocalizedError {
-        case noSession, ended, noMailbox
+        case noSession(String), ended(String), noMailbox
         var errorDescription: String? {
             switch self {
-            case .noSession: return "Нет активного звонка. Откройте приложение и нажмите «Позвонить», затем включите трансляцию."
-            case .ended: return "Call ended"
+            case .noSession(let words), .ended(let words): return words
             case .noMailbox: return "Файл кадра в общей группе недоступен."
             }
         }

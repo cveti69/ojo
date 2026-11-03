@@ -35,7 +35,6 @@ public struct SessionResponse: Decodable, Sendable {
     enum CodingKeys: String, CodingKey { case sessionID = "session_id", model }
 }
 
-public struct WordsRequest: Encodable, Sendable { public let text: String }
 public struct PlayedRequest: Encodable, Sendable { public let turn: Int }
 public struct LineSpoken: Encodable, Sendable {
     public let line: Int

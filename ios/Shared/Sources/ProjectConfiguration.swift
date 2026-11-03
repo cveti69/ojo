@@ -34,7 +34,9 @@ public struct ProjectConfiguration {
 
     public var screenMovedName: String { appGroupIdentifier + ".screen-moved" }
 
-    public enum ConfigurationError: LocalizedError {
+    public enum ConfigurationError: LocalizedError, ExplainedError {
+        public func explained(in words: CallWords) -> String { words.setupFailed }
+
         case missingValue(String)
         case invalidServerURL
 

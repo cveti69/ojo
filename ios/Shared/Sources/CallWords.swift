@@ -11,6 +11,11 @@ public struct CallQuestion: Sendable, Equatable {
     }
 }
 
+/// A failure the app explains itself to the person, in the language it speaks. The log keeps its own words.
+public protocol ExplainedError: Error {
+    func explained(in words: CallWords) -> String
+}
+
 /// What the app says and shows by itself on a call, in the language of the phone. The agent's own lines come from the model, so on
 /// a phone in any other language the agent goes on in that language and only these words are English.
 public struct CallWords: Sendable, Equatable {
@@ -58,6 +63,19 @@ public struct CallWords: Sendable, Equatable {
     public let muteMicrophone: String
     public let unmuteMicrophone: String
 
+    // When something fails.
+    public let noToken: String
+    public let badAddress: String
+    public let badAnswer: String
+    public let oldBuild: String
+    public let noCall: String
+    public let serverError: String  // With the HTTP code in place of %d.
+    public let setupFailed: String
+    public let soundFailed: String
+    public let hintFailed: String
+    public let storageFailed: String
+    public let broadcastNoCall: String
+
     // In the settings.
     public let settingsTitle: String
     public let copyJournal: String
@@ -87,6 +105,11 @@ public struct CallWords: Sendable, Equatable {
     public let questions: [CallQuestion]
 
     public static var device: CallWords { of(Locale.preferredLanguages.first ?? "en") }
+
+    /// What the person reads about a failure. One the app does not explain itself, the system has already put into their language.
+    public func describe(_ error: Error) -> String {
+        (error as? ExplainedError)?.explained(in: self) ?? error.localizedDescription
+    }
 
     public static func of(_ language: String) -> CallWords {
         switch language.lowercased().prefix(while: \.isLetter) {
@@ -136,6 +159,17 @@ public struct CallWords: Sendable, Equatable {
         muted: "Выключен",
         muteMicrophone: "Выключить микрофон",
         unmuteMicrophone: "Включить микрофон",
+        noToken: "В этой сборке нет токена сервера.",
+        badAddress: "В этой сборке неверный адрес сервера.",
+        badAnswer: "Сервер прислал неверный ответ.",
+        oldBuild: "Сервер не принял эту сборку. Обновите OjO.",
+        noCall: "Звонок не найден. Завершите его и позвоните снова.",
+        serverError: "Ошибка сервера (HTTP %d).",
+        setupFailed: "OjO настроен неверно. Установите его заново.",
+        soundFailed: "Не удалось запустить звук звонка.",
+        hintFailed: "Не удалось показать подсказку.",
+        storageFailed: "OjO не видит своё хранилище. Установите его заново.",
+        broadcastNoCall: "Звонка нет. Откройте OjO, нажмите «Позвонить» и включите трансляцию.",
         settingsTitle: "Настройки",
         copyJournal: "Скопировать журнал",
         journalCopied: "Журнал скопирован",
@@ -165,7 +199,6 @@ public struct CallWords: Sendable, Equatable {
             CallQuestion("Он может нажать или оплатить за меня?", "Нет. Нажимаешь всегда ты, и оплату подтверждаешь только ты. OjO показывает и говорит, где нажать."),
             CallQuestion("Как взять текст, который он написал?", "OjO скопирует его за тебя. Нажми на поле и выбери «Вставить»."),
             CallQuestion("Что такое Турбо?", "Быстрый режим. OjO отвечает моделью Muse Spark: она быстрее, но на сложных экранах думает меньше. Включается в настройках."),
-            CallQuestion("Какие языки он знает?", "OjO говорит по-английски или на языке телефона, если в «Языке» выбрано «Авто». Свои короткие фразы он говорит по-английски, по-русски или по-испански. Лучше всего он читает экраны на китайском, японском, корейском, тайском, вьетнамском, арабском, русском и на языках с латинскими буквами: это языки, которые читает iPhone."),
             CallQuestion("Я не вижу маленькое окно", "Открой Настройки iPhone › Основные › Картинка в картинке и включи Автозапуск «Картинки в картинке». Нажми на окно, чтобы вернуться в OjO.")
         ]
     )
@@ -211,6 +244,17 @@ public struct CallWords: Sendable, Equatable {
         muted: "Muted",
         muteMicrophone: "Mute the microphone",
         unmuteMicrophone: "Unmute the microphone",
+        noToken: "This build has no server token.",
+        badAddress: "The server address in this build is wrong.",
+        badAnswer: "The server sent a wrong answer.",
+        oldBuild: "The server didn't accept this build. Update OjO.",
+        noCall: "The call was not found. End it and call again.",
+        serverError: "Server error (HTTP %d).",
+        setupFailed: "OjO is set up wrong. Install it again.",
+        soundFailed: "The call sound didn't start.",
+        hintFailed: "Couldn't show the hint.",
+        storageFailed: "OjO can't reach its storage. Install it again.",
+        broadcastNoCall: "No call is on. Open OjO, tap Call, then share your screen.",
         settingsTitle: "Settings",
         copyJournal: "Copy the log",
         journalCopied: "Log copied",
@@ -240,7 +284,6 @@ public struct CallWords: Sendable, Equatable {
             CallQuestion("Can it tap or pay for me?", "No. You always do the tapping, and only you confirm a payment. It points and tells you where."),
             CallQuestion("How do I use the text it writes?", "OjO copies it for you. Tap the field and choose Paste."),
             CallQuestion("What is Turbo?", "A faster mode. OjO answers with Muse Spark, a quicker Meta model that thinks less on hard screens. Turn it on in Settings."),
-            CallQuestion("Which languages does it know?", "OjO talks in English, or in your phone's language when Language is Auto. Its own short phrases are in English, Russian or Spanish. It reads screens best in Chinese, Japanese, Korean, Thai, Vietnamese, Arabic, Russian and languages written in Latin letters: the ones your iPhone can read."),
             CallQuestion("I don't see the small window", "Open iPhone Settings › General › Picture in Picture and turn on Start PiP Automatically. Tap the window to come back to OjO.")
         ]
     )
@@ -284,6 +327,17 @@ public struct CallWords: Sendable, Equatable {
         muted: "Silenciado",
         muteMicrophone: "Silenciar el micrófono",
         unmuteMicrophone: "Activar el micrófono",
+        noToken: "Esta versión no tiene el token del servidor.",
+        badAddress: "La dirección del servidor de esta versión no es válida.",
+        badAnswer: "El servidor envió una respuesta no válida.",
+        oldBuild: "El servidor no aceptó esta versión. Actualiza OjO.",
+        noCall: "No se encontró la llamada. Termínala y vuelve a llamar.",
+        serverError: "Error del servidor (HTTP %d).",
+        setupFailed: "OjO está mal configurado. Vuelve a instalarlo.",
+        soundFailed: "No se pudo iniciar el sonido de la llamada.",
+        hintFailed: "No se pudo mostrar la pista.",
+        storageFailed: "OjO no puede acceder a su almacenamiento. Vuelve a instalarlo.",
+        broadcastNoCall: "No hay ninguna llamada. Abre OjO, toca Llamar y comparte tu pantalla.",
         settingsTitle: "Ajustes",
         copyJournal: "Copiar el registro",
         journalCopied: "Registro copiado",
@@ -313,7 +367,6 @@ public struct CallWords: Sendable, Equatable {
             CallQuestion("¿Puede tocar o pagar por mí?", "No. Siempre tocas tú, y solo tú confirmas un pago. OjO señala y te dice dónde."),
             CallQuestion("¿Cómo uso el texto que escribe?", "OjO te lo copia. Toca el campo y elige Pegar."),
             CallQuestion("¿Qué es Turbo?", "Un modo más rápido. OjO responde con Muse Spark, un modelo de Meta más ágil que piensa menos en pantallas difíciles. Actívalo en Ajustes."),
-            CallQuestion("¿Qué idiomas conoce?", "OjO habla en inglés, o en el idioma de tu teléfono si en Idioma eliges Automático. Sus frases cortas propias están en inglés, ruso o español. Lee mejor las pantallas en chino, japonés, coreano, tailandés, vietnamita, árabe, ruso y en idiomas con letras latinas: los que tu iPhone sabe leer."),
             CallQuestion("No veo la ventana pequeña", "Abre Ajustes del iPhone › General › Imagen dentro de imagen y activa Iniciar modo PiP automáticamente. Toca la ventana para volver a OjO.")
         ]
     )

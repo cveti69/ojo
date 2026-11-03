@@ -75,8 +75,9 @@ final class CallAudioSession {
         onActivityChange?(false)
     }
 
-    private enum AudioError: LocalizedError {
+    private enum AudioError: LocalizedError, ExplainedError {
         case playback
+        func explained(in words: CallWords) -> String { words.soundFailed }
         var errorDescription: String? { "Не удалось запустить звук звонка." }
     }
 }

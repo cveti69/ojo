@@ -75,11 +75,6 @@ public final class ServerClient: Sendable {
         return try JSONDecoder().decode(SpokenReply.self, from: data)
     }
 
-    /// The same as a spoken line, typed.
-    public func words(_ text: String, sessionID: String) async throws -> OKResponse {
-        try await json("POST", ["sessions", sessionID, "words"], body: WordsRequest(text: text))
-    }
-
     /// The screens the phone kept, oldest first, for the line that asked for them.
     public func look(_ frames: [KeptScreen], sessionID: String) async throws -> OKResponse {
         let boundary = "ojo-" + UUID().uuidString
@@ -241,6 +236,19 @@ public enum ClientError: LocalizedError, Equatable {
         case .http(401): return "Сервер отклонил токен. Проверьте настройки."
         case .http(404): return "Сессия не найдена. Завершите звонок и позвоните снова."
         case .http(let code): return "Ошибка сервера (HTTP \(code))."
+        }
+    }
+}
+
+extension ClientError: ExplainedError {
+    public func explained(in words: CallWords) -> String {
+        switch self {
+        case .missingToken: return words.noToken
+        case .invalidAddress: return words.badAddress
+        case .invalidResponse: return words.badAnswer
+        case .http(401): return words.oldBuild
+        case .http(404): return words.noCall
+        case .http(let code): return String(format: words.serverError, code)
         }
     }
 }

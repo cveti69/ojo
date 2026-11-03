@@ -2,6 +2,7 @@ import AVKit
 import CoreMedia
 import CoreVideo
 import OSLog
+import Shared
 import UIKit
 
 @MainActor
@@ -233,9 +234,11 @@ final class PictureInPictureHintWindow: NSObject, HintWindowPresenting {
         context.stroke(CGRect(origin: .zero, size: frameSize).insetBy(dx: thickness / 2, dy: thickness / 2))
     }
 
-    private enum FrameError: LocalizedError {
+    private enum FrameError: LocalizedError, ExplainedError {
         case invalidImage
         case system(OSStatus)
+
+        func explained(in words: CallWords) -> String { words.hintFailed }
 
         var errorDescription: String? {
             switch self {

@@ -168,22 +168,6 @@ public final class SharedStore: @unchecked Sendable {
         }
     }
 
-    public var measuresAppleSpeech: Bool {
-        get { defaults.bool(forKey: "measuresAppleSpeech") }
-        set {
-            defaults.set(newValue, forKey: "measuresAppleSpeech")
-            defaults.synchronize()
-        }
-    }
-
-    public var hearsOverVoice: Bool {
-        get { defaults.bool(forKey: "hearsOverVoice") }
-        set {
-            defaults.set(newValue, forKey: "hearsOverVoice")
-            defaults.synchronize()
-        }
-    }
-
     /// Calls with the quick model. A trial, so it stays off until the person turns it on.
     public var fastMode: Bool {
         get { defaults.bool(forKey: "fastMode") }
@@ -287,9 +271,11 @@ public final class SharedStore: @unchecked Sendable {
         defaults.synchronize()
     }
 
-    private enum StoreError: LocalizedError {
+    private enum StoreError: LocalizedError, ExplainedError {
         case unavailable
         case emptyLanguage
+
+        func explained(in words: CallWords) -> String { words.storageFailed }
 
         var errorDescription: String? {
             switch self {
