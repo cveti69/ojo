@@ -3,6 +3,8 @@
 OjO is a phone call with an AI friend who can see your iPhone screen. It helps you through apps you cannot read: it tells you
 where to tap, shows the place in a small window and writes text for you in the local language.
 
+[Watch the 3-minute demo](https://youtu.be/UEsooRZiXJA) · [callojo.app](https://callojo.app)
+
 <p align="center">
   <img src="docs/ojo.png" width="280" alt="OjO on an iPhone: two eyes, a violet nose and the Call button">
 </p>
@@ -40,8 +42,6 @@ the server looks for them: first in the text the phone reads off the screen, the
 icons SAM finds near the model's rough box, and only then in the model's own box. On our bench of 40 tasks on 8 real app
 screens, each run 3 times, Muse Wonder alone hit the right place 78 times out of 120. With text recognition and SAM 3.1 it
 hit 109 times. We tuned that order on the same tasks, so read 109 as a tuned result, not a score on new screens.
-
-Muse Code was not on the call. It reviewed our code while we built it, and several fixes in the history come from its notes.
 
 ## Your data
 
@@ -128,12 +128,16 @@ build for TestFlight. More in [ios/README.md](ios/README.md).
 - OjO can point at the wrong place. Look before you tap.
 - An answer takes a few seconds. Turbo answers faster with a lighter model.
 - OjO talks in your phone's language, or in English if you choose it in the settings. Its own buttons and phrases are in
-  English, Russian and Spanish. It reads screens in any language.
+  English, Russian and Spanish.
 - We tested it on one iPhone with iOS 27, in Tokopedia, Discord, LOKET X and Baidu Maps, through the speaker and through
   AirPods. The iPhone Simulator shows neither the small window nor the broadcast.
 - You need your own server and keys, and Meta and ElevenLabs charge for what a call uses.
 - The bench in [backend/eval](backend/eval) needs screenshots of real apps. They are not here, because they show personal
   data.
+
+## How we built it
+
+My AI team and I built OjO: Claude Code by Anthropic, OpenAI Codex and Meta's Muse Code.
 
 ## License
 
