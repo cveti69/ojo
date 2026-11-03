@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#000000">
@@ -13,7 +13,7 @@
 <meta property="og:description" content="On a call, OjO sees your iPhone screen, shows you where to tap and writes in the local language.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22'/%3E%3Cellipse cx='31' cy='46' rx='16' ry='25' fill='%23fff'/%3E%3Cellipse cx='69' cy='46' rx='16' ry='25' fill='%23fff'/%3E%3Ccircle cx='33' cy='53' r='8'/%3E%3Ccircle cx='67' cy='53' r='8'/%3E%3C/svg%3E">
 <style>
-:root{--accent:#9628F5;--accent-hover:#A645F7;--red:#FF453A;--muted:#A1A1AA;--label:#D1D1D6;--line:#3A3A3C;--control:#2C2C2E;--first:5s;--slide:8s;--third:9s;--fourth:7s;--cycle:29s}
+:root{--accent:#9628F5;--accent-hover:#A645F7;--muted:#A1A1AA;--quiet:#8E8E93;--label:#D1D1D6;--line:#3A3A3C;--first:5s;--slide:8s;--third:9s;--fourth:7s;--cycle:29s}
 /* The first slide shows for --first, the second for --slide, the third for --third, the fourth for --fourth, and the round is --cycle. The
    percentages of the keyframes are worked out for 5, 8, 9, 7 and 29 s; the dots of the cafe typing beat once a second, a whole number of times
    in the third slide and in the round. */
@@ -23,7 +23,7 @@ html{background:#000;-webkit-text-size-adjust:100%}
 body{margin:0;background:#000;color:#fff;font-family:ui-rounded,-apple-system,BlinkMacSystemFont,system-ui,sans-serif;font-size:1rem;line-height:1.4}
 :focus-visible{outline:3px solid #fff;outline-offset:2px}
 
-main{height:100vh;height:100svh;min-height:32rem;max-width:1120px;margin:0 auto;padding:max(14px,env(safe-area-inset-top)) 20px max(10px,env(safe-area-inset-bottom));display:grid;grid-template:"lines" auto "device" minmax(12rem,1fr) "meta" auto "form" auto "data" auto/minmax(0,1fr);row-gap:8px}
+main{height:100vh;height:100svh;min-height:32rem;max-width:1120px;margin:0 auto;padding:max(14px,env(safe-area-inset-top)) 20px max(10px,env(safe-area-inset-bottom));display:grid;grid-template:"lines" auto "device" minmax(12rem,1fr) "meta" auto "beta" auto "data" auto/minmax(0,1fr);row-gap:8px}
 .words{display:contents}
 
 .lines{grid-area:lines;display:grid;margin:0;font-size:calc(.85rem + 3.6vw);line-height:1.18;font-weight:700;text-align:center}
@@ -82,23 +82,24 @@ main{height:100vh;height:100svh;min-height:32rem;max-width:1120px;margin:0 auto;
 #p1:checked~* label[for=p1] i,#p2:checked~* label[for=p2] i,#p3:checked~* label[for=p3] i,#p4:checked~* label[for=p4] i{background:#fff}
 #p1:focus-visible~* .dots [for=p1],#p2:focus-visible~* .dots [for=p2],#p3:focus-visible~* .dots [for=p3],#p4:focus-visible~* .dots [for=p4]{outline:3px solid #fff;border-radius:10px}
 
-form{grid-area:form;display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px}
-/* As much black over the form as over the phone. */
-.answer,.note{grid-column:1/-1;margin:0;font-size:.85rem;text-align:center}
-.note{color:var(--label)}
-.answer{display:none;font-weight:600}
-.problem{color:var(--red)}
-[data-state=sent] .sent,[data-state=invalid] .invalid,[data-state=wrong] .wrong,[data-state=later] .later{display:block}
-[data-state=sent] form>:not(.sent){display:none}
+.beta{grid-area:beta;width:100%;max-width:30em;justify-self:center;margin-top:9px;font-size:.9rem;line-height:1.45;text-align:center;color:var(--muted)}
+/* As much black over these words as over the phone. */
+.beta p{margin:0;text-wrap:balance}
+.beta p+p{margin-top:6px}
+.beta p:first-child{color:var(--label)}
+.beta a{color:#fff;text-decoration-color:var(--accent);text-decoration-thickness:2px;text-underline-offset:.22em}
+.beta a:active{text-decoration-color:var(--accent-hover)}
+@media (hover:hover){.beta a:hover{text-decoration-color:var(--accent-hover)}}
+/* The address is no mailto link: on many phones it opens a mail app the person does not use. A long press takes it whole. */
+.mail{color:#fff;white-space:nowrap;-webkit-user-select:all;user-select:all}
 .hide{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
-input:not(.pick){width:100%;height:2.85rem;min-width:0;padding:0 .85rem;border:1px solid var(--line);border-radius:.85rem;background:var(--control);color:#fff;font:inherit;font-size:max(16px,1rem)}
-input::placeholder{color:var(--muted);opacity:1}
-button{grid-column:1/-1;min-height:2.85rem;padding:.4em 1em;border:0;border-radius:1.45rem;background:var(--accent);color:#fff;font:inherit;font-weight:600;cursor:pointer}
-button:active{background:var(--accent-hover)}
-@media (hover:hover){button:hover{background:var(--accent-hover)}}
 
-.data{grid-area:data;display:flex;justify-content:center;align-items:baseline;gap:6px;color:var(--muted);font-size:.78rem}
-.data a{padding:4px;color:inherit;text-decoration:none}
+.data{grid-area:data;display:flex;justify-content:center;margin-top:14px;font-size:.8rem;line-height:1.5}
+/* Smaller and paler than the two lines and further from them, so it reads as the link at the bottom of the page. It is 44 px high for a
+   finger: it reaches into the black over it and into the padding under it, and never past the page. */
+.data a{display:block;padding:13px 20px;margin:-13px 0 -10px;color:var(--quiet);text-decoration-thickness:1px;text-underline-offset:.25em}
+.data a:active{color:var(--muted)}
+@media (hover:hover){.data a:hover{color:var(--muted)}}
 
 .two .hint{animation:hint2a var(--cycle) var(--first) infinite}
 @keyframes hint2{0%,8%{opacity:0}12%,78%{opacity:1}82%,100%{opacity:0}}
@@ -179,18 +180,18 @@ button:active{background:var(--accent-hover)}
 @keyframes look{0%,14%{transform:translate(0,0)}20%,38%{transform:translate(-44px,26px)}44%,60%{transform:translate(44px,20px)}66%,84%{transform:translate(-8px,60px)}90%,100%{transform:translate(0,0)}}
 
 @media (min-width:640px){
-  main{min-height:0;column-gap:clamp(32px,5vw,56px);row-gap:14px;padding:24px clamp(24px,4vw,32px) 12px;grid-template:". device" minmax(0,1fr) "lines device" auto "form device" auto "data device" auto ". device" minmax(0,1fr) ". meta" auto/minmax(0,1fr) minmax(0,1fr)}
+  main{min-height:0;column-gap:clamp(32px,5vw,56px);row-gap:14px;padding:24px clamp(24px,4vw,32px) 12px;grid-template:". device" minmax(0,1fr) "lines device" auto "beta device" auto "data device" auto ". device" minmax(0,1fr) ". meta" auto/minmax(0,1fr) minmax(0,1fr)}
   .lines{font-size:clamp(1.9rem,4.4vw,3.2rem);line-height:1.14}
   .device{padding-top:0}
   .stage{-webkit-mask-image:none;mask-image:none}
   .phone{width:min(100cqw,48.75cqh)}
-  form{width:100%;max-width:440px;justify-self:center;margin-top:10px}
+  .beta{max-width:440px;margin-top:10px}
 }
 @media (min-width:640px) and (max-height:559px){
   main{row-gap:6px;padding:10px 24px 4px}
   .lines{font-size:1.6rem}
-  form{margin-top:4px}
-  .note{display:none}
+  .beta{margin-top:4px;font-size:.8rem}
+  .data{margin-top:8px}
   .phone{width:min(100cqw,78cqh)}
   .stage{-webkit-mask-image:linear-gradient(#000 92%,transparent);mask-image:linear-gradient(#000 92%,transparent)}
   .dots{margin:-4px 0}
@@ -295,26 +296,13 @@ button:active{background:var(--accent-hover)}
       <span class="s three"><svg class="face" viewBox="140 150 744 710" role="img" aria-label="OjO"><g class="eye"><ellipse cx="303.2" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="315.2" cy="490" r="75.6" fill="#000000"/></g><g class="eye"><ellipse cx="720.8" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="708.8" cy="490" r="75.6" fill="#000000"/></g><path d="M477 620A35 35 0 0 1 547 620L547 744A97 97 0 0 1 366 792.5A35 35 0 0 1 426.62 757.5A27 27 0 0 0 477 744Z" fill="#9628F5"/></svg> writes in the local language, ready to paste</span>
       <span class="s four"><svg class="face" viewBox="140 150 744 710" role="img" aria-label="OjO"><g class="eye"><ellipse cx="303.2" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="315.2" cy="490" r="75.6" fill="#000000"/></g><g class="eye"><ellipse cx="720.8" cy="400" rx="151.2" ry="234.36" fill="#FFFFFF"/><circle cx="708.8" cy="490" r="75.6" fill="#000000"/></g><path d="M477 620A35 35 0 0 1 547 620L547 744A97 97 0 0 1 366 792.5A35 35 0 0 1 426.62 757.5A27 27 0 0 0 477 744Z" fill="#9628F5"/></svg> closes its eyes when you say “Don't look”</span>
     </h1>
-    <form method="post" action="/beta">
-      <p class="answer sent" role="status">Thanks. We'll write to you by email.</p>
-      <p class="answer problem invalid" role="alert">Please check your email address.</p>
-      <p class="answer problem wrong" role="alert">Wrong password.</p>
-      <p class="answer problem later" role="alert">We can't take requests right now.</p>
-      <p class="note">Beta for iOS, by password.</p>
-      <label class="hide" for="email">Email</label>
-      <input id="email" name="email" type="email" required maxlength="254" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="Email">
-      <label class="hide" for="password">Password</label>
-      <input id="password" name="password" type="password" required maxlength="200" autocomplete="off" placeholder="Password">
-      <div class="hide" aria-hidden="true">
-        <label for="extra">Leave this empty</label>
-        <input id="extra" name="extra" type="text" tabindex="-1" autocomplete="off">
-      </div>
-      <button type="submit">Request beta</button>
-    </form>
+    <div class="beta">
+      <p>The iOS beta opens on TestFlight once Apple approves it.</p>
+      <p>Until then: <a href="https://youtu.be/UEsooRZiXJA">watch the demo</a>, build it from
+        <a href="https://github.com/cveti69/ojo">GitHub</a>, or write to <span class="mail">hi@callojo.app</span> for a private demo.</p>
+    </div>
     <div class="data">
       <a href="/privacy/">Your data</a>
-      <span aria-hidden="true">·</span>
-      <a href="https://github.com">GitHub</a>
     </div>
   </div>
 

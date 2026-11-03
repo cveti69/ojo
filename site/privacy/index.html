@@ -25,7 +25,8 @@ h2{margin:30px 0 6px;font-size:1.15rem;line-height:1.3}
 p,li{color:var(--label)}
 p{margin:0 0 10px}
 .lead{color:var(--muted)}
-p a{color:#fff;text-underline-offset:2px}
+/* The address is no mailto link: on many phones it opens a mail app the person does not use. A long press takes it whole. */
+.mail{color:#fff;white-space:nowrap;-webkit-user-select:all;user-select:all}
 ul{margin:0;padding-left:1.15em}
 li{margin:0 0 8px}
 .updated{margin-top:36px;color:var(--muted);font-size:.85rem}
@@ -66,12 +67,12 @@ li{margin:0 0 8px}
   <p>They handle what we send them under their own terms.</p>
 
   <h2>Beta requests</h2>
-  <p>The form on our page doesn't take requests yet, so it keeps nothing.</p>
+  <p>To get into the beta before Apple approves it, write to <span class="mail">hi@callojo.app</span>. We use your email only to answer you and to add you to TestFlight. Apple then sends you the invitation.</p>
 
   <h2>Questions</h2>
-  <p>Write to <a href="mailto:hi@callojo.app">hi@callojo.app</a>.</p>
+  <p>Write to <span class="mail">hi@callojo.app</span>.</p>
 
-  <p class="updated">Updated 3 November 2026.</p>
+  <p class="updated">Updated 4 November 2026.</p>
 </main>
 </body>
 </html>
