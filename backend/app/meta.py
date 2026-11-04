@@ -9,7 +9,7 @@ import time
 import uuid
 from typing import Callable, Iterator, Optional
 
-from . import config
+from . import config, spend
 from .pool import Pool
 
 
@@ -17,6 +17,8 @@ from .pool import Pool
 MAX_COMPLETION_TOKENS = 1500
 THINKING_TOKENS = 16000  # Deeper levels think inside this limit, and an answer that runs out of it comes back empty.
 ANSWER_TOKENS = 2000  # One spoken turn with the thinking behind it. The longest of 144 measured answers took 1405.
+
+TIMED_OUT = ("TimeoutError", "timeout")  # The name of a wait that ran out, in Python 3.10 and on, and in 3.9.
 
 connections = Pool()
 
@@ -28,6 +30,12 @@ class MetaError(RuntimeError):
         self.reason = reason
 
 
+def _paid() -> None:
+    """Past the day's stop nothing that costs money goes out, a request that came in before the stop included."""
+    if spend.ledger.stops():
+        raise MetaError(503, "Лимит расходов на сегодня исчерпан.", "spent")
+
+
 def _request(method: str, path: str, payload: dict | None = None, timeout: float = 60) -> dict:
     data = None if payload is None else json.dumps(payload).encode()
     return _send(method, path, data, "application/json", timeout)
@@ -36,6 +44,7 @@ def _request(method: str, path: str, payload: dict | None = None, timeout: float
 def _send(method: str, path: str, data: bytes | None, content_type: str, timeout: float) -> dict:
     if not config.META_API_KEY:
         raise MetaError(503, "Не задан ключ Meta.")
+    _paid()
     headers = {"Authorization": f"Bearer {config.META_API_KEY}", "Content-Type": content_type}
     try:
         connection, response = connections.send(method, f"{config.META_API_BASE}{path}", data, headers, timeout)
@@ -45,8 +54,8 @@ def _send(method: str, path: str, data: bytes | None, content_type: str, timeout
             connection.close()
             raise
         connections.finished(connection)
-    except (http.client.HTTPException, OSError):
-        raise MetaError(502, "Сервис недоступен.") from None
+    except (http.client.HTTPException, OSError) as error:
+        raise MetaError(502, "Сервис недоступен.", type(error).__name__) from None
     if response.status >= 400:
         raise MetaError(response.status, "Запрос отклонён.")
     try:
@@ -79,7 +88,13 @@ def chat(model: str, messages: list, effort: str | None = None, schema: dict | N
             "json_schema": {"name": "answer", "strict": True, "schema": schema},
         }
     started = time.perf_counter()
-    reply = _request("POST", "/chat/completions", payload, timeout)
+    try:
+        reply = _request("POST", "/chat/completions", payload, timeout)
+    except MetaError as error:
+        if error.reason in TIMED_OUT:
+            spend.answer(model, {})  # It may have answered after we stopped waiting, and that is charged.
+        raise
+    spend.answer(model, reply.get("usage") or {})
     return {
         "text": reply["choices"][0]["message"]["content"],
         "usage": reply.get("usage", {}),
@@ -121,15 +136,17 @@ def chat_json(model: str, messages: list, effort: str, timeout: float = 60,
     the voice need not wait for the fields only the server uses. That was 0.6 s of 7 on real screens, and no slower overall."""
     if not config.META_API_KEY:
         raise MetaError(503, "Не задан ключ Meta.")
+    _paid()
     data = json.dumps({
         "model": model, "messages": messages, "reasoning_effort": effort, "max_completion_tokens": ANSWER_TOKENS,
         "response_format": {"type": "json_object"}, "stream": True, "stream_options": {"include_usage": True},
     }).encode()
     headers = {"Authorization": f"Bearer {config.META_API_KEY}", "Content-Type": "application/json"}
     started = time.perf_counter()
-    text, usage, rest = "", {}, b""
+    text, usage, rest, answering = "", {}, b"", False
     try:
         connection, response = connections.send("POST", f"{config.META_API_BASE}/chat/completions", data, headers, timeout)
+        answering = response.status < 400
         try:
             if response.status < 400:
                 for event in _events(response):
@@ -146,7 +163,11 @@ def chat_json(model: str, messages: list, effort: str, timeout: float = 60,
             raise
         connections.finished(connection)
     except (http.client.HTTPException, OSError) as error:
+        answering = answering or type(error).__name__ in TIMED_OUT  # A wait that ran out may be answered all the same.
         raise MetaError(502, "Сервис недоступен.", type(error).__name__) from None
+    finally:
+        if answering:  # An answer cut off on the way is counted too, as a whole one.
+            spend.answer(model, usage)
     if response.status >= 400:
         raise MetaError(response.status, "Запрос отклонён.", _reason(rest))
     return {"text": text, "usage": usage, "ms": round((time.perf_counter() - started) * 1000)}
@@ -228,6 +249,8 @@ def transcribe(wav: bytes, language_bias: str | None = None, keywords: list[str]
         + wav
         + ("\r\n--" + boundary + "--\r\n").encode()
     )
+    _paid()
+    spend.audio(len(wav) / 32000)  # Before it goes. The server takes 16 kHz, 16-bit mono: 32,000 bytes a second.
     reply = _send("POST", "/asr/transcribe", body, "multipart/form-data; boundary=" + boundary, timeout)
     return parse_transcription(reply)
 
@@ -277,6 +300,8 @@ def sam(jpeg: bytes, prompt: str, timeout: float = 60) -> dict:
         }],
     }
     started = time.perf_counter()
+    _paid()
+    spend.images(1)  # Before it goes, whatever comes back.
     reply = respond(payload, timeout)
     return {
         "boxes": _sam_boxes(output_text(reply)),

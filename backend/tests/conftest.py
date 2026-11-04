@@ -17,7 +17,7 @@ from starlette.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import config, grounding, meta, pool, voice
+from app import config, grounding, meta, pool, spend, voice
 from app.server import create_app
 
 TOKEN = "test-shared-token"
@@ -186,6 +186,17 @@ def forbid_network(monkeypatch):
     monkeypatch.setattr(pool, "connect", forbidden)
     meta.connections.kept.clear()
     voice.connections.kept.clear()
+    voice.history_connections.kept.clear()
+    monkeypatch.setattr(voice, "history", voice.History())
+    monkeypatch.setattr(spend, "ledger", spend.Ledger(""))  # Each test counts from zero, and in memory only.
+    yield
+    history = voice.history  # Its tries end with the test, while the test's fake ElevenLabs is still there.
+    with history.changed:
+        worker = history.worker
+        history.lines.clear()
+        history.changed.notify_all()
+    if worker:
+        worker.join(10)
 
 
 @pytest.fixture

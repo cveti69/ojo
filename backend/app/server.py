@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.websockets import WebSocketDisconnect
 
-from . import config, debug, landing, meta, step
+from . import config, debug, landing, meta, spend, step, voice
 from .ears import Ears
 from .friend import Friend, prepare_frame
 from .sessions import Frame, Session, SessionStore
@@ -183,18 +183,30 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
     speech = recognizer if recognizer is not None else MetaSpeechRecognizer()
     speaker = synthesizer if synthesizer is not None else ElevenLabsSynthesizer()
 
+    def end_calls() -> None:
+        """The day's money is spent: each call under way ends as if the phone had ended it."""
+        for session in tuple(sessions.sessions.values()):
+            if not session.ended:
+                session.finish()
+
     @asynccontextmanager
     async def lifespan(application: FastAPI):
+        loop = asyncio.get_running_loop()
+        spend.ledger.when_over = lambda: loop.call_soon_threadsafe(end_calls)  # It is told from any thread.
+        spend.started()
         reaper = asyncio.create_task(sessions.reap())
         try:
             yield
         finally:
+            spend.ledger.when_over = None
             reaper.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await reaper
             await sessions.close()
             for task in tuple(friend.tasks):
                 task.cancel()
+            await run_in_threadpool(voice.history.flush, voice.HISTORY_FLUSH)
+            spend.ledger.close()
 
     application = FastAPI(title=config.APP_NAME, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     application.state.sessions = sessions
@@ -229,6 +241,11 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
     def require_active(session: Session) -> None:
         if session.ended:
             raise HTTPException(409, "Сессия завершена.")
+
+    def require_money() -> None:
+        """Past the day's stop nothing that costs money starts, inside a call or out of one."""
+        if spend.ledger.stops():
+            raise HTTPException(503, "Лимит расходов на сегодня исчерпан.")
 
     @application.get("/health")
     async def health():
@@ -273,6 +290,8 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
 
     @router.post("/sessions", status_code=201)
     async def create_session(body: CreateSession):
+        if spend.ledger.refuses():  # The app says "Server error (HTTP 503)".
+            raise HTTPException(503, "Лимит расходов на сегодня исчерпан.")
         session = sessions.create(body.user_lang, body.target_lang, body.text_entry, body.effort,
                                   step.manner(body.character, body.own_character), body.eyes, body.signals, body.fast, body.next_step)
         return {"session_id": session.id, "model": session.models[0][0]}
@@ -333,6 +352,7 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
 
     @router.post("/translate")
     async def translate(body: Translate):
+        require_money()
         session = session_or_404(body.session_id) if body.session_id else None
         target_lang = session.app_lang if session and session.app_lang else body.target_lang  # The screen outranks the settings.
         if target_lang == "auto":
@@ -347,6 +367,7 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
 
     @router.post("/transcribe")
     async def transcribe(request: Request):
+        require_money()
         if request.headers.get("content-type", "").split(";", 1)[0].lower() != "audio/wav":
             raise HTTPException(415, "Нужен звук audio/wav.")
         audio = await read_body(request, config.MAX_AUDIO_BYTES)
@@ -409,6 +430,7 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
 
     @router.post("/speech")
     async def say(body: Speech):
+        require_money()
         try:
             audio = await run_in_threadpool(speaker.stream, body.text, body.voice)
         except Exception:
@@ -517,6 +539,7 @@ def create_app(store: Optional[SessionStore] = None, one: Optional[Friend] = Non
             pass
         finally:
             session.unsubscribe(queue)
+            voice.history.sweep()  # A broken connection, or a call that is over: the lines of the voice left are tried again.
             reader.cancel()
             if next_event is not None:
                 next_event.cancel()

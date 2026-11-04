@@ -14,9 +14,13 @@ from conftest import wav
 
 
 class FakeResponse:
-    def __init__(self, status, body):
+    def __init__(self, status, body, headers=None):
         self.status = status
         self.body = body
+        self.headers = {name.lower(): value for name, value in (headers or {}).items()}
+
+    def getheader(self, name, default=None):
+        return self.headers.get(name.lower(), default)
 
     def read(self):
         return self.body

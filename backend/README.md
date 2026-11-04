@@ -41,6 +41,9 @@ More settings:
 | `LANDING` | off. Only `on` makes the public page and its form exist. Off, `/` and `/beta` are closed like any other path, with a token or without |
 | `DEBUG_PAGE` | off. Only `on` makes the page of a live call exist, for a test bench: the token is in every build of the app |
 | `BETA_FILE` | `beta.jsonl` beside `CALLS_DIR`, empty without it, and then the form takes nothing. Outside the repository, 0600: one email and time per line, and nothing else. |
+| `SPEND_FILE` | `~/.ojo/spend.json`: the day (Bali time) and what it has cost so far, and nothing else, 0600, in a 0700 folder. Empty keeps the count in memory, and each start counts the day from zero |
+| `SPEND_LIMIT` | `50`, dollars a day past which `POST /sessions` answers 503 |
+| `SPEND_STOP` | `52`, dollars a day past which the calls under way end, and `/speech`, `/translate` and `/transcribe` answer 503 |
 | `SESSION_TTL_SECONDS` | `3600`, time without requests before a session is removed |
 | `SESSION_CLEANUP_SECONDS` | `30`, how often old sessions are removed |
 | `MAX_FRAME_BYTES` / `MAX_FRAME_PIXELS` | `8388608` / `20000000` |
@@ -48,6 +51,17 @@ More settings:
 
 Recognition of a file takes `audio/wav`: mono, 16 bit PCM, 16 kHz. An empty transcript comes back as `200 {"text":""}`. Recognition
 behind an interface is in `app/voice.py`, the stream for a whole call is in `app/ears.py`, and the call loop is in `app/friend.py`.
+
+ElevenLabs keeps each line it voices in the history of the account. The server deletes every line once its sound has gone to the
+phone, by the number ElevenLabs gave it with that line, and tries again later and at the end of the call. It never reads or deletes
+the history as a whole. The key must be allowed to write the history, or the lines stay there and the log says so.
+
+The day's spending is counted in `app/spend.py` from what each paid request used: the tokens of every Meta answer by its model,
+seconds of sound heard, images for SAM, and characters voiced by ElevenLabs. The prices and where each comes from are in that
+file. Sound, images and characters are counted before they go; an answer that broke off or ran out of time before it gave its
+count is taken as a long turn. Past the stop no paid request goes out, even one that came in before it. The log says each time
+the day passes another ten dollars, the limit or the stop, and at each start where the day stands; the file says the sum now.
+Neither holds a word.
 
 `app/step.py` keeps the step format of the earlier agent. The bench in `eval/` still uses it, and the call takes only a few helpers from it.
 

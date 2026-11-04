@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
-from . import config, language
+from . import config, language, voice
 from .calllog import CallLog
 
 KEPT_FRAME_TEXTS = 8
@@ -192,6 +192,7 @@ class Session:
                 task.cancel()
         if self.ears:
             self.ears.close()
+        voice.history.sweep(self.last_activity)  # The lines of the voice the call has left get one more try.
         self.forget()
 
     def forget(self) -> None:

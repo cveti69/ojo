@@ -11,12 +11,13 @@ from typing import Callable, Optional
 
 import websockets
 
-from . import config
+from . import config, spend
 
 log = logging.getLogger(__name__)
 
 FRAME_SECONDS = 0.1
-SILENCE = bytes(3200)  # 100 ms of the 16 kHz, 16-bit mono the phone sends. An idle session gets closed.
+SECOND = 32000  # Bytes in a second of the 16 kHz, 16-bit mono the phone sends.
+SILENCE = bytes(3200)  # 100 ms of it. An idle session gets closed.
 PHONE_GAP = 0.4  # A gap this short is the network. Past it the phone has stopped sending.
 BACKLOG = 50  # Sound kept while the session opens, which takes about two seconds.
 ANSWER_SECONDS = 10
@@ -87,6 +88,9 @@ class Ears:
         failures = 0
         address = config.META_API_BASE.replace("https://", "wss://", 1) + "/asr/realtime"
         while True:
+            if spend.ledger.stops():  # The day's money is spent: no session opens.
+                await asyncio.sleep(LONGEST_WAIT)
+                continue
             try:
                 async with connect(address, max_size=None) as socket:
                     await socket.send(json.dumps({
@@ -142,4 +146,7 @@ class Ears:
             except asyncio.TimeoutError:
                 frame = SILENCE
                 wait = FRAME_SECONDS
+            if spend.ledger.stops():
+                return
             await socket.send(frame)
+            spend.audio(len(frame) / SECOND)  # Meta charges for the silence that keeps the session open too.
